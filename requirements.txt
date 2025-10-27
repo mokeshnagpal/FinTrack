@@ -1,8 +1,8 @@
-python-dotenv
 Flask
-Flask-WTF
-WTForms
+python-dotenv
 python-dateutil
 firebase-admin
-SQLAlchemy
+Flask-WTF
+WTForms
+email-validator
 gunicorn
