@@ -14,6 +14,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from types import SimpleNamespace
 import logging
+import json
 
 # ----------------------------
 # Configuration
@@ -23,15 +24,23 @@ UTC = timezone.utc
 OCCURRENCE_WINDOW_SECS = int(os.environ.get('OCCURRENCE_WINDOW_SECS', '60'))
 
 # load env
-load_dotenv("keys/.env")
+load_dotenv()
 
 # ---------------------------------------------------------------------
 # Firebase / Firestore init
 # ---------------------------------------------------------------------
-cred_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-if not cred_path or not os.path.exists(cred_path):
-    raise RuntimeError(f"Firestore credentials not found at {cred_path!r}")
-cred = credentials.Certificate(cred_path)
+firebase_credentials_str = os.environ.get('FIREBASE_CREDENTIALS')
+if not firebase_credentials_str:
+    raise ValueError("FIREBASE_CREDENTIALS environment variable not set.")
+
+firebase_credentials_dict = json.loads(firebase_credentials_str)
+
+# Replace literal '\\n' with actual newline characters in the private key
+if 'private_key' in firebase_credentials_dict:
+    firebase_credentials_dict['private_key'] = firebase_credentials_dict['private_key'].replace('\\n', '\n')
+
+# Initialize Firebase Admin with the credentials dictionary
+cred = credentials.Certificate(firebase_credentials_dict)
 
 # avoid double-initialize in dev reloader
 if not firebase_admin._apps:
@@ -47,7 +56,7 @@ REC_COL = "recurring"
 # Flask App Configuration
 # ---------------------------------------------------------------------
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET', 'dev-secret')
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'firestore://'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
