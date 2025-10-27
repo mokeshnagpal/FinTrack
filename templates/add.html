@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+    <div class="col-md-6 offset-md-3">
+        <h3>Add New Transaction</h3>
+        <form method="post">
+            {{ form.hidden_tag() }}
+
+            <div class="mb-3">
+                {{ form.amount.label(class="form-label") }}
+                {{ form.amount(class="form-control", step="0.01", min="0") }}
+                {% for err in form.amount.errors %}
+                <div class="text-danger small">{{ err }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="mb-3">
+                {{ form.description.label(class="form-label") }}
+                {{ form.description(class="form-control", placeholder="e.g. Grocery shopping") }}
+                {% for err in form.description.errors %}
+                <div class="text-danger small">{{ err }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="mb-3">
+                {{ form.category.label(class="form-label") }}
+                {{ form.category(class="form-select") }}
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    {{ form.date.label(class="form-label") }}
+                    {{ form.date(class="form-control", type="date") }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    {{ form.time.label(class="form-label") }}
+                    {{ form.time(class="form-control", type="time") }}
+                </div>
+            </div>
+
+            <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

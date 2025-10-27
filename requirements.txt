@@ -1,0 +1,8 @@
+python-dotenv
+Flask
+Flask-WTF
+WTForms
+python-dateutil
+firebase-admin
+SQLAlchemy
+gunicorn
