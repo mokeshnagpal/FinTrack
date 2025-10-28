@@ -514,74 +514,6 @@ def transactions():
     return render_template('transactions.html', txns=paginate_obj)
 
 
-@app.route('/edit/<string:tx_id>', methods=['GET', 'POST'])
-def edit(tx_id):
-    form = TransactionForm()
-    doc_ref = fs.collection(TX_COL).document(tx_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        return "Transaction not found", 404
-    txn = doc_to_txn(doc)
-
-    if request.method == 'GET':
-        form.amount.data = txn.get('amount')
-        form.description.data = txn.get('description')
-        form.category.data = txn.get('category')
-        if hasattr(form, 'date') and hasattr(form, 'time'):
-            if txn.get('timestamp'):
-                form.date.data = txn['timestamp'].date()
-                form.time.data = txn['timestamp'].time()
-        else:
-            form.timestamp.data = txn.get('timestamp')
-
-    if form.validate_on_submit():
-        updated = {
-            'amount': round(float(form.amount.data), 2),
-            'description': form.description.data.strip()
-        }
-        try:
-            updated['category'] = form.category.data.strip() or 'Uncategorized'
-        except Exception:
-            updated['category'] = form.category.data or 'Uncategorized'
-
-        if hasattr(form, 'date') and hasattr(form, 'time'):
-            sd = form.date.data or txn['timestamp'].date()
-            st = form.time.data or txn['timestamp'].time()
-            updated['timestamp'] = datetime.combine(sd, st).replace(tzinfo=UTC)
-        else:
-            updated['timestamp'] = (form.timestamp.data or txn['timestamp'])
-
-        # fetch the current stored transaction (again) to be safe and compute amount delta
-        doc_ref = fs.collection(TX_COL).document(tx_id)
-        current_doc = doc_ref.get()
-        if not current_doc.exists:
-            flash('Transaction not found.', 'warning')
-            return redirect(url_for('transactions'))
-
-        try:
-            current_txn = doc_to_txn(current_doc)
-            old_amt = float(current_txn.get('amount', 0.0))
-            new_amt = float(updated.get('amount', 0.0))
-
-            # apply update
-            doc_ref.update(updated)
-
-            # If amount changed, append a balance correction:
-            # since transactions are expenses (reduce balance), a change from old -> new should
-            # add (old - new) to balance (positive if new < old).
-            delta = round(old_amt - new_amt, 2)
-            if delta != 0:
-                append_balance(delta, 'edit', note=f"edit_txn:{tx_id} amt {old_amt}->{new_amt}")
-
-            flash('Transaction updated.', 'success')
-        except Exception as e:
-            app.logger.exception("Failed to update transaction %s: %s", tx_id, e)
-            flash('Transaction update failed.', 'warning')
-
-        return redirect(url_for('transactions'))
-
-    return render_template('edit.html', form=form, txn=txn)
-
 @app.route('/delete/<string:tx_id>', methods=['POST'])
 def delete(tx_id):
     # fetch the transaction first so we know the amount
@@ -889,7 +821,7 @@ def append_balance(delta, type_, note=''):
     Append a balance change document to BAL_COL.
 
     delta: numeric (positive to increase, negative to decrease)
-    type_: string ('txn', 'txn_delete', 'recurring', 'add', 'sync', 'edit', etc.)
+    type_: string ('txn', 'txn_delete', 'recurring', 'add', 'sync', etc.)
     note: optional string
 
     Returns: (doc_id, doc_dict) on success or (None, doc_dict) on failure
@@ -1088,11 +1020,12 @@ def api_balance_sync():
     fs.collection(BAL_COL).add(doc)
     return jsonify({"balance": round(new_balance, 2), "timestamp": now.isoformat(), "type": "sync", "delta": delta})
 
-
 @app.route('/api/balance/undo', methods=['POST'])
 def api_balance_undo():
     """
     Delete the most-recent balance document (undo last action).
+    If the most-recent entry is a transaction (type 'txn' or 'txn_delete'),
+    we refuse and return a helpful error message (undo supports balance add/sync entries).
     Returns the deleted doc summary and the new current balance (if any).
     """
     # find last doc
@@ -1100,13 +1033,25 @@ def api_balance_undo():
     docs = list(q.stream())
     if not docs:
         return jsonify({"error": "No balance history to undo"}), 400
+
     last_doc = docs[0]
     last_data = doc_to_txn(last_doc)
-    # delete
+    last_type = (last_data.get('type') or '').lower()
+
+    # Disallow undo when last entry is a transaction
+    if last_type in ('txn', 'txn_delete'):
+        # Friendly, actionable error for the client
+        return jsonify({
+            "error": f"Cannot undo: last entry is a transaction ('{last_type}').",
+            "reason": "Transactions are persisted separately; undoing them here may corrupt balances.",
+            "advice": "To revert a transaction, delete the transaction from the Transactions page instead."
+        }), 400
+
+    # safe to delete
     try:
         fs.collection(BAL_COL).document(last_doc.id).delete()
     except Exception as e:
-        app.logger.exception("Failed to delete balance doc %s: %s", last_doc.id, e)
+        app.logger.exception("Failed to delete balance doc %s: %s", getattr(last_doc, 'id', '<unknown>'), e)
         return jsonify({"error": "Delete failed"}), 500
 
     new_latest = get_latest_balance()
@@ -1123,7 +1068,6 @@ def api_balance_undo():
         },
         "current_balance": round(new_balance, 2)
     })
-
 
 @app.route('/api/balance/history')
 def api_balance_history():

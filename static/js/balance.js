@@ -24,8 +24,6 @@ const syncNote = document.getElementById('syncNote');
 const syncBtn = document.getElementById('syncBtn');
 
 const undoBtn = document.getElementById('undoBtn');
-const undoCount = document.getElementById('undoCount');
-const undoMultiBtn = document.getElementById('undoMultiBtn');
 
 const historyBody = document.getElementById('historyBody');
 const balanceCanvas = document.getElementById('balanceChart');
@@ -50,25 +48,40 @@ function destroyChart() {
     balanceCanvas.height = balanceCanvas.clientHeight;
   }
 }
+function showToast(title, type = 'info', message = '') {
+  let container = document.getElementById('toastContainer');
+  if (!container) {
+    // fallback in case base.html didn't load container
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.className = 'toast-container position-fixed top-0 end-0 p-3';
+    container.style.zIndex = '2000';
+    document.body.appendChild(container);
+  }
 
-/* toast: small client-side flash */
-function showToast(msg, level = 'info', sub = '', ttl = 4200) {
-  if (!toastContainer) return;
-  const el = document.createElement('div');
-  el.className = `toast-msg toast-${level}`;
-  el.setAttribute('role', 'status');
-  el.innerHTML = `<div style="flex:0 0:auto;">${level==='success'?'✔️': level==='danger'?'⛔':'ℹ️'}</div>
-                  <div style="flex:1 1 auto;"><div>${escapeHtml(msg)}</div>${sub?`<small>${escapeHtml(sub)}</small>`:''}</div>
-                  <button aria-label="dismiss" class="toast-close">&times;</button>`;
-  toastContainer.appendChild(el);
+  const toast = document.createElement('div');
+  toast.className = `toast text-bg-${type} border-0 shadow-sm mb-2`;
+  toast.setAttribute('role', 'alert');
+  toast.setAttribute('aria-live', 'assertive');
+  toast.setAttribute('aria-atomic', 'true');
+  toast.innerHTML = `
+    <div class="d-flex align-items-center">
+      <div class="toast-body">
+        <strong>${title}</strong>${message ? `<div class="small mt-1">${message}</div>` : ''}
+      </div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto"
+        data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  `;
 
-  const close = () => { try{ el.remove(); }catch(e){} };
-  const closeBtn = el.querySelector('.toast-close');
-  if (closeBtn) closeBtn.addEventListener('click', close);
+  container.appendChild(toast);
 
-  setTimeout(() => {
-    try { el.remove(); } catch (e) {}
-  }, ttl);
+  // Create and show Bootstrap toast
+  const bsToast = new bootstrap.Toast(toast, { delay: 4000 });
+  bsToast.show();
+
+  // Remove after hidden
+  toast.addEventListener('hidden.bs.toast', () => toast.remove());
 }
 
 /* render chart */
@@ -245,60 +258,29 @@ syncBtn.addEventListener('click', async () => {
     syncBtn.disabled = false;
   }
 });
-
 undoBtn.addEventListener('click', async () => {
   const ok = await confirmAsync('Undo last balance entry? This will remove the most recent add/sync.');
   if (!ok) return;
   undoBtn.disabled = true;
   try {
     const res = await fetchJSON('/api/balance/undo', {}, { method: 'POST' });
+
     if (res && res.error) {
-      showToast(res.error, 'warning');
+      // if backend sent extra advice, show it as sub-message
+      showToast(res.error, 'danger', res.advice || '');
     } else if (res && res.current_balance !== undefined) {
-      showToast('Undo successful', 'success', `New balance ${rupee(res.current_balance)}`);
+      showToast('Undo successful ✅', 'success', `New balance ${rupee(res.current_balance)}`);
     } else {
-      showToast('Undo complete', 'info');
+      showToast('Undo completed.', 'info');
     }
+
     await refreshAll();
     await renderChart(periodSelect.value);
   } catch (e) {
     console.error('undo failed', e);
-    showToast('Undo failed', 'danger');
+    showToast('Undo failed ❌', 'danger');
   } finally {
     undoBtn.disabled = false;
-  }
-});
-
-undoMultiBtn.addEventListener('click', async () => {
-  let n = parseInt(undoCount.value || 1);
-  if (isNaN(n) || n < 1) n = 1;
-  const ok = await confirmAsync(`Undo last ${n} balance entries? This will delete the most recent ${n} entries.`);
-  if (!ok) return;
-  undoMultiBtn.disabled = true;
-  let undone = 0;
-  try {
-    for (let i = 0; i < n; i++) {
-      const res = await fetchJSON('/api/balance/undo', {}, { method: 'POST' });
-      if (res && res.error) {
-        showToast(res.error || 'Undo halted.', 'warning');
-        break;
-      }
-      undone += 1;
-      // small pause to avoid overwhelming server
-      await new Promise(r => setTimeout(r, 120));
-    }
-    if (undone > 0) {
-      await refreshAll();
-      await renderChart(periodSelect.value);
-      showToast(`Undone ${undone} item${undone>1?'s':''}`, 'success');
-    } else {
-      showToast('No items undone', 'info');
-    }
-  } catch (e) {
-    console.error('undo multi failed', e);
-    showToast('Undo failed', 'danger');
-  } finally {
-    undoMultiBtn.disabled = false;
   }
 });
 

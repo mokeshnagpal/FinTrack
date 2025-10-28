@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <h3 class="page-title mb-0">Balance Overview</h3>
+    <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">View Transactions</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('analytics') }}">Analytics</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <!-- Left Column -->
+    <div class="col-lg-4 col-md-6">
+        <div class="card shadow-sm mb-3">
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
+            <div class="display-6 fw-bold text-success">
+                ₹ <span id="currentBalance">0.00</span>
+            </div>
+            <small class="text-muted" id="balanceTimestamp">—</small>
+            <hr>
+            <div class="mb-3">
+                <label class="form-label small">Select Period</label>
+                <select id="periodSelect" class="form-select form-select-sm">
+                    <option value="daily" selected>Daily</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                </select>
+            </div>
+            <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
+        </div>
+
+        <div class="card shadow-sm">
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+
+            <!-- Add Amount -->
+            <div class="mb-3">
+                <label class="form-label small">Add Amount</label>
+                <div class="input-group">
+                    <input id="addAmount" type="number" step="0.01" class="form-control form-control-sm"
+                        placeholder="Enter amount">
+                    <button id="addBtn" class="btn btn-outline-success btn-sm">Add</button>
+                </div>
+                <input id="addNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)">
+            </div>
+
+            <!-- Sync Amount -->
+            <div class="mb-3">
+                <label class="form-label small">Sync Balance</label>
+                <div class="input-group">
+                    <input id="syncAmount" type="number" step="0.01" class="form-control form-control-sm"
+                        placeholder="Set absolute balance">
+                    <button id="syncBtn" class="btn btn-outline-warning btn-sm">Sync</button>
+                </div>
+                <input id="syncNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)">
+            </div>
+
+            <!-- Undo Section -->
+            <div>
+                <label class="form-label small">Undo Entries</label>
+                <div class="d-flex gap-2">
+                    <!-- single undo button only -->
+                    <button id="undoBtn" class="btn btn-outline-danger btn-sm w-100">Undo Last</button>
+                </div>
+                <small class="text-muted d-block mt-2">
+                    Undo removes the most recent balance record. Use with caution.
+                </small>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Right Column -->
+    <div class="col-lg-8 col-md-6">
+        <div class="card shadow-sm mb-3">
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Balance Chart</h6>
+            <div class="chart-wrapper">
+                <canvas id="balanceChart" height="380" role="img" aria-label="Balance over time"></canvas>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
+            <div class="table-responsive" style="max-height:240px; overflow:auto;">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Type</th>
+                            <th>Δ</th>
+                            <th>Balance</th>
+                            <th>Note</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody">
+                        <!-- Filled dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+<!-- Toast Container -->
+<div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer" style="z-index: 2000;"></div>
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/balance.js') }}"></script>
+<script>
+    /* Modern, smooth confirmation modal instead of alert */
+    function showUndoConfirm(message, onConfirm) {
+        const modal = document.createElement('div');
+        modal.className = 'confirm-modal';
+        modal.innerHTML = `
+    <div class="confirm-content">
+      <h5 class="fw-bold mb-2">${message}</h5>
+      <div class="d-flex gap-2 justify-content-end mt-3">
+        <button class="btn btn-secondary btn-sm" id="cancelConfirm">Cancel</button>
+        <button class="btn btn-danger btn-sm" id="confirmYes">Yes, Undo</button>
+      </div>
+    </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#cancelConfirm').onclick = () => modal.remove();
+        modal.querySelector('#confirmYes').onclick = () => {
+            modal.remove();
+            onConfirm();
+        };
+    }
+
+    /* Hook override for existing undo confirmation */
+    window.confirm = function (msg) {
+        return new Promise((resolve) => {
+            showUndoConfirm(msg, () => resolve(true));
+        });
+    };
+</script>
+{% endblock %}
