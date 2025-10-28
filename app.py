@@ -51,6 +51,7 @@ fs = firestore.client()
 # collection names
 TX_COL = "transactions"
 REC_COL = "recurring"
+BAL_COL = "balances"
 
 # ---------------------------------------------------------------------
 # Flask App Configuration
@@ -326,6 +327,12 @@ def apply_recurring_up_to_today():
 
                     transaction.call(trans_op)
                     app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s", rec_id, next_occ)
+                    # record balance deduction for the recurring transaction
+                    try:
+                        append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}")
+                    except Exception:
+                        app.logger.exception("Failed to append balance for recurring %s at %s", rec_id, next_occ)
+
 
                 except Exception as e_tx:
                     # transaction failed — try a simple add + update, with robust logging
@@ -333,6 +340,12 @@ def apply_recurring_up_to_today():
                     try:
                         fs.collection(TX_COL).add(txn_doc)
                         app.logger.info("Created transaction (fallback add) for recurring %s at %s", rec_id, next_occ)
+                        # record balance deduction for the fallback-created transaction
+                        try:
+                            append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}")
+                        except Exception:
+                            app.logger.exception("Failed to append balance (fallback) for recurring %s at %s", rec_id, next_occ)
+
                         try:
                             rec_ref.update({'last_applied': next_occ})
                         except Exception as e2:
@@ -457,8 +470,16 @@ def add():
             'category': form.category.data or 'Uncategorized',
             'timestamp': combined_datetime
         }
-        fs.collection(TX_COL).add(txn_doc)
-        flash('Transaction added successfully.', 'success')
+        try:
+            # collection.add returns (DocumentReference, write_time) in Firestore SDK
+            doc_ref, _ = fs.collection(TX_COL).add(txn_doc)
+            # immediately append a balance entry: spending reduces balance
+            append_balance(-float(txn_doc['amount']), 'txn', note=f"txn:{getattr(doc_ref, 'id', '')}")
+            flash('Transaction added successfully.', 'success')
+        except Exception as e:
+            app.logger.exception("Failed to add transaction: %s", e)
+            flash('Failed to add transaction.', 'warning')
+
         return redirect(url_for('transactions'))
     return render_template('add.html', form=form)
 
@@ -530,15 +551,58 @@ def edit(tx_id):
         else:
             updated['timestamp'] = (form.timestamp.data or txn['timestamp'])
 
-        doc_ref.update(updated)
-        flash('Transaction updated.', 'success')
+        # fetch the current stored transaction (again) to be safe and compute amount delta
+        doc_ref = fs.collection(TX_COL).document(tx_id)
+        current_doc = doc_ref.get()
+        if not current_doc.exists:
+            flash('Transaction not found.', 'warning')
+            return redirect(url_for('transactions'))
+
+        try:
+            current_txn = doc_to_txn(current_doc)
+            old_amt = float(current_txn.get('amount', 0.0))
+            new_amt = float(updated.get('amount', 0.0))
+
+            # apply update
+            doc_ref.update(updated)
+
+            # If amount changed, append a balance correction:
+            # since transactions are expenses (reduce balance), a change from old -> new should
+            # add (old - new) to balance (positive if new < old).
+            delta = round(old_amt - new_amt, 2)
+            if delta != 0:
+                append_balance(delta, 'edit', note=f"edit_txn:{tx_id} amt {old_amt}->{new_amt}")
+
+            flash('Transaction updated.', 'success')
+        except Exception as e:
+            app.logger.exception("Failed to update transaction %s: %s", tx_id, e)
+            flash('Transaction update failed.', 'warning')
+
         return redirect(url_for('transactions'))
+
     return render_template('edit.html', form=form, txn=txn)
 
 @app.route('/delete/<string:tx_id>', methods=['POST'])
 def delete(tx_id):
-    fs.collection(TX_COL).document(tx_id).delete()
-    flash('Transaction deleted.', 'info')
+    # fetch the transaction first so we know the amount
+    doc_ref = fs.collection(TX_COL).document(tx_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        flash('Transaction not found.', 'warning')
+        return redirect(url_for('transactions'))
+
+    try:
+        txn = doc_to_txn(doc)
+        amt = float(txn.get('amount', 0.0))
+        # delete transaction
+        doc_ref.delete()
+        # add back the amount to balances (refund)
+        append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}")
+        flash('Transaction deleted.', 'info')
+    except Exception as e:
+        app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
+        flash('Failed to delete transaction.', 'warning')
+
     return redirect(url_for('transactions'))
 
 # ---------------------------------------------------------------------
@@ -785,6 +849,297 @@ def api_monthly_totals():
         s = sum([float(t.get('amount', 0.0)) for t in txns])
         totals.append(round(float(s or 0.0), 2))
     return jsonify({"labels": labels, "values": totals})
+
+# ---------------------------------------------------------------------
+# Balance helpers & APIs (new)
+# ---------------------------------------------------------------------
+def get_balances_in_range(start_dt, end_dt, order_desc=False):
+    """
+    Return balance docs in [start_dt, end_dt], ordered ascending by timestamp by default.
+    Each doc is normalized through doc_to_txn.
+    """
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=UTC)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=UTC)
+
+    q = (fs.collection(BAL_COL)
+         .where('timestamp', '>=', start_dt)
+         .where('timestamp', '<=', end_dt))
+    if order_desc:
+        q = q.order_by('timestamp', direction=firestore.Query.DESCENDING)
+    else:
+        q = q.order_by('timestamp', direction=firestore.Query.ASCENDING)
+    docs = q.stream()
+    return [doc_to_txn(doc) for doc in docs]
+
+
+def get_latest_balance():
+    """
+    Return the latest balance doc (or None). Normalizes date.
+    """
+    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
+    docs = list(q.stream())
+    if not docs:
+        return None
+    return doc_to_txn(docs[0])
+
+def append_balance(delta, type_, note=''):
+    """
+    Append a balance change document to BAL_COL.
+
+    delta: numeric (positive to increase, negative to decrease)
+    type_: string ('txn', 'txn_delete', 'recurring', 'add', 'sync', 'edit', etc.)
+    note: optional string
+
+    Returns: (doc_id, doc_dict) on success or (None, doc_dict) on failure
+    """
+    try:
+        latest = get_latest_balance()
+        base = float(latest.get('balance', 0.0)) if latest else 0.0
+    except Exception:
+        base = 0.0
+    try:
+        new_bal = round(base + float(delta), 2)
+    except Exception:
+        new_bal = round(base + 0.0, 2)
+
+    doc = {
+        'balance': float(new_bal),
+        'type': str(type_),
+        'delta': float(round(float(delta), 2)),
+        'note': (note or '')[:1024],
+        'timestamp': datetime.now(UTC)
+    }
+    try:
+        add_res = fs.collection(BAL_COL).add(doc)
+        # Firestore add returns (DocumentReference, write_time)
+        if isinstance(add_res, tuple) and len(add_res) >= 1:
+            ref = add_res[0]
+            doc_id = getattr(ref, 'id', None)
+        else:
+            # fallback — try to get id attribute
+            ref = add_res
+            doc_id = getattr(ref, 'id', None)
+        app.logger.debug("append_balance created %s -> %s (doc id: %s)", delta, new_bal, doc_id)
+        return doc_id, doc
+    except Exception as e:
+        app.logger.exception("Failed to append balance doc: %s", e)
+        return None, doc
+
+@app.route('/balance')
+def balance():
+    """Render balance page"""
+    return render_template('balance.html')
+
+@app.route('/api/balance_current')
+def api_balance_current():
+    """Return the current/latest balance and a short recent history"""
+    latest = get_latest_balance()
+    # send back last 20 entries
+    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20)
+    docs = [doc_to_txn(d) for d in q.stream()]
+    history = [{
+        'id': d.get('_id'),
+        'timestamp': d.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if d.get('timestamp') else None,
+        'balance': round(float(d.get('balance', 0.0)), 2),
+        'type': d.get('type'),
+        'delta': round(float(d.get('delta', 0.0)), 2),
+        'note': d.get('note', '')
+    } for d in docs]
+    out = {
+        'current': {
+            'balance': round(float(latest.get('balance', 0.0)), 2) if latest else 0.0,
+            'timestamp': latest.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if latest and latest.get('timestamp') else None
+        } if latest else {'balance': 0.0, 'timestamp': None},
+        'history': history
+    }
+    return jsonify(out)
+
+
+@app.route('/api/balance_series')
+def api_balance_series():
+    """
+    Return series of balances aggregated by daily / monthly / yearly.
+    Uses the same _parse_period_args helper (period + count).
+    For each label, we pick the last recorded balance in that label (forward-fill if missing).
+    """
+    start_dt, end_dt, period = _parse_period_args(request.args)
+    # fetch balances in range
+    bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False)
+
+    labels, values = [], []
+
+    if period == 'daily':
+        cur_date = start_dt.date()
+        endd = end_dt.date()
+        days = [(start_dt.date() + relativedelta(days=i)) for i in range((endd - cur_date).days + 1)]
+        labels = [d.isoformat() for d in days]
+        # map date -> last balance for that date
+        date_last = {}
+        for b in bal_docs:
+            if not b.get('timestamp'):
+                continue
+            d = b['timestamp'].date().isoformat()
+            date_last[d] = float(b.get('balance', 0.0))
+        # forward fill
+        last_known = None
+        for lab in labels:
+            if lab in date_last:
+                last_known = date_last[lab]
+            values.append(round(float(last_known or 0.0), 2))
+
+    elif period == 'monthly':
+        cur = date(start_dt.year, start_dt.month, 1)
+        endm = date(end_dt.year, end_dt.month, 1)
+        months = []
+        while cur <= endm:
+            months.append(cur)
+            cur += relativedelta(months=1)
+        labels = [m.strftime('%Y-%m') for m in months]
+        month_last = {}
+        for b in bal_docs:
+            if not b.get('timestamp'):
+                continue
+            key = b['timestamp'].strftime('%Y-%m')
+            month_last[key] = float(b.get('balance', 0.0))
+        last_known = None
+        for lab in labels:
+            if lab in month_last:
+                last_known = month_last[lab]
+            values.append(round(float(last_known or 0.0), 2))
+
+    elif period == 'yearly':
+        years = list(range(start_dt.year, end_dt.year + 1))
+        labels = [str(y) for y in years]
+        year_last = {}
+        for b in bal_docs:
+            if not b.get('timestamp'):
+                continue
+            key = str(b['timestamp'].year)
+            year_last[key] = float(b.get('balance', 0.0))
+        last_known = None
+        for lab in labels:
+            if lab in year_last:
+                last_known = year_last[lab]
+            values.append(round(float(last_known or 0.0), 2))
+
+    else:
+        # fallback: daily behavior
+        return jsonify({"labels": [], "values": []})
+
+    return jsonify({"labels": labels, "values": values})
+
+
+@app.route('/api/balance/add', methods=['POST'])
+def api_balance_add():
+    """
+    Add balance (increment). Expects JSON { amount: number, note: str (optional) }.
+    This creates a new balances doc with fields:
+      - balance: new absolute balance after applying add
+      - type: 'add'
+      - delta: amount (positive)
+      - note, timestamp
+    """
+    data = request.get_json() or {}
+    try:
+        delta = float(data.get('amount', 0.0))
+    except Exception:
+        return jsonify({"error": "Invalid amount"}), 400
+    note = (data.get('note') or '').strip()
+    now = datetime.now(UTC)
+    latest = get_latest_balance()
+    base = float(latest.get('balance', 0.0)) if latest else 0.0
+    new_bal = round(base + delta, 2)
+    doc = {
+        'balance': float(new_bal),
+        'type': 'add',
+        'delta': float(delta),
+        'note': note,
+        'timestamp': now
+    }
+    fs.collection(BAL_COL).add(doc)
+    return jsonify({"balance": new_bal, "timestamp": now.isoformat(), "type": "add"})
+
+
+@app.route('/api/balance/sync', methods=['POST'])
+def api_balance_sync():
+    """
+    Sync/Set absolute balance. Expects JSON { balance: number, note: str (optional) }.
+    Creates a new doc with type 'sync' and delta = new - prev
+    """
+    data = request.get_json() or {}
+    try:
+        new_balance = float(data.get('balance', 0.0))
+    except Exception:
+        return jsonify({"error": "Invalid balance value"}), 400
+    note = (data.get('note') or '').strip()
+    now = datetime.now(UTC)
+    latest = get_latest_balance()
+    base = float(latest.get('balance', 0.0)) if latest else 0.0
+    delta = round(new_balance - base, 2)
+    doc = {
+        'balance': float(round(new_balance, 2)),
+        'type': 'sync',
+        'delta': float(delta),
+        'note': note,
+        'timestamp': now
+    }
+    fs.collection(BAL_COL).add(doc)
+    return jsonify({"balance": round(new_balance, 2), "timestamp": now.isoformat(), "type": "sync", "delta": delta})
+
+
+@app.route('/api/balance/undo', methods=['POST'])
+def api_balance_undo():
+    """
+    Delete the most-recent balance document (undo last action).
+    Returns the deleted doc summary and the new current balance (if any).
+    """
+    # find last doc
+    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
+    docs = list(q.stream())
+    if not docs:
+        return jsonify({"error": "No balance history to undo"}), 400
+    last_doc = docs[0]
+    last_data = doc_to_txn(last_doc)
+    # delete
+    try:
+        fs.collection(BAL_COL).document(last_doc.id).delete()
+    except Exception as e:
+        app.logger.exception("Failed to delete balance doc %s: %s", last_doc.id, e)
+        return jsonify({"error": "Delete failed"}), 500
+
+    new_latest = get_latest_balance()
+    new_balance = float(new_latest.get('balance', 0.0)) if new_latest else 0.0
+
+    return jsonify({
+        "deleted": {
+            "id": last_doc.id,
+            "balance": round(float(last_data.get('balance', 0.0)), 2),
+            "type": last_data.get('type'),
+            "delta": round(float(last_data.get('delta', 0.0)), 2),
+            "timestamp": last_data.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if last_data.get('timestamp') else None,
+            "note": last_data.get('note', '')
+        },
+        "current_balance": round(new_balance, 2)
+    })
+
+
+@app.route('/api/balance/history')
+def api_balance_history():
+    """Return recent balance history (paginated via ?limit=... )"""
+    limit = max(int(request.args.get('limit', 50)), 1)
+    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
+    docs = [doc_to_txn(d) for d in q.stream()]
+    out = [{
+        "id": d.get('_id'),
+        "timestamp": d.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if d.get('timestamp') else None,
+        "balance": round(float(d.get('balance', 0.0)), 2),
+        "type": d.get('type'),
+        "delta": round(float(d.get('delta', 0.0)), 2),
+        "note": d.get('note', '')
+    } for d in docs]
+    return jsonify({"history": out})
 
 # ---------------------------------------------------------------------
 # Main

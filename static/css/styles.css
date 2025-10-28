@@ -416,3 +416,68 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
 .badge.danger{background:linear-gradient(180deg, rgba(239,68,68,0.09), rgba(239,68,68,0.03));color:var(--danger)}
 
 /* END OF FILE */
+/* ----------------
+   Flash messages — modern & animated
+   ---------------- */
+.flash-message {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2000;
+  padding: .75rem 1rem;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  font-weight: 500;
+  font-size: .9rem;
+  opacity: 0;
+  transform: translateY(-10px);
+  animation: slideFadeIn .4s forwards;
+}
+.flash-message.success {
+  background: var(--g-primary);
+  color: #fff;
+}
+.flash-message.error {
+  background: var(--danger);
+  color: #fff;
+}
+@keyframes slideFadeIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ----------------
+   Confirmation Modal (Undo)
+   ---------------- */
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.4);
+  z-index: 1500;
+  backdrop-filter: blur(2px);
+  animation: fadeIn .2s ease-in-out;
+}
+.confirm-content {
+  background: var(--surface);
+  color: var(--text);
+  padding: 1.2rem 1.5rem;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  animation: scaleIn .25s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}

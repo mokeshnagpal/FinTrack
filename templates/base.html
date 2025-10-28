@@ -44,8 +44,11 @@
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('add') }}">Add</a></li>
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('transactions') }}">Transactions</a></li>
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('recurring') }}">Recurring</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('balance') }}">Balance</a></li>
+                    <!-- <-- added -->
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('analytics') }}">Analytics</a></li>
                 </ul>
+
 
                 <div class="d-flex align-items-center gap-2">
                     <!-- Theme toggle -->
@@ -82,6 +85,21 @@
     <!-- Theme toggle + small UI init -->
 
     {% block scripts %}{% endblock %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <script>
+        const messages = {{ messages | tojson }};
+        for (const [category, msg] of messages) {
+            const div = document.createElement('div');
+            div.className = `flash-message ${category}`;
+            div.textContent = msg;
+            document.body.appendChild(div);
+            setTimeout(() => div.remove(), 3500);
+        }
+    </script>
+    {% endif %}
+    {% endwith %}
+
 </body>
 
 </html>
