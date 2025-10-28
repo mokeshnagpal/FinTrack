@@ -1,9 +1,0 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="text-center">
-    <h1 class="display-6">Monthly Spending Recorder</h1>
-    <p class="lead">Quickly add transactions, set recurring monthly amounts, and view analytics.</p>
-    <a class="btn btn-primary me-2" href="{{ url_for('add') }}">Add transaction</a>
-    <a class="btn btn-outline-primary" href="{{ url_for('analytics') }}">View analytics</a>
-</div>
-{% endblock %}
