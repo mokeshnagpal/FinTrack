@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FinTrak — Sign in</title>
+    <title>FinTrak — View-only</title>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
 </head>
@@ -18,7 +18,7 @@
                         <div class="auth-brand">FT</div>
                         <div>
                             <div class="page-title">FinTrak</div>
-                            <div class="kicker">Sign in</div>
+                            <div class="kicker">Open view-only for a user</div>
                         </div>
                     </div>
 
@@ -31,7 +31,8 @@
                     {% endif %}
                     {% endwith %}
 
-                    <form method="post" action="{{ url_for('login') }}" novalidate>
+                    <!-- NOTE: POST to the view-only endpoint -->
+                    <form method="post" action="{{ url_for('view_login') }}" novalidate>
                         {{ form.hidden_tag() }}
 
                         <div class="stack" style="gap:.5rem;">
@@ -41,12 +42,12 @@
 
                             <label class="kicker" for="password">Password</label>
                             <input id="password" name="password" class="form-control" type="password"
-                                placeholder="Password" />
+                                placeholder="View-only password" />
                         </div>
 
                         <div class="form-foot">
-                            <button type="submit" class="btn btn-primary">Sign in</button>
-                            <a class="small-muted" href="{{ url_for('view_login') }}">View Mode</a>
+                            <button type="submit" class="btn btn-primary">Open view</button>
+                            <a href="{{ url_for('login') }}" class="small-muted">Admin Mode</a>
                         </div>
                     </form>
 

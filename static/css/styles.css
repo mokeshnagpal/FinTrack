@@ -481,3 +481,28 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
   from { transform: scale(0.95); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
+/* -----------------------
+   Auth pages (login / view-only)
+   ----------------------- */
+.auth-wrapper {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+.auth-card { max-width: 520px; width:100%; }
+.card-body { padding: 1.25rem; }
+.form-foot {
+  display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-top:.6rem;
+}
+.small-muted { font-size:.9rem;color:var(--muted);margin-top:.65rem; }
+.flash-inline { margin-bottom:.6rem;padding:.6rem .75rem;border-radius:10px; }
+.flash-inline.success { background: linear-gradient(90deg, var(--primary) 0%, var(--primary-600) 100%); color:#fff; }
+.flash-inline.danger, .flash-inline.error { background: var(--danger); color:#fff; }
+
+/* Simple inline brand tile used in auth cards */
+.auth-brand {
+  width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;
+  background:var(--g-primary);
+}

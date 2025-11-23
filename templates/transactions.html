@@ -2,7 +2,11 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>Transactions</h3>
+
+    {# Hide Add button for view-only mode #}
+    {% if not session.get('view_only') %}
     <a class="btn btn-outline-primary" href="{{ url_for('add') }}">Add</a>
+    {% endif %}
 </div>
 
 <table class="table table-sm table-striped">
@@ -22,9 +26,14 @@
             <td>{{ txn.description }}</td>
             <td>{{ txn.category or 'Uncategorized' }}</td>
             <td class="text-end">{{ '%.2f'|format(txn.amount) }}</td>
+
             <td>
+
+                {% if not session.get('view_only') %}
+
+                <!-- FULL MODE: SHOW DELETE BUTTON -->
                 <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}" class="delete-form d-inline">
-                    <!-- Delete Button (triggers modal) -->
+
                     <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
                         data-bs-target="#deleteModal{{ txn.id }}">
                         Delete
@@ -50,14 +59,24 @@
                                 </div>
 
                                 <div class="modal-footer d-flex justify-content-center gap-2">
-                                    <button type="button" class="btn btn-secondary px-4"
-                                        data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
+                                        Cancel
+                                    </button>
                                     <button type="submit" class="btn btn-danger px-4">Delete</button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </form>
+
+                {% else %}
+
+                <!-- VIEW-ONLY MODE: SHOW DISABLED TEXT BUTTON -->
+                <button class="btn btn-sm btn-secondary" disabled title="Delete is disabled in view-only mode">
+                    Delete
+                </button>
+
+                {% endif %}
 
             </td>
         </tr>
@@ -88,4 +107,5 @@
     </ul>
 </nav>
 {% endif %}
+
 {% endblock %}

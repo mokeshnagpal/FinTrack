@@ -19,17 +19,22 @@ import logging
 import json
 from urllib.parse import urlparse, urljoin
 
+# ---------------------------------------------------------------------
+# Early env load (explicit)
+# ---------------------------------------------------------------------
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path)
 
 # ----------------------------
 # Configuration
 # ----------------------------
 UTC = timezone.utc
-# widen occurrence window from ±1s to ±60s to avoid precision/tz mismatch (tweak as needed)
 OCCURRENCE_WINDOW_SECS = int(os.environ.get('OCCURRENCE_WINDOW_SECS', '60'))
 
-# load env
-load_dotenv()
-
+# read view-only password (strip whitespace)
+HW_PASSWORD = os.environ.get('VIEW_PASS')  # could be None
+if isinstance(HW_PASSWORD, str):
+    HW_PASSWORD = HW_PASSWORD.strip()
 
 # ---------------------------------------------------------------------
 # Firebase / Firestore init
@@ -40,14 +45,11 @@ if not firebase_credentials_str:
 
 firebase_credentials_dict = json.loads(firebase_credentials_str)
 
-# Replace literal '\\n' with actual newline characters in the private key
 if 'private_key' in firebase_credentials_dict:
     firebase_credentials_dict['private_key'] = firebase_credentials_dict['private_key'].replace('\\n', '\n')
 
-# Initialize Firebase Admin with the credentials dictionary
 cred = credentials.Certificate(firebase_credentials_dict)
 
-# avoid double-initialize in dev reloader
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
@@ -72,7 +74,6 @@ app.config.update(
     SESSION_COOKIE_SECURE=bool(os.environ.get('FORCE_HTTPS', False)),
     SESSION_COOKIE_SAMESITE='Lax',
 )
-# keep sessions effectively permanent until logout (adjust as needed)
 app.permanent_session_lifetime = timedelta(days=3650)  # ~10 years
 
 # configure logging
@@ -81,17 +82,15 @@ handler.setLevel(logging.DEBUG)
 app.logger.setLevel(logging.DEBUG)
 app.logger.addHandler(handler)
 
+app.logger.debug("FLASK_SECRET present? %s", bool(app.config.get('SECRET_KEY')))
+app.logger.debug("VIEW_PASS present? %s", bool(HW_PASSWORD))
+
 # ---------------------------------------------------------------------
 # Utilities: timestamp parsing & document conversion
 # ---------------------------------------------------------------------
-# --- simple session-based auth helpers ---
-# read ADMIN_USER (comma separated emails/usernames) and ADMIN_PASS from env
 ADMIN_USER_RAW = os.environ.get('ADMIN_USER', '')
-# parse -> lowercase set
 ADMIN_USERS = set(u.strip().lower() for u in ADMIN_USER_RAW.split(',') if u.strip())
-ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')  # change in prod!
 
-# ---------- user-scoping helpers ----------
 def is_valid_user(username):
     """
     Return True if username is allowed:
@@ -104,11 +103,9 @@ def is_valid_user(username):
 
     uname = str(username).strip().lower()
 
-    # quick env-list check
     if uname in ADMIN_USERS:
         return True
 
-    # fallback: check Firestore users collection (exists -> allowed)
     try:
         doc = fs.collection('users').document(uname).get()
         return doc.exists
@@ -137,55 +134,46 @@ def user_doc_ref(username=None):
     return fs.collection('users').document(str(username))
 
 def tx_collection(username=None):
-    """CollectionReference for users/{username}/transactions"""
     return user_doc_ref(username).collection('transactions')
 
 def rec_collection(username=None):
-    """CollectionReference for users/{username}/recurring"""
     return user_doc_ref(username).collection('recurring')
 
 def bal_collection(username=None):
-    """CollectionReference for users/{username}/balances"""
     return user_doc_ref(username).collection('balances')
-
 
 def is_safe_redirect_url(target):
     host_url = request.host_url
     ref = urljoin(host_url, target)
     return urlparse(ref).netloc == urlparse(host_url).netloc
 
-
 def login_required(view_fn):
     @wraps(view_fn)
     def wrapped(*args, **kwargs):
-        # allow REST APIs and static files to be called without login
-        # adjust this list as you need (e.g. public endpoints)
         if session.get('logged_in'):
             return view_fn(*args, **kwargs)
-        # allow health/static/login/api endpoints to run without auth
+
         path = request.path or ''
-        allowed_prefixes = ['/static/', '/export/', '/debug/recurring_run', '/login']
+
+        allowed_prefixes = ['/static/', '/export/', '/debug/recurring_run', '/login', '/view']
         if any(path.startswith(p) for p in allowed_prefixes):
             return view_fn(*args, **kwargs)
-        # otherwise redirect to login page
+
+        if session.get('view_only'):
+            if any(path.startswith(p) for p in VIEW_ONLY_ALLOWED_PREFIXES):
+                return view_fn(*args, **kwargs)
+            abort(401, description="Authentication required (view-only session has limited access)")
+
         return redirect(url_for('login', next=request.path))
     return wrapped
 
-
 def ts_to_dt(ts):
-    """
-    Convert Firestore Timestamp / datetime / ISO-string to timezone-aware UTC datetime.
-    """
     if ts is None:
         return None
-
-    # Firestore may return a native datetime
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
             return ts.replace(tzinfo=UTC)
         return ts.astimezone(UTC)
-
-    # fallback: try parsing ISO string
     try:
         dt = datetime.fromisoformat(str(ts))
         if dt.tzinfo is None:
@@ -195,9 +183,6 @@ def ts_to_dt(ts):
         raise ValueError(f"Unsupported timestamp format: {type(ts)} ({e})")
 
 def doc_to_txn(doc):
-    """
-    Convert DocumentSnapshot or dict to plain dict, normalize datetime fields and ensure id/_id exist.
-    """
     if hasattr(doc, 'to_dict'):
         d = doc.to_dict() or {}
     elif isinstance(doc, dict):
@@ -205,7 +190,6 @@ def doc_to_txn(doc):
     else:
         d = dict(doc)
 
-    # expose doc id under both keys for templates
     if hasattr(doc, 'id'):
         d['_id'] = doc.id
         d['id'] = doc.id
@@ -214,24 +198,19 @@ def doc_to_txn(doc):
     elif 'id' in d and '_id' not in d:
         d['_id'] = d['id']
 
-    # normalize datetime fields used by the app
     for fld in ('timestamp', 'start_datetime', 'last_applied'):
         if fld in d and d[fld] is not None:
             try:
                 d[fld] = ts_to_dt(d[fld])
             except Exception:
-                # leave as-is if conversion fails
                 pass
 
     return d
 
 # ---------------------------------------------------------------------
-# Firestore helpers
+# Firestore helpers (same as your existing functions)
 # ---------------------------------------------------------------------
 def get_txns_in_range(start_dt, end_dt, order_desc=True, username=None):
-    """
-    If username is None, uses the logged-in user. Returns list of txn dicts.
-    """
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=UTC)
     if end_dt.tzinfo is None:
@@ -249,7 +228,6 @@ def get_txns_in_range(start_dt, end_dt, order_desc=True, username=None):
     docs = q.stream()
     return [doc_to_txn(doc) for doc in docs]
 
-
 def get_recurring_active(username=None):
     if username is None:
         username = require_user()
@@ -257,7 +235,7 @@ def get_recurring_active(username=None):
     return [doc_to_txn(doc) for doc in docs]
 
 # ---------------------------------------------------------------------
-# Recurring runner (idempotent)
+# Recurring runner and helpers (kept intact)
 # ---------------------------------------------------------------------
 def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SECS, username=None):
     if occ_dt is None:
@@ -283,19 +261,13 @@ def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SE
         app.logger.exception("occurrence_exists query failed for %s at %s: %s", recurring_doc_id, occ_dt, e)
         return False
 
-
 def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc, username=None):
-    """
-    Attempt to create a transaction doc and update recurring.last_applied in a transaction.
-    This reduces race conditions. If transactional write fails, it will raise.
-    """
     if username is None:
         username = require_user()
 
     transaction = fs.transaction()
 
     def txn_op(tx):
-        # re-check existence inside txn
         window_start = next_occ - timedelta(seconds=OCCURRENCE_WINDOW_SECS)
         window_end = next_occ + timedelta(seconds=OCCURRENCE_WINDOW_SECS)
 
@@ -307,33 +279,16 @@ def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc, username=None):
 
         found = len(list(q.stream()))
         if found > 0:
-            # nothing to do
             return
 
-        # create txn doc with generated id in user's transactions subcollection
-        new_txn_ref = tx_collection(username).document()  # generate id
+        new_txn_ref = tx_collection(username).document()
         tx_doc = dict(txn_doc)
-        # ensure timestamp is a timezone-aware datetime; Firestore will store as timestamp
-        ts = tx_doc.get('timestamp')
-        if isinstance(ts, datetime) and ts.tzinfo is not None:
-            pass
-
-        # create txn and update recurring doc
         tx.set(new_txn_ref, tx_doc)
         tx.update(rec_ref, {'last_applied': next_occ})
 
-    # Run the transaction
     transaction.call(txn_op)
 
-
 def apply_recurring_up_to_today():
-    """
-    For each active recurring rule:
-      - determine next missing occurrence(s)
-      - for each occurrence <= now: if no transaction exists for that occurrence, create it and update last_applied
-    Idempotent: repeated runs won't create duplicates.
-    """
-    # don't attempt to run for anonymous requests
     if not session.get('logged_in'):
         return
 
@@ -348,7 +303,6 @@ def apply_recurring_up_to_today():
             app.logger.warning("Recurring rule without id: %s", r)
             continue
 
-        # parse datetimes defensively
         try:
             start_dt = ts_to_dt(r.get('start_datetime')) if r.get('start_datetime') else now
         except Exception as e:
@@ -365,7 +319,6 @@ def apply_recurring_up_to_today():
         app.logger.debug("Recurring %s: start=%s last_applied=%s freq=%s",
                           rec_id, start_dt, last_applied, frequency)
 
-        # compute first next occurrence
         if last_applied is None:
             next_occ = start_dt
         else:
@@ -376,16 +329,12 @@ def apply_recurring_up_to_today():
             else:
                 next_occ = last_applied + relativedelta(months=1)
 
-        # If first occurrence is still in future, skip (unless last_applied is None and start <= now)
         if last_applied is None and next_occ > now:
             app.logger.debug("Recurring %s next_occ (%s) in future, skipping, current (%s)", rec_id, next_occ, now)
             continue
 
         rec_ref = rec_collection(username).document(rec_id)
 
-
-        # iterate until we're caught up to 'now'
-        # limit iterations to avoid accidental infinite loops (safety)
         safety_counter = 0
         while next_occ <= now and safety_counter < 1000:
             safety_counter += 1
@@ -396,12 +345,10 @@ def apply_recurring_up_to_today():
                 exists = occurrence_exists(rec_id, next_occ, username=username)
             except Exception as e:
                 app.logger.exception("Error checking occurrence_exists for %s at %s: %s", rec_id, next_occ, e)
-                # break to avoid tight loop on persistent failure
                 break
 
             if exists:
                 app.logger.debug("Occurrence already exists for recurring %s at %s", rec_id, next_occ)
-                # still update last_applied to advance schedule (this mirrors your original behavior)
                 try:
                     rec_ref.update({'last_applied': next_occ})
                 except Exception as e:
@@ -414,16 +361,12 @@ def apply_recurring_up_to_today():
                     'timestamp': next_occ,
                     'recurring_id': str(rec_id)
                 }
-                # Try transactional create + mark; fallback to non-transactional if transaction fails
                 try:
-                    # Build rec_ref again as DocumentReference
                     rec_ref = rec_collection(username).document(rec_id)
 
-                    # Use a transaction to create txn and update last_applied
                     transaction = fs.transaction()
 
                     def trans_op(tx):
-                        # check if occurrence exists inside transaction (per-user collection)
                         window_start = next_occ - timedelta(seconds=OCCURRENCE_WINDOW_SECS)
                         window_end = next_occ + timedelta(seconds=OCCURRENCE_WINDOW_SECS)
                         q = (tx_collection(username)
@@ -439,35 +382,27 @@ def apply_recurring_up_to_today():
 
                     transaction.call(trans_op)
                     app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
-                    # record balance deduction for the recurring transaction
                     try:
                         append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
                     except Exception:
                         app.logger.exception("Failed to append balance for recurring %s at %s (user=%s)", rec_id, next_occ, username)
-
-
                 except Exception as e_tx:
-                    # transaction failed — try a simple add + update, with robust logging
                     app.logger.exception("Transaction write failed for recurring %s at %s: %s — falling back to add() (user=%s)", rec_id, next_occ, e_tx, username)
                     try:
                         tx_collection(username).add(txn_doc)
                         app.logger.info("Created transaction (fallback add) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
-                        # record balance deduction for the fallback-created transaction
                         try:
                             append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
                         except Exception:
                             app.logger.exception("Failed to append balance (fallback) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
-
                         try:
                             rec_ref.update({'last_applied': next_occ})
                         except Exception as e2:
                             app.logger.exception("Fallback: failed to update last_applied for recurring %s: %s", rec_id, e2)
                     except Exception as e_add:
                         app.logger.exception("Fallback add failed for recurring %s at %s: %s", rec_id, next_occ, e_add)
-                        # If a write fails we skip advancing this recurring so we'll retry next run
                         break
 
-            # advance to next occurrence
             if frequency == 'monthly':
                 next_occ = next_occ + relativedelta(months=1)
             elif frequency == 'yearly':
@@ -479,15 +414,62 @@ def apply_recurring_up_to_today():
             app.logger.error("Safety break triggered for recurring %s after %d iterations", rec_id, safety_counter)
 
 # Run before every request
+# Run before every request (minimal safe throttling)
 @app.before_request
 def ensure_recurring_applied():
-    # Only run per-user recurring application for authenticated users
+    # Only try to run for logged-in full users
     if not session.get('logged_in'):
         return
+
+    # Don't run for non-GET (avoid running during POSTs which are often quick actions)
+    if request.method != 'GET':
+        app.logger.debug("Skipping recurring runner: non-GET request (%s)", request.method)
+        return
+
+    # Skip static assets and a few known prefixes (fast bailouts)
+    skip_prefixes = (
+        '/static/',
+        '/favicon.ico',
+        '/export/',
+        '/debug/recurring_run',
+        '/api/',
+        '/login',
+        '/logout',
+        '/view',
+        '/view-login',
+    )
+    path = request.path or ''
+    if any(path.startswith(p) for p in skip_prefixes):
+        app.logger.debug("Skipping recurring runner for path: %s", path)
+        return
+
+    # Throttle: run at most once per user every N seconds
+    THROTTLE_SECONDS = 5 * 60  # 5 minutes (adjust if you want)
+    last_run_iso = session.get('last_recurring_run')  # stored as ISO string
     try:
-        apply_recurring_up_to_today()
+        if last_run_iso:
+            last_run = datetime.fromisoformat(last_run_iso)
+            # ensure timezone-aware comparison
+            if last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=UTC)
+            elapsed = (datetime.now(UTC) - last_run).total_seconds()
+            if elapsed < THROTTLE_SECONDS:
+                app.logger.debug("Skipping recurring runner: last run %.1fs ago (throttle %ds).", elapsed, THROTTLE_SECONDS)
+                return
     except Exception:
-        app.logger.exception("Error applying recurring rules")
+        # if parsing fails, continue and run once (but log)
+        app.logger.debug("Couldn't parse last_recurring_run (%s); will attempt runner.", last_run_iso)
+
+    # Finally attempt to apply recurring rules, guarded by try/except
+    try:
+        # Use UTC now (don't add a manual +5:30 offset)
+        # apply_recurring_up_to_today already computes next occurrences relative to now
+        apply_recurring_up_to_today()
+
+        # record last run timestamp (ISO, timezone-aware)
+        session['last_recurring_run'] = datetime.now(UTC).isoformat()
+    except Exception:
+        app.logger.exception("Error applying recurring rules (throttled runner)")
 
 # ---------------------------------------------------------------------
 # Debug route (diagnostic)
@@ -517,7 +499,6 @@ def debug_recurring_run():
             last_applied = f"PARSE_ERROR: {e}"
 
         frequency = (r.get('frequency') or 'monthly').lower()
-        # compute next_occ as your runner does (best effort)
         if isinstance(last_applied, datetime):
             if frequency == 'monthly':
                 next_occ = last_applied + relativedelta(months=1)
@@ -546,7 +527,6 @@ def debug_recurring_run():
             "next_occurrence_le_now": isinstance(next_occ, datetime) and next_occ <= now,
             "occurrence_exists": occ_exists,
             "occurrence_check_error": occ_err,
-            # don't dump huge raw doc objects in production; here it's useful for debugging
             "raw_doc": r
         })
 
@@ -560,8 +540,9 @@ def debug_recurring_run():
     return jsonify({"now": now.isoformat(), "diagnostics": diagnostics, "runner_exception": run_exc})
 
 # ---------------------------------------------------------------------
-# Routes: Pages (unchanged except ensuring timezone-awareness on input)
+# Routes: Pages
 # ---------------------------------------------------------------------
+
 @app.route('/')
 @login_required
 def index():
@@ -601,9 +582,8 @@ def add():
 @login_required
 def transactions():
     page = int(request.args.get('page', 1))
-    per = 5  # show only 5 transactions per page
+    per = 5
 
-    # Query Firestore: newest first (per-user)
     username = require_user()
     q = (tx_collection(username)
            .order_by('timestamp', direction=firestore.Query.DESCENDING)
@@ -612,11 +592,9 @@ def transactions():
     docs = q.stream()
     txns_list = [doc_to_txn(doc) for doc in docs]
 
-    # Detect next and previous pages
     has_next = len(txns_list) == per
     has_prev = page > 1
 
-    # Create pagination object
     paginate_obj = SimpleNamespace(
         items=txns_list,
         page=page,
@@ -629,11 +607,9 @@ def transactions():
 
     return render_template('transactions.html', txns=paginate_obj)
 
-
 @app.route('/delete/<string:tx_id>', methods=['POST'])
 @login_required
 def delete(tx_id):
-    # fetch the transaction first so we know the amount
     username = require_user()
     doc_ref = tx_collection(username).document(tx_id)
     doc = doc_ref.get()
@@ -644,9 +620,7 @@ def delete(tx_id):
     try:
         txn = doc_to_txn(doc)
         amt = float(txn.get('amount', 0.0))
-        # delete transaction
         doc_ref.delete()
-        # add back the amount to balances (refund)
         append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}", username=username)
         flash('Transaction deleted.', 'info')
     except Exception as e:
@@ -656,7 +630,7 @@ def delete(tx_id):
     return redirect(url_for('transactions'))
 
 # ---------------------------------------------------------------------
-# Routes: Recurring Rules
+# Recurring rules endpoints (kept intact)
 # ---------------------------------------------------------------------
 @app.route('/recurring', methods=['GET', 'POST'])
 @login_required
@@ -665,7 +639,6 @@ def recurring():
     if form.validate_on_submit():
         sd = form.start_date.data
         st = form.start_time.data
-        # ensure tz-aware
         start_dt = datetime.combine(sd, st).replace(tzinfo=UTC)
 
         r_doc = {
@@ -700,42 +673,290 @@ def recurring_delete(r_id):
 def analytics():
     return render_template('analytics.html')
 
+# ---------------------------------------------------------------------
+# Login / View-only routes (Hardened view-only)
+# ---------------------------------------------------------------------
+# Add these imports near the top of your file (if not already present)
+from werkzeug.security import check_password_hash, generate_password_hash
+try:
+    import bcrypt
+except Exception:
+    bcrypt = None
+
+# Helper: verify hashed password (supports bcrypt $2* hashes and Werkzeug hashes)
+def verify_password(stored_pw: str, provided_pw: str) -> bool:
+    """
+    Returns True if provided_pw matches stored_pw.
+    Supports:
+      - bcrypt hashes that start with '$2' (e.g. $2b$...)
+      - Werkzeug-style hashes (generate_password_hash)
+    """
+    if not stored_pw or not provided_pw:
+        return False
+
+    stored = str(stored_pw).strip()
+
+    try:
+        # bcrypt-style (starts with $2a$, $2b$, $2y$, etc.)
+        if stored.startswith("$2") and bcrypt is not None:
+            try:
+                return bcrypt.checkpw(provided_pw.encode("utf-8"), stored.encode("utf-8"))
+            except Exception as e:
+                app.logger.debug("bcrypt checkpw failed: %s", e)
+                return False
+
+        # Fallback to Werkzeug's check_password_hash (handles pbkdf2:sha256 and similar)
+        return check_password_hash(stored, provided_pw)
+    except Exception as e:
+        app.logger.exception("Password verification error: %s", e)
+        return False
+
+# Optional helper to create a new password hash (Werkzeug PBKDF2 by default)
+def make_password_hash(password: str) -> str:
+    """
+    Use this when creating/changing user passwords.
+    By default this uses Werkzeug's generate_password_hash (PBKDF2:sha256).
+    If you prefer bcrypt, adjust accordingly.
+    """
+    return generate_password_hash(password)  # e.g. "pbkdf2:sha256:260000$..."
+
+# Updated login route (replace your existing login function with this)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """
+    Full (hashed) login endpoint.
+    Renders login.html and performs full authentication using Firestore-stored hashed passwords.
+    Successful login sets session['logged_in'] = True and session['username'].
+    """
     form = LoginForm()
-    # If user already logged in, go to index
+
+    # If already logged in (full session), go to index
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    # Prevent accidentally re-using view-only flag
+    if session.get('view_only'):
+        session.pop('view_only', None)
+
+    if form.validate_on_submit():
+        username = (form.username.data or '').strip().lower()
+        password = (form.password.data or '').strip()
+
+        if not username:
+            flash('Please provide a username.', 'danger')
+            return render_template('login.html', form=form)
+
+        if not is_valid_user(username):
+            flash('Invalid credentials', 'danger')
+            return render_template('login.html', form=form)
+
+        try:
+            user_doc = fs.collection('users').document(username).get()
+            if not user_doc.exists:
+                app.logger.warning("Login failed: user document not found for %s", username)
+                flash('Invalid credentials', 'danger')
+                return render_template('login.html', form=form)
+
+            user_data = user_doc.to_dict() or {}
+            stored_pw = user_data.get('password')
+            if stored_pw is None:
+                app.logger.warning("Login failed: user %s has no password set in Firestore", username)
+                flash('Invalid credentials', 'danger')
+                return render_template('login.html', form=form)
+
+            if verify_password(stored_pw, password):
+                # Full, persistent login
+                session.pop('view_only', None)
+                session['logged_in'] = True
+                session.permanent = True
+                session['username'] = username
+                app.logger.info("User %s logged in (full session)", username)
+                flash('Logged in successfully.', 'success')
+
+                next_url = request.args.get('next') or url_for('index')
+                if not is_safe_redirect_url(next_url):
+                    next_url = url_for('index')
+                return redirect(next_url)
+            else:
+                app.logger.info("Login failed: invalid password for %s", username)
+                flash('Invalid credentials', 'danger')
+
+        except Exception as e:
+            app.logger.exception("Login error for %s: %s", username, e)
+            flash('Login error', 'danger')
+
+    return render_template('login.html', form=form)
+
+
+@app.route('/view-login', methods=['GET', 'POST'])
+def view_login():
+    """
+    View-only login endpoint.
+    Renders view.html (a lightweight page) and authenticates using the HW_PASSWORD (or other env secret).
+    Successful view-only sets session['view_only'] = True and session['username'] (non-privileged).
+    """
+    form = LoginForm()  # reuse same form (username + password). view.html should post to this endpoint.
+
+    # If already have a full login, redirect to index
     if session.get('logged_in'):
         return redirect(url_for('index'))
 
     if form.validate_on_submit():
-        # normalize username to lowercase for comparisons and storage
         username = (form.username.data or '').strip().lower()
         password = (form.password.data or '').strip()
 
-        # Accept if username appears in ADMIN_USERS or exists in users collection,
-        # and supplied password matches ADMIN_PASS.
-        if is_valid_user(username) and password == ADMIN_PASS:
-            session['logged_in'] = True
-            session.permanent = True
+        if not username:
+            flash('Please provide a username.', 'danger')
+            return render_template('view.html', form=form)
+
+        # Only allow view-only path when HW_PASSWORD is configured
+        if not HW_PASSWORD:
+            app.logger.error("Attempted view-only login but HW_PASSWORD not configured")
+            flash('View-only login currently disabled.', 'danger')
+            return render_template('view.html', form=form)
+
+        # If the submitted password equals the view-only secret, grant view-only access
+        if password == HW_PASSWORD:
+            session['view_only'] = True
             session['username'] = username
-            flash('Logged in successfully.', 'success')
-            next_url = request.args.get('next') or url_for('index')
+            session.permanent = True
+            app.logger.info("View-only session granted for user %s", username)
+            flash(f'View-only access granted for user: {username}', 'success')
+
+            next_url = request.args.get('next') or url_for('balance')
             if not is_safe_redirect_url(next_url):
-                next_url = url_for('index')
+                next_url = url_for('balance')
             return redirect(next_url)
         else:
+            app.logger.info("View-only login failed for %s (invalid view password)", username)
+            flash('Invalid view-only password.', 'danger')
+
+    # GET or failed POST -> show view-only login template
+    return render_template('view.html', form=form)
+
+# which paths (prefixes) a view-only session is allowed to access.
+# which paths (prefixes) a view-only session is allowed to access.
+VIEW_ONLY_ALLOWED_PREFIXES = (
+    '/balance',
+    '/analytics',
+    '/api/balance_current',
+    '/api/balance_series',
+    '/api/totals',
+    '/api/category_breakdown',
+    '/api/transactions_range',
+    '/export/transactions_csv',
+    '/static/',
+    '/view',          # allow the /view endpoint itself
+    '/view-login',    # in case you reference it elsewhere
+    '/'
+)
+
+
+@app.route('/view', methods=['GET', 'POST'])
+def view_only_login():
+    """
+    Backwards-compatible endpoint:
+      - Accepts GET ?pw=...&username=...  or POST form with username+password.
+      - If password == VIEW_PASS and username exists => set view-only session for that username.
+      - If password != VIEW_PASS but username/password matches Firestore => full login.
+    """
+    # If already fully logged in, redirect to index
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    # If already view-only, go to balance
+    if session.get('view_only'):
+        return redirect(url_for('balance'))
+
+    # Extract username and password from GET or POST
+    if request.method == 'GET':
+        pw = request.args.get('pw')
+        uname = (request.args.get('username') or '').strip().lower()
+    else:
+        pw = request.form.get('password') or (request.get_json(silent=True) or {}).get('password')
+        uname = (request.form.get('username') or '').strip().lower()
+
+    if isinstance(pw, str):
+        pw = pw.strip()
+
+    # If no server-side view-pass configured, inform admin (redirect to login)
+    if not HW_PASSWORD:
+        app.logger.warning("View-only attempted but VIEW_PASS is not set in environment.")
+        flash('Server misconfiguration: view-only password not configured.', 'danger')
+        return redirect(url_for('login'))
+
+    # If username not provided, return small form
+    if not uname:
+        return '''
+            <!doctype html>
+            <title>View-only access</title>
+            <h3>View-only access</h3>
+            <form method="post">
+              <input name="username" placeholder="Username" />
+              <input name="password" placeholder="Password" type="password" />
+              <button type="submit">Enter</button>
+            </form>
+            <p>Or pass ?username=USER&pw=VIEW_PASS in the URL.</p>
+        ''', 200
+
+    # If password matches VIEW_PASS -> view-only
+    if pw == HW_PASSWORD:
+        if not is_valid_user(uname):
+            app.logger.info("View-only attempted for unknown user %s", uname)
+            flash('Invalid username for view-only access.', 'danger')
+            return redirect(url_for('login'))
+
+        session['view_only'] = True
+        session['username'] = uname
+        session.permanent = True
+        app.logger.info("View-only session granted for user %s", uname)
+        flash('View-only access granted.', 'success')
+        next_url = request.args.get('next') or url_for('balance')
+        if not is_safe_redirect_url(next_url):
+            next_url = url_for('balance')
+        return redirect(next_url)
+
+    # Otherwise try full login with Firestore password
+    try:
+        user_doc = fs.collection('users').document(uname).get()
+        if not user_doc.exists:
+            app.logger.warning("Login failed: user document not found for %s", uname)
             flash('Invalid credentials', 'danger')
-    return render_template('login.html', form=form)
+            return redirect(url_for('login'))
+
+        user_data = user_doc.to_dict() or {}
+        stored_pw = user_data.get('password')
+        if stored_pw is None:
+            app.logger.warning("Login failed: user %s has no password set in Firestore", uname)
+            flash('Invalid credentials', 'danger')
+            return redirect(url_for('login'))
+
+        if pw == stored_pw:
+            session.pop('view_only', None)
+            session['logged_in'] = True
+            session.permanent = True
+            session['username'] = uname
+            app.logger.info("User %s logged in (full session) via /view", uname)
+            flash('Logged in successfully.', 'success')
+            return redirect(url_for('index'))
+        else:
+            app.logger.info("Login failed: invalid password for %s via /view", uname)
+            flash('Invalid credentials', 'danger')
+            return redirect(url_for('login'))
+    except Exception as e:
+        app.logger.exception("Error in /view login for %s: %s", uname, e)
+        flash('Login error', 'danger')
+        return redirect(url_for('login'))
 
 
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     session.pop('username', None)
+    session.pop('view_only', None)
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
-
 
 # ---------------------------------------------------------------------
 # API helpers & endpoints (unchanged)
@@ -743,7 +964,6 @@ def logout():
 def _parse_period_args(args):
     period = args.get('period', 'daily')
     count = max(int(args.get('count', 30)), 1)
-    # keep "now" in UTC
     now = datetime.now(UTC)
 
     if period == 'daily':
@@ -914,7 +1134,7 @@ def export_transactions_csv():
     filename = f"transactions_{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}.csv"
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=filename)
 
-# legacy endpoints (kept for compatibility)
+# legacy endpoints
 @app.route('/api/daily_totals')
 def api_daily_totals():
     end = date.today()
@@ -945,7 +1165,7 @@ def api_monthly_totals():
     return jsonify({"labels": labels, "values": totals})
 
 # ---------------------------------------------------------------------
-# Balance helpers & APIs (new)
+# Balance helpers & APIs (kept intact)
 # ---------------------------------------------------------------------
 def get_balances_in_range(start_dt, end_dt, order_desc=False, username=None):
     if start_dt.tzinfo is None:
@@ -965,7 +1185,6 @@ def get_balances_in_range(start_dt, end_dt, order_desc=False, username=None):
     docs = q.stream()
     return [doc_to_txn(doc) for doc in docs]
 
-
 def get_latest_balance(username=None):
     if username is None:
         username = require_user()
@@ -974,7 +1193,6 @@ def get_latest_balance(username=None):
     if not docs:
         return None
     return doc_to_txn(docs[0])
-
 
 def append_balance(delta, type_, note='', username=None):
     if username is None:
@@ -1010,20 +1228,16 @@ def append_balance(delta, type_, note='', username=None):
         app.logger.exception("Failed to append balance doc for user %s: %s", username, e)
         return None, doc
 
-
 @app.route('/balance')
 @login_required
 def balance():
-    """Render balance page"""
     return render_template('balance.html')
 
 @app.route('/api/balance_current')
 @login_required
 def api_balance_current():
-    """Return the current/latest balance and a short recent history"""
     username = require_user()
     latest = get_latest_balance(username=username)
-    # send back last 20 entries (per-user)
     q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20)
     docs = [doc_to_txn(d) for d in q.stream()]
     history = [{
@@ -1043,17 +1257,10 @@ def api_balance_current():
     }
     return jsonify(out)
 
-
 @app.route('/api/balance_series')
 @login_required
 def api_balance_series():
-    """
-    Return series of balances aggregated by daily / monthly / yearly.
-    Uses the same _parse_period_args helper (period + count).
-    For each label, we pick the last recorded balance in that label (forward-fill if missing).
-    """
     start_dt, end_dt, period = _parse_period_args(request.args)
-    # fetch balances in range
     bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False)
 
     labels, values = [], []
@@ -1063,14 +1270,12 @@ def api_balance_series():
         endd = end_dt.date()
         days = [(start_dt.date() + relativedelta(days=i)) for i in range((endd - cur_date).days + 1)]
         labels = [d.isoformat() for d in days]
-        # map date -> last balance for that date
         date_last = {}
         for b in bal_docs:
             if not b.get('timestamp'):
                 continue
             d = b['timestamp'].date().isoformat()
             date_last[d] = float(b.get('balance', 0.0))
-        # forward fill
         last_known = None
         for lab in labels:
             if lab in date_last:
@@ -1113,7 +1318,6 @@ def api_balance_series():
             values.append(round(float(last_known or 0.0), 2))
 
     else:
-        # fallback: daily behavior
         return jsonify({"labels": [], "values": []})
 
     return jsonify({"labels": labels, "values": values})
@@ -1121,14 +1325,6 @@ def api_balance_series():
 @app.route('/api/balance/add', methods=['POST'])
 @login_required
 def api_balance_add():
-    """
-    Add balance (increment). Expects JSON { amount: number, note: str (optional) }.
-    This creates a new balances doc with fields:
-      - balance: new absolute balance after applying add
-      - type: 'add'
-      - delta: amount (positive)
-      - note, timestamp
-    """
     username = require_user()
     data = request.get_json() or {}
     try:
@@ -1150,14 +1346,9 @@ def api_balance_add():
     bal_collection(username).add(doc)
     return jsonify({"balance": new_bal, "timestamp": now.isoformat(), "type": "add"})
 
-
 @app.route('/api/balance/sync', methods=['POST'])
 @login_required
 def api_balance_sync():
-    """
-    Sync/Set absolute balance. Expects JSON { balance: number, note: str (optional) }.
-    Creates a new doc with type 'sync' and delta = new - prev
-    """
     username = require_user()
     data = request.get_json() or {}
     try:
@@ -1182,14 +1373,7 @@ def api_balance_sync():
 @app.route('/api/balance/undo', methods=['POST'])
 @login_required
 def api_balance_undo():
-    """
-    Delete the most-recent balance document (undo last action).
-    If the most-recent entry is a transaction (type 'txn' or 'txn_delete'),
-    we refuse and return a helpful error message (undo supports balance add/sync entries).
-    Returns the deleted doc summary and the new current balance (if any).
-    """
     username = require_user()
-    # find last doc
     q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
     docs = list(q.stream())
     if not docs:
@@ -1199,16 +1383,13 @@ def api_balance_undo():
     last_data = doc_to_txn(last_doc)
     last_type = (last_data.get('type') or '').lower()
 
-    # Disallow undo when last entry is a transaction
     if last_type in ('txn', 'txn_delete'):
-        # Friendly, actionable error for the client
         return jsonify({
             "error": f"Cannot undo: last entry is a transaction ('{last_type}').",
             "reason": "Transactions are persisted separately; undoing them here may corrupt balances.",
             "advice": "To revert a transaction, delete the transaction from the Transactions page instead."
         }), 400
 
-    # safe to delete
     try:
         bal_collection(username).document(last_doc.id).delete()
     except Exception as e:
@@ -1233,7 +1414,6 @@ def api_balance_undo():
 @app.route('/api/balance/history')
 @login_required
 def api_balance_history():
-    """Return recent balance history (paginated via ?limit=... )"""
     username = require_user()
     limit = max(int(request.args.get('limit', 50)), 1)
     q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
@@ -1252,4 +1432,11 @@ def api_balance_history():
 # Main
 # ---------------------------------------------------------------------
 if __name__ == '__main__':
+    app.logger.info("Starting app with VIEW_PASS present? %s", bool(HW_PASSWORD))
+    app.logger.info("Starting app with FLASK_SECRET present? %s", bool(app.config.get('SECRET_KEY')))
+    
     app.run(debug=True)
+
+
+
+

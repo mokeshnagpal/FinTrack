@@ -29,6 +29,8 @@
             <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
         </div>
 
+        {# Actions card: show controls only for full users; for view-only show muted notice #}
+        {% if not session.get('view_only') %}
         <div class="card shadow-sm">
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
 
@@ -58,15 +60,27 @@
             <div>
                 <label class="form-label small">Undo Entries</label>
                 <div class="d-flex gap-2">
-                    <!-- single undo button only -->
                     <button id="undoBtn" class="btn btn-outline-danger btn-sm w-100">Undo Last</button>
                 </div>
                 <small class="text-muted d-block mt-2">
                     Undo removes the most recent balance record. Use with caution.
                 </small>
             </div>
-
         </div>
+        {% else %}
+        <div class="card shadow-sm">
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+            <div class="p-3">
+                <p class="mb-2 small text-muted">
+                    You are viewing this account in <strong>view-only</strong> mode. Action controls (Add / Sync / Undo)
+                    are not available here.
+                </p>
+                <p class="small mb-0">
+                    To make changes, sign in with an account that has editing access.
+                </p>
+            </div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Right Column -->

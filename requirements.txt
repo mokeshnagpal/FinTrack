@@ -1,8 +1,11 @@
 Flask
+Flask-WTF
+WTForms
+Werkzeug
 python-dotenv
 python-dateutil
 firebase-admin
-Flask-WTF
-WTForms
+google-cloud-firestore
+bcrypt
 email-validator
 gunicorn
