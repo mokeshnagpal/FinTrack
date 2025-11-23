@@ -1,0 +1,145 @@
+{# templates/login.html - themed using your SpendTracker CSS #}
+<!doctype html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sign in — FinTrak</title>
+
+    <!-- Your app theme (rename path if needed) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+
+    <!-- small inline tweaks for centering on page -->
+    <style>
+        html,
+        body {
+            height: 100%
+        }
+
+        .auth-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+
+        .auth-card {
+            max-width: 420px;
+            width: 100%
+        }
+
+        .card-body {
+            padding: 1.25rem;
+        }
+
+        .form-foot {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: .5rem;
+            margin-top: .6rem;
+        }
+
+        .small-muted {
+            font-size: .9rem;
+            color: var(--muted);
+            margin-top: .65rem
+        }
+
+        /* floating flash fallback */
+        .flash-inline {
+            margin-bottom: .6rem;
+            padding: .6rem .75rem;
+            border-radius: 10px;
+        }
+
+        .flash-inline.success {
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-600) 100%);
+            color: #fff;
+        }
+
+        .flash-inline.danger,
+        .flash-inline.error {
+            background: var(--danger);
+            color: #fff;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="auth-wrapper">
+        <div class="auth-card card">
+            <div class="card-body">
+                <div class="stack" style="gap:.6rem">
+                    <div class="center" style="justify-content:flex-start; gap:.75rem;">
+                        <div
+                            style="width:44px;height:44px;border-radius:10px;background:var(--g-primary);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">
+                            FT</div>
+                        <div>
+                            <div class="page-title">FinTrak</div>
+                            <div class="kicker">Sign in to your account</div>
+                        </div>
+                    </div>
+
+                    {# Inline flash messages (styled by theme) #}
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                    {% for category, msg in messages %}
+                    <div class="flash-inline {{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
+                    {% endfor %}
+                    {% endif %}
+                    {% endwith %}
+
+                    <form method="post" novalidate>
+                        {{ form.hidden_tag() }}
+
+                        <div class="stack" style="gap:.5rem;">
+                            <label class="kicker" for="{{ form.username.id }}">{{ form.username.label.text }}</label>
+                            {{ form.username(class="form-control", id=form.username.id, autofocus=true) }}
+                            {% if form.username.errors %}
+                            <div class="kicker" style="color:var(--danger);font-size:.9rem">
+                                {{ form.username.errors[0] }}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="stack" style="gap:.5rem;margin-top:.6rem;">
+                            <label class="kicker" for="{{ form.password.id }}">{{ form.password.label.text }}</label>
+                            {{ form.password(class="form-control", id=form.password.id) }}
+                            {% if form.password.errors %}
+                            <div class="kicker" style="color:var(--danger);font-size:.9rem">
+                                {{ form.password.errors[0] }}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="form-foot">
+                            {{ form.submit(class="btn btn-primary") }}
+                        </div>
+                    </form>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- optional small script to auto-remove inline flashes after a short time -->
+    <script>
+        (function () {
+            const flashes = document.querySelectorAll('.flash-inline');
+            if (!flashes) return;
+            setTimeout(() => {
+                flashes.forEach(el => {
+                    el.style.transition = 'opacity .4s, transform .4s';
+                    el.style.opacity = '0';
+                    el.style.transform = 'translateY(-6px)';
+                    setTimeout(() => el.remove(), 450);
+                });
+            }, 3500);
+        })();
+    </script>
+</body>
+
+</html>

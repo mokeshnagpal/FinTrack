@@ -1,10 +1,12 @@
 from flask import (
     Flask, render_template, redirect, url_for, flash,
-    request, jsonify, send_file
+    request, jsonify, send_file, abort, session
 )
+from functools import wraps
+
 from datetime import datetime, date, time as dt_time, timezone, timedelta
 from dateutil.relativedelta import relativedelta
-from forms import TransactionForm, RecurringForm
+from forms import TransactionForm, RecurringForm, LoginForm
 import os
 import io
 import csv
@@ -15,6 +17,8 @@ from firebase_admin import credentials, firestore
 from types import SimpleNamespace
 import logging
 import json
+from urllib.parse import urlparse, urljoin
+
 
 # ----------------------------
 # Configuration
@@ -25,6 +29,7 @@ OCCURRENCE_WINDOW_SECS = int(os.environ.get('OCCURRENCE_WINDOW_SECS', '60'))
 
 # load env
 load_dotenv()
+
 
 # ---------------------------------------------------------------------
 # Firebase / Firestore init
@@ -48,7 +53,7 @@ if not firebase_admin._apps:
 
 fs = firestore.client()
 
-# collection names
+# collection names (kept for backwards reference but we now use per-user subcollections)
 TX_COL = "transactions"
 REC_COL = "recurring"
 BAL_COL = "balances"
@@ -60,6 +65,15 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'firestore://'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SESSION_REFRESH_EACH_REQUEST'] = False
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=bool(os.environ.get('FORCE_HTTPS', False)),
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+# keep sessions effectively permanent until logout (adjust as needed)
+app.permanent_session_lifetime = timedelta(days=3650)  # ~10 years
 
 # configure logging
 handler = logging.StreamHandler()
@@ -70,6 +84,94 @@ app.logger.addHandler(handler)
 # ---------------------------------------------------------------------
 # Utilities: timestamp parsing & document conversion
 # ---------------------------------------------------------------------
+# --- simple session-based auth helpers ---
+# read ADMIN_USER (comma separated emails/usernames) and ADMIN_PASS from env
+ADMIN_USER_RAW = os.environ.get('ADMIN_USER', '')
+# parse -> lowercase set
+ADMIN_USERS = set(u.strip().lower() for u in ADMIN_USER_RAW.split(',') if u.strip())
+ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')  # change in prod!
+
+# ---------- user-scoping helpers ----------
+def is_valid_user(username):
+    """
+    Return True if username is allowed:
+     - present in ADMIN_USERS env list OR
+     - a document exists at users/{username} in Firestore
+    Username is normalized to lowercase before checks.
+    """
+    if not username:
+        return False
+
+    uname = str(username).strip().lower()
+
+    # quick env-list check
+    if uname in ADMIN_USERS:
+        return True
+
+    # fallback: check Firestore users collection (exists -> allowed)
+    try:
+        doc = fs.collection('users').document(uname).get()
+        return doc.exists
+    except Exception:
+        app.logger.exception("is_valid_user: Firestore check failed for %s", uname)
+        return False
+
+def get_current_username():
+    """Return the logged-in username or None."""
+    return session.get('username')
+
+def require_user():
+    """Return username or abort 401 (used in API code paths)."""
+    u = get_current_username()
+    if not u:
+        abort(401, description="Authentication required")
+    return u
+
+def user_doc_ref(username=None):
+    """
+    Return DocumentReference to users/{username}.
+    If username is None, uses the logged-in user (and aborts if not logged in).
+    """
+    if username is None:
+        username = require_user()
+    return fs.collection('users').document(str(username))
+
+def tx_collection(username=None):
+    """CollectionReference for users/{username}/transactions"""
+    return user_doc_ref(username).collection('transactions')
+
+def rec_collection(username=None):
+    """CollectionReference for users/{username}/recurring"""
+    return user_doc_ref(username).collection('recurring')
+
+def bal_collection(username=None):
+    """CollectionReference for users/{username}/balances"""
+    return user_doc_ref(username).collection('balances')
+
+
+def is_safe_redirect_url(target):
+    host_url = request.host_url
+    ref = urljoin(host_url, target)
+    return urlparse(ref).netloc == urlparse(host_url).netloc
+
+
+def login_required(view_fn):
+    @wraps(view_fn)
+    def wrapped(*args, **kwargs):
+        # allow REST APIs and static files to be called without login
+        # adjust this list as you need (e.g. public endpoints)
+        if session.get('logged_in'):
+            return view_fn(*args, **kwargs)
+        # allow health/static/login/api endpoints to run without auth
+        path = request.path or ''
+        allowed_prefixes = ['/static/', '/export/', '/debug/recurring_run', '/login']
+        if any(path.startswith(p) for p in allowed_prefixes):
+            return view_fn(*args, **kwargs)
+        # otherwise redirect to login page
+        return redirect(url_for('login', next=request.path))
+    return wrapped
+
+
 def ts_to_dt(ts):
     """
     Convert Firestore Timestamp / datetime / ISO-string to timezone-aware UTC datetime.
@@ -126,13 +228,20 @@ def doc_to_txn(doc):
 # ---------------------------------------------------------------------
 # Firestore helpers
 # ---------------------------------------------------------------------
-def get_txns_in_range(start_dt, end_dt, order_desc=True):
+def get_txns_in_range(start_dt, end_dt, order_desc=True, username=None):
+    """
+    If username is None, uses the logged-in user. Returns list of txn dicts.
+    """
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=UTC)
     if end_dt.tzinfo is None:
         end_dt = end_dt.replace(tzinfo=UTC)
 
-    q = fs.collection(TX_COL).where('timestamp', '>=', start_dt).where('timestamp', '<=', end_dt)
+    if username is None:
+        username = require_user()
+
+    coll = tx_collection(username)
+    q = coll.where('timestamp', '>=', start_dt).where('timestamp', '<=', end_dt)
     if order_desc:
         q = q.order_by('timestamp', direction=firestore.Query.DESCENDING)
     else:
@@ -140,32 +249,29 @@ def get_txns_in_range(start_dt, end_dt, order_desc=True):
     docs = q.stream()
     return [doc_to_txn(doc) for doc in docs]
 
-def get_recurring_active():
-    docs = fs.collection(REC_COL).where('active', '==', True).stream()
+
+def get_recurring_active(username=None):
+    if username is None:
+        username = require_user()
+    docs = rec_collection(username).where('active', '==', True).stream()
     return [doc_to_txn(doc) for doc in docs]
 
 # ---------------------------------------------------------------------
 # Recurring runner (idempotent)
 # ---------------------------------------------------------------------
-def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SECS):
-    """
-    Check for an existing transaction created for the given recurring_id at occ_dt.
-    Uses a small time window to avoid timezone/precision mismatch.
-    """
+def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SECS, username=None):
     if occ_dt is None:
         return False
-
-    # ensure timezone-aware
     if occ_dt.tzinfo is None:
         occ_dt = occ_dt.replace(tzinfo=UTC)
+    if username is None:
+        username = require_user()
 
     window_start = occ_dt - timedelta(seconds=window_secs)
     window_end = occ_dt + timedelta(seconds=window_secs)
 
-    # cast id to string (we store recurring_id as plain doc id string)
     rec_str = str(recurring_doc_id)
-
-    q = (fs.collection(TX_COL)
+    q = (tx_collection(username)
          .where('recurring_id', '==', rec_str)
          .where('timestamp', '>=', window_start)
          .where('timestamp', '<=', window_end)
@@ -175,14 +281,17 @@ def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SE
         return len(docs) > 0
     except Exception as e:
         app.logger.exception("occurrence_exists query failed for %s at %s: %s", recurring_doc_id, occ_dt, e)
-        # Conservatively return False so caller may attempt to create (and then handle write failure if needed)
         return False
 
-def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc):
+
+def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc, username=None):
     """
     Attempt to create a transaction doc and update recurring.last_applied in a transaction.
     This reduces race conditions. If transactional write fails, it will raise.
     """
+    if username is None:
+        username = require_user()
+
     transaction = fs.transaction()
 
     def txn_op(tx):
@@ -190,7 +299,7 @@ def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc):
         window_start = next_occ - timedelta(seconds=OCCURRENCE_WINDOW_SECS)
         window_end = next_occ + timedelta(seconds=OCCURRENCE_WINDOW_SECS)
 
-        q = (fs.collection(TX_COL)
+        q = (tx_collection(username)
              .where('recurring_id', '==', str(rec_id))
              .where('timestamp', '>=', window_start)
              .where('timestamp', '<=', window_end)
@@ -201,25 +310,21 @@ def create_txn_and_mark(rec_ref, rec_id, next_occ, txn_doc):
             # nothing to do
             return
 
-        # create txn doc with generated id
-        new_txn_ref = fs.collection(TX_COL).document()  # generate id
+        # create txn doc with generated id in user's transactions subcollection
+        new_txn_ref = tx_collection(username).document()  # generate id
         tx_doc = dict(txn_doc)
         # ensure timestamp is a timezone-aware datetime; Firestore will store as timestamp
         ts = tx_doc.get('timestamp')
         if isinstance(ts, datetime) and ts.tzinfo is not None:
-            # Firestore Python SDK accepts datetime with tzinfo; convert to naive UTC per SDK expectation if needed
-            # BUT many setups accept tz-aware; we'll pass tz-aware.
             pass
 
-        tx.set(new_txn_ref, tx_doc) if False else None  # placeholder to satisfy linters (not executed)
-
-        # note: Firestore transaction expects we use transaction methods for reads/updates, but adding new doc
-        # via transaction isn't directly supported by transaction.set() on a DocumentReference, so we do:
-        tx.set(new_txn_ref, tx_doc)  # create txn
+        # create txn and update recurring doc
+        tx.set(new_txn_ref, tx_doc)
         tx.update(rec_ref, {'last_applied': next_occ})
 
     # Run the transaction
     transaction.call(txn_op)
+
 
 def apply_recurring_up_to_today():
     """
@@ -228,9 +333,14 @@ def apply_recurring_up_to_today():
       - for each occurrence <= now: if no transaction exists for that occurrence, create it and update last_applied
     Idempotent: repeated runs won't create duplicates.
     """
+    # don't attempt to run for anonymous requests
+    if not session.get('logged_in'):
+        return
+
+    username = require_user()
     now = datetime.now(UTC) + timedelta(hours=5, minutes=30)
-    recs = get_recurring_active() or []
-    app.logger.debug("apply_recurring_up_to_today: %d active recurring rules", len(recs))
+    recs = get_recurring_active(username=username) or []
+    app.logger.debug("apply_recurring_up_to_today: %d active recurring rules for user %s", len(recs), username)
 
     for r in recs:
         rec_id = r.get('_id') or r.get('id')
@@ -271,7 +381,8 @@ def apply_recurring_up_to_today():
             app.logger.debug("Recurring %s next_occ (%s) in future, skipping, current (%s)", rec_id, next_occ, now)
             continue
 
-        rec_ref = fs.collection(REC_COL).document(rec_id)
+        rec_ref = rec_collection(username).document(rec_id)
+
 
         # iterate until we're caught up to 'now'
         # limit iterations to avoid accidental infinite loops (safety)
@@ -282,7 +393,7 @@ def apply_recurring_up_to_today():
                 next_occ = next_occ.replace(tzinfo=UTC)
 
             try:
-                exists = occurrence_exists(rec_id, next_occ)
+                exists = occurrence_exists(rec_id, next_occ, username=username)
             except Exception as e:
                 app.logger.exception("Error checking occurrence_exists for %s at %s: %s", rec_id, next_occ, e)
                 # break to avoid tight loop on persistent failure
@@ -306,45 +417,46 @@ def apply_recurring_up_to_today():
                 # Try transactional create + mark; fallback to non-transactional if transaction fails
                 try:
                     # Build rec_ref again as DocumentReference
-                    rec_ref = fs.collection(REC_COL).document(rec_id)
+                    rec_ref = rec_collection(username).document(rec_id)
+
                     # Use a transaction to create txn and update last_applied
                     transaction = fs.transaction()
 
                     def trans_op(tx):
-                        # check if occurrence exists inside transaction
+                        # check if occurrence exists inside transaction (per-user collection)
                         window_start = next_occ - timedelta(seconds=OCCURRENCE_WINDOW_SECS)
                         window_end = next_occ + timedelta(seconds=OCCURRENCE_WINDOW_SECS)
-                        q = (fs.collection(TX_COL)
+                        q = (tx_collection(username)
                              .where('recurring_id', '==', str(rec_id))
                              .where('timestamp', '>=', window_start)
                              .where('timestamp', '<=', window_end)
                              .limit(1))
                         if len(list(q.stream())) > 0:
                             return
-                        new_txn_ref = fs.collection(TX_COL).document()
+                        new_txn_ref = tx_collection(username).document()
                         tx.set(new_txn_ref, txn_doc)
                         tx.update(rec_ref, {'last_applied': next_occ})
 
                     transaction.call(trans_op)
-                    app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s", rec_id, next_occ)
+                    app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                     # record balance deduction for the recurring transaction
                     try:
-                        append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}")
+                        append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
                     except Exception:
-                        app.logger.exception("Failed to append balance for recurring %s at %s", rec_id, next_occ)
+                        app.logger.exception("Failed to append balance for recurring %s at %s (user=%s)", rec_id, next_occ, username)
 
 
                 except Exception as e_tx:
                     # transaction failed — try a simple add + update, with robust logging
-                    app.logger.exception("Transaction write failed for recurring %s at %s: %s — falling back to add()", rec_id, next_occ, e_tx)
+                    app.logger.exception("Transaction write failed for recurring %s at %s: %s — falling back to add() (user=%s)", rec_id, next_occ, e_tx, username)
                     try:
-                        fs.collection(TX_COL).add(txn_doc)
-                        app.logger.info("Created transaction (fallback add) for recurring %s at %s", rec_id, next_occ)
+                        tx_collection(username).add(txn_doc)
+                        app.logger.info("Created transaction (fallback add) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                         # record balance deduction for the fallback-created transaction
                         try:
-                            append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}")
+                            append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
                         except Exception:
-                            app.logger.exception("Failed to append balance (fallback) for recurring %s at %s", rec_id, next_occ)
+                            app.logger.exception("Failed to append balance (fallback) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
 
                         try:
                             rec_ref.update({'last_applied': next_occ})
@@ -369,6 +481,9 @@ def apply_recurring_up_to_today():
 # Run before every request
 @app.before_request
 def ensure_recurring_applied():
+    # Only run per-user recurring application for authenticated users
+    if not session.get('logged_in'):
+        return
     try:
         apply_recurring_up_to_today()
     except Exception:
@@ -379,16 +494,14 @@ def ensure_recurring_applied():
 # ---------------------------------------------------------------------
 @app.route('/debug/recurring_run')
 def debug_recurring_run():
-    """
-    Diagnostic run — shows the runner's view of active recurring rules
-    and attempts to run apply_recurring_up_to_today(), returning JSON.
-    """
-    now = datetime.now(UTC)
-    diagnostics = []
+    username = require_user()
     try:
-        recs = get_recurring_active()
+        recs = get_recurring_active(username=username)
     except Exception as e:
         return jsonify({"error": "Failed to fetch recurring rules", "exc": str(e)}), 500
+
+    now = datetime.now(UTC)
+    diagnostics = []
 
     for r in recs:
         rec_id = r.get('_id') or r.get('id')
@@ -419,7 +532,7 @@ def debug_recurring_run():
         occ_err = None
         if isinstance(next_occ, datetime) and rec_id:
             try:
-                occ_exists = occurrence_exists(rec_id, next_occ)
+                occ_exists = occurrence_exists(rec_id, next_occ, username=username)
             except Exception as e:
                 occ_exists = False
                 occ_err = str(e)
@@ -450,10 +563,12 @@ def debug_recurring_run():
 # Routes: Pages (unchanged except ensuring timezone-awareness on input)
 # ---------------------------------------------------------------------
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
 @app.route('/add', methods=['GET', 'POST'])
+@login_required
 def add():
     form = TransactionForm()
     if form.validate_on_submit():
@@ -471,10 +586,9 @@ def add():
             'timestamp': combined_datetime
         }
         try:
-            # collection.add returns (DocumentReference, write_time) in Firestore SDK
-            doc_ref, _ = fs.collection(TX_COL).add(txn_doc)
-            # immediately append a balance entry: spending reduces balance
-            append_balance(-float(txn_doc['amount']), 'txn', note=f"txn:{getattr(doc_ref, 'id', '')}")
+            username = require_user()
+            doc_ref, _ = tx_collection(username).add(txn_doc)
+            append_balance(-float(txn_doc['amount']), 'txn', note=f"txn:{getattr(doc_ref, 'id', '')}", username=username)
             flash('Transaction added successfully.', 'success')
         except Exception as e:
             app.logger.exception("Failed to add transaction: %s", e)
@@ -484,12 +598,14 @@ def add():
     return render_template('add.html', form=form)
 
 @app.route('/transactions')
+@login_required
 def transactions():
     page = int(request.args.get('page', 1))
     per = 5  # show only 5 transactions per page
 
-    # Query Firestore: newest first
-    q = (fs.collection(TX_COL)
+    # Query Firestore: newest first (per-user)
+    username = require_user()
+    q = (tx_collection(username)
            .order_by('timestamp', direction=firestore.Query.DESCENDING)
            .limit(per)
            .offset((page - 1) * per))
@@ -515,9 +631,11 @@ def transactions():
 
 
 @app.route('/delete/<string:tx_id>', methods=['POST'])
+@login_required
 def delete(tx_id):
     # fetch the transaction first so we know the amount
-    doc_ref = fs.collection(TX_COL).document(tx_id)
+    username = require_user()
+    doc_ref = tx_collection(username).document(tx_id)
     doc = doc_ref.get()
     if not doc.exists:
         flash('Transaction not found.', 'warning')
@@ -529,7 +647,7 @@ def delete(tx_id):
         # delete transaction
         doc_ref.delete()
         # add back the amount to balances (refund)
-        append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}")
+        append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}", username=username)
         flash('Transaction deleted.', 'info')
     except Exception as e:
         app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
@@ -541,6 +659,7 @@ def delete(tx_id):
 # Routes: Recurring Rules
 # ---------------------------------------------------------------------
 @app.route('/recurring', methods=['GET', 'POST'])
+@login_required
 def recurring():
     form = RecurringForm()
     if form.validate_on_submit():
@@ -558,22 +677,65 @@ def recurring():
             'last_applied': None,
             'active': True
         }
-        fs.collection(REC_COL).add(r_doc)
+        username = require_user()
+        rec_collection(username).add(r_doc)
+
         flash('Recurring rule saved.', 'success')
         return redirect(url_for('recurring'))
 
-    recs = [doc_to_txn(doc) for doc in fs.collection(REC_COL).order_by('start_datetime', direction=firestore.Query.DESCENDING).stream()]
+    username = require_user()
+    recs = [doc_to_txn(doc) for doc in rec_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING).stream()]
     return render_template('recurring.html', form=form, recs=recs)
 
 @app.route('/recurring/delete/<string:r_id>', methods=['POST'])
+@login_required
 def recurring_delete(r_id):
-    fs.collection(REC_COL).document(r_id).delete()
+    username = require_user()
+    rec_collection(username).document(r_id).delete()
     flash('Recurring rule deleted.', 'info')
     return redirect(url_for('recurring'))
 
 @app.route('/analytics')
+@login_required
 def analytics():
     return render_template('analytics.html')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    # If user already logged in, go to index
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    if form.validate_on_submit():
+        # normalize username to lowercase for comparisons and storage
+        username = (form.username.data or '').strip().lower()
+        password = (form.password.data or '').strip()
+
+        # Accept if username appears in ADMIN_USERS or exists in users collection,
+        # and supplied password matches ADMIN_PASS.
+        if is_valid_user(username) and password == ADMIN_PASS:
+            session['logged_in'] = True
+            session.permanent = True
+            session['username'] = username
+            flash('Logged in successfully.', 'success')
+            next_url = request.args.get('next') or url_for('index')
+            if not is_safe_redirect_url(next_url):
+                next_url = url_for('index')
+            return redirect(next_url)
+        else:
+            flash('Invalid credentials', 'danger')
+    return render_template('login.html', form=form)
+
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    session.pop('username', None)
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('login'))
+
 
 # ---------------------------------------------------------------------
 # API helpers & endpoints (unchanged)
@@ -785,17 +947,15 @@ def api_monthly_totals():
 # ---------------------------------------------------------------------
 # Balance helpers & APIs (new)
 # ---------------------------------------------------------------------
-def get_balances_in_range(start_dt, end_dt, order_desc=False):
-    """
-    Return balance docs in [start_dt, end_dt], ordered ascending by timestamp by default.
-    Each doc is normalized through doc_to_txn.
-    """
+def get_balances_in_range(start_dt, end_dt, order_desc=False, username=None):
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=UTC)
     if end_dt.tzinfo is None:
         end_dt = end_dt.replace(tzinfo=UTC)
+    if username is None:
+        username = require_user()
 
-    q = (fs.collection(BAL_COL)
+    q = (bal_collection(username)
          .where('timestamp', '>=', start_dt)
          .where('timestamp', '<=', end_dt))
     if order_desc:
@@ -806,28 +966,21 @@ def get_balances_in_range(start_dt, end_dt, order_desc=False):
     return [doc_to_txn(doc) for doc in docs]
 
 
-def get_latest_balance():
-    """
-    Return the latest balance doc (or None). Normalizes date.
-    """
-    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
+def get_latest_balance(username=None):
+    if username is None:
+        username = require_user()
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
     docs = list(q.stream())
     if not docs:
         return None
     return doc_to_txn(docs[0])
 
-def append_balance(delta, type_, note=''):
-    """
-    Append a balance change document to BAL_COL.
 
-    delta: numeric (positive to increase, negative to decrease)
-    type_: string ('txn', 'txn_delete', 'recurring', 'add', 'sync', etc.)
-    note: optional string
-
-    Returns: (doc_id, doc_dict) on success or (None, doc_dict) on failure
-    """
+def append_balance(delta, type_, note='', username=None):
+    if username is None:
+        username = require_user()
     try:
-        latest = get_latest_balance()
+        latest = get_latest_balance(username=username)
         base = float(latest.get('balance', 0.0)) if latest else 0.0
     except Exception:
         base = 0.0
@@ -844,32 +997,34 @@ def append_balance(delta, type_, note=''):
         'timestamp': datetime.now(UTC)
     }
     try:
-        add_res = fs.collection(BAL_COL).add(doc)
-        # Firestore add returns (DocumentReference, write_time)
+        add_res = bal_collection(username).add(doc)
         if isinstance(add_res, tuple) and len(add_res) >= 1:
             ref = add_res[0]
             doc_id = getattr(ref, 'id', None)
         else:
-            # fallback — try to get id attribute
             ref = add_res
             doc_id = getattr(ref, 'id', None)
-        app.logger.debug("append_balance created %s -> %s (doc id: %s)", delta, new_bal, doc_id)
+        app.logger.debug("append_balance created %s -> %s (doc id: %s) for user %s", delta, new_bal, doc_id, username)
         return doc_id, doc
     except Exception as e:
-        app.logger.exception("Failed to append balance doc: %s", e)
+        app.logger.exception("Failed to append balance doc for user %s: %s", username, e)
         return None, doc
 
+
 @app.route('/balance')
+@login_required
 def balance():
     """Render balance page"""
     return render_template('balance.html')
 
 @app.route('/api/balance_current')
+@login_required
 def api_balance_current():
     """Return the current/latest balance and a short recent history"""
-    latest = get_latest_balance()
-    # send back last 20 entries
-    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20)
+    username = require_user()
+    latest = get_latest_balance(username=username)
+    # send back last 20 entries (per-user)
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20)
     docs = [doc_to_txn(d) for d in q.stream()]
     history = [{
         'id': d.get('_id'),
@@ -890,6 +1045,7 @@ def api_balance_current():
 
 
 @app.route('/api/balance_series')
+@login_required
 def api_balance_series():
     """
     Return series of balances aggregated by daily / monthly / yearly.
@@ -962,8 +1118,8 @@ def api_balance_series():
 
     return jsonify({"labels": labels, "values": values})
 
-
 @app.route('/api/balance/add', methods=['POST'])
+@login_required
 def api_balance_add():
     """
     Add balance (increment). Expects JSON { amount: number, note: str (optional) }.
@@ -973,6 +1129,7 @@ def api_balance_add():
       - delta: amount (positive)
       - note, timestamp
     """
+    username = require_user()
     data = request.get_json() or {}
     try:
         delta = float(data.get('amount', 0.0))
@@ -980,7 +1137,7 @@ def api_balance_add():
         return jsonify({"error": "Invalid amount"}), 400
     note = (data.get('note') or '').strip()
     now = datetime.now(UTC)
-    latest = get_latest_balance()
+    latest = get_latest_balance(username=username)
     base = float(latest.get('balance', 0.0)) if latest else 0.0
     new_bal = round(base + delta, 2)
     doc = {
@@ -990,16 +1147,18 @@ def api_balance_add():
         'note': note,
         'timestamp': now
     }
-    fs.collection(BAL_COL).add(doc)
+    bal_collection(username).add(doc)
     return jsonify({"balance": new_bal, "timestamp": now.isoformat(), "type": "add"})
 
 
 @app.route('/api/balance/sync', methods=['POST'])
+@login_required
 def api_balance_sync():
     """
     Sync/Set absolute balance. Expects JSON { balance: number, note: str (optional) }.
     Creates a new doc with type 'sync' and delta = new - prev
     """
+    username = require_user()
     data = request.get_json() or {}
     try:
         new_balance = float(data.get('balance', 0.0))
@@ -1007,7 +1166,7 @@ def api_balance_sync():
         return jsonify({"error": "Invalid balance value"}), 400
     note = (data.get('note') or '').strip()
     now = datetime.now(UTC)
-    latest = get_latest_balance()
+    latest = get_latest_balance(username=username)
     base = float(latest.get('balance', 0.0)) if latest else 0.0
     delta = round(new_balance - base, 2)
     doc = {
@@ -1017,10 +1176,11 @@ def api_balance_sync():
         'note': note,
         'timestamp': now
     }
-    fs.collection(BAL_COL).add(doc)
+    bal_collection(username).add(doc)
     return jsonify({"balance": round(new_balance, 2), "timestamp": now.isoformat(), "type": "sync", "delta": delta})
 
 @app.route('/api/balance/undo', methods=['POST'])
+@login_required
 def api_balance_undo():
     """
     Delete the most-recent balance document (undo last action).
@@ -1028,8 +1188,9 @@ def api_balance_undo():
     we refuse and return a helpful error message (undo supports balance add/sync entries).
     Returns the deleted doc summary and the new current balance (if any).
     """
+    username = require_user()
     # find last doc
-    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1)
     docs = list(q.stream())
     if not docs:
         return jsonify({"error": "No balance history to undo"}), 400
@@ -1049,12 +1210,12 @@ def api_balance_undo():
 
     # safe to delete
     try:
-        fs.collection(BAL_COL).document(last_doc.id).delete()
+        bal_collection(username).document(last_doc.id).delete()
     except Exception as e:
-        app.logger.exception("Failed to delete balance doc %s: %s", getattr(last_doc, 'id', '<unknown>'), e)
+        app.logger.exception("Failed to delete balance doc %s for user %s: %s", getattr(last_doc, 'id', '<unknown>'), username, e)
         return jsonify({"error": "Delete failed"}), 500
 
-    new_latest = get_latest_balance()
+    new_latest = get_latest_balance(username=username)
     new_balance = float(new_latest.get('balance', 0.0)) if new_latest else 0.0
 
     return jsonify({
@@ -1070,10 +1231,12 @@ def api_balance_undo():
     })
 
 @app.route('/api/balance/history')
+@login_required
 def api_balance_history():
     """Return recent balance history (paginated via ?limit=... )"""
+    username = require_user()
     limit = max(int(request.args.get('limit', 50)), 1)
-    q = fs.collection(BAL_COL).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
     docs = [doc_to_txn(d) for d in q.stream()]
     out = [{
         "id": d.get('_id'),
