@@ -236,11 +236,132 @@
         });
     }
 
+    function initCategorySelects() {
+        document.querySelectorAll('select[name="category"]').forEach((select) => {
+            if (select.dataset.enhancedCategory === 'true') return;
+            select.dataset.enhancedCategory = 'true';
+            select.classList.add('category-native-select');
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'category-select';
+            select.parentNode.insertBefore(wrapper, select.nextSibling);
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'category-select-button';
+            button.setAttribute('aria-haspopup', 'listbox');
+            button.setAttribute('aria-expanded', 'false');
+
+            const buttonText = document.createElement('span');
+            buttonText.className = 'category-select-current';
+            const chevron = document.createElement('span');
+            chevron.className = 'category-select-chevron';
+            chevron.textContent = 'v';
+            button.append(buttonText, chevron);
+
+            const panel = document.createElement('div');
+            panel.className = 'category-select-panel';
+            panel.hidden = true;
+
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'category-select-search';
+            search.placeholder = 'Search category';
+            search.autocomplete = 'off';
+
+            const list = document.createElement('div');
+            list.className = 'category-select-list';
+            list.setAttribute('role', 'listbox');
+
+            const options = Array.from(select.options).map((option) => ({
+                value: option.value,
+                label: option.textContent.trim(),
+            }));
+
+            function currentLabel() {
+                const selected = options.find((option) => option.value === select.value);
+                return selected ? selected.label : 'Select category';
+            }
+
+            function closePanel() {
+                panel.hidden = true;
+                button.setAttribute('aria-expanded', 'false');
+            }
+
+            function openPanel() {
+                panel.hidden = false;
+                button.setAttribute('aria-expanded', 'true');
+                search.value = '';
+                renderOptions('');
+                search.focus();
+            }
+
+            function choose(value) {
+                select.value = value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                buttonText.textContent = currentLabel();
+                closePanel();
+                button.focus();
+            }
+
+            function renderOptions(filter) {
+                const normalizedFilter = String(filter || '').trim().toLowerCase();
+                const matches = options.filter((option) => option.label.toLowerCase().includes(normalizedFilter));
+                list.textContent = '';
+
+                if (matches.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'category-select-empty';
+                    empty.textContent = 'No categories found';
+                    list.appendChild(empty);
+                    return;
+                }
+
+                matches.forEach((option) => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'category-select-option';
+                    item.setAttribute('role', 'option');
+                    item.setAttribute('aria-selected', String(option.value === select.value));
+                    item.textContent = option.label;
+                    item.addEventListener('click', () => choose(option.value));
+                    list.appendChild(item);
+                });
+            }
+
+            buttonText.textContent = currentLabel();
+            button.addEventListener('click', () => {
+                if (panel.hidden) openPanel();
+                else closePanel();
+            });
+            search.addEventListener('input', () => renderOptions(search.value));
+            search.addEventListener('keydown', (event) => {
+                const firstOption = list.querySelector('.category-select-option');
+                if (event.key === 'Enter' && firstOption) {
+                    event.preventDefault();
+                    firstOption.click();
+                }
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closePanel();
+                    button.focus();
+                }
+            });
+            document.addEventListener('click', (event) => {
+                if (!wrapper.contains(event.target)) closePanel();
+            });
+
+            panel.append(search, list);
+            wrapper.append(button, panel);
+        });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         formatDateElements();
         initCopyButtons();
         initConfirmForms();
         initPasswordToggles();
+        initCategorySelects();
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltipTriggers.forEach((el) => new bootstrap.Tooltip(el));

@@ -164,6 +164,7 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/api/totals',
     '/api/category_breakdown',
     '/api/transactions_range',
+    '/api/render_status',
     '/export/transactions_csv',
     '/static/',
     '/view',
@@ -803,6 +804,22 @@ def debug_recurring_run():
 @login_required
 def index():
     return render_template('index.html')
+
+@app.route('/sync-status')
+@login_required
+def sync_status():
+    if session.get('view_only'):
+        abort(403, description="Full authentication required")
+    return render_template('sync_status.html')
+
+@app.route('/api/render_status')
+@login_required
+def api_render_status():
+    return jsonify({
+        'ok': True,
+        'awake': True,
+        'checked_at': datetime.now(UTC).isoformat(),
+    })
 
 def build_transaction_doc(form):
     txn_datetime = local_datetime_to_utc(

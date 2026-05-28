@@ -27,6 +27,21 @@
   function writeQueue(queue) {
     if (!canPersistQueue) return;
     localStorage.setItem(storageKey, JSON.stringify(queue));
+    emitQueueChange(queue);
+  }
+
+  function emitQueueChange(queue = readQueue()) {
+    window.dispatchEvent(new CustomEvent('fintrak:queuechange', {
+      detail: { pending: queue.length },
+    }));
+    updatePendingBadge(queue.length);
+  }
+
+  function updatePendingBadge(count = readQueue().length) {
+    const badge = document.getElementById('pendingNavBadge');
+    if (!badge) return;
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
   }
 
   function csrfToken() {
@@ -133,7 +148,7 @@
     }
   }
 
-  async function syncQueue() {
+  async function syncQueue(options = {}) {
     if (syncing) return;
     syncing = true;
 
@@ -159,9 +174,9 @@
     writeQueue(remaining);
     syncing = false;
 
-    if (synced > 0) {
+    if (!options.quiet && synced > 0) {
       notify(`${synced} pending transaction${synced === 1 ? '' : 's'} synced.`, 'success');
-    } else if (failed > 0 && remaining.length > 0) {
+    } else if (!options.quiet && failed > 0 && remaining.length > 0) {
       notify('Saved locally. Will sync when the server responds.', 'info');
     }
   }
@@ -219,6 +234,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    updatePendingBadge();
     initQueuedForms();
     syncQueue();
   });
@@ -226,4 +242,6 @@
   window.addEventListener('online', syncQueue);
   window.FinTrak = window.FinTrak || {};
   window.FinTrak.syncPendingActions = syncQueue;
+  window.FinTrak.pendingActionsCount = () => readQueue().length;
+  window.FinTrak.readPendingActions = () => readQueue();
 }());
