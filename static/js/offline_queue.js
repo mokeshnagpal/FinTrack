@@ -56,11 +56,26 @@
   }
 
   function notify(message, type = 'info') {
+    if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
+      window.FinTrak.showFlash(message, type);
+      return;
+    }
+
+    let stack = document.getElementById('flashStack');
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.id = 'flashStack';
+      stack.className = 'flash-stack';
+      document.body.appendChild(stack);
+    }
     const div = document.createElement('div');
     div.className = `flash-message ${type}`;
     div.textContent = message;
-    document.body.appendChild(div);
-    setTimeout(() => div.remove(), 3500);
+    stack.appendChild(div);
+    setTimeout(() => {
+      div.classList.add('flash-message-hide');
+      setTimeout(() => div.remove(), 450);
+    }, 3500);
   }
 
   function formPayload(form) {

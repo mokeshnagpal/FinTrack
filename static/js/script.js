@@ -94,6 +94,31 @@
     window.FinTrak = window.FinTrak || {};
     window.FinTrak.formatFriendlyDate = formatFriendlyDate;
 
+    function flashStack() {
+        let stack = document.getElementById('flashStack');
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = 'flashStack';
+            stack.className = 'flash-stack';
+            document.body.appendChild(stack);
+        }
+        return stack;
+    }
+
+    function showFlash(message, type = 'info', delay = 3500) {
+        const div = document.createElement('div');
+        div.className = `flash-message ${type}`;
+        div.textContent = message;
+        flashStack().appendChild(div);
+        setTimeout(() => {
+            div.classList.add('flash-message-hide');
+            setTimeout(() => div.remove(), 450);
+        }, delay);
+        return div;
+    }
+
+    window.FinTrak.showFlash = showFlash;
+
     function confirmDialog(message, confirmLabel = 'Confirm') {
         return new Promise((resolve) => {
             const modal = document.createElement('div');

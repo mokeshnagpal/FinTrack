@@ -1268,11 +1268,20 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
 /* ----------------
    Flash messages - modern & animated
    ---------------- */
-.flash-message {
+.flash-stack{
   position: fixed;
   top: 20px;
   right: 20px;
   z-index: 2000;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:.6rem;
+  width:min(360px, calc(100vw - 24px));
+  pointer-events:none;
+}
+.flash-message {
+  width:100%;
   padding: .75rem 1rem;
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
@@ -1281,6 +1290,7 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
   opacity: 0;
   transform: translateY(-10px);
   animation: slideFadeIn .4s forwards;
+  pointer-events:auto;
 }
 .flash-message.success {
   background: var(--g-primary);
@@ -1296,10 +1306,23 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
   color: #fff;
 }
 #toastContainer { z-index: 2000; }
+.flash-message-hide{
+  opacity:0!important;
+  transform:translateY(-6px)!important;
+  transition:opacity .4s, transform .4s;
+}
 @keyframes slideFadeIn {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+@media (max-width:575.98px){
+  .flash-stack{
+    top:12px;
+    right:12px;
+    left:12px;
+    width:auto;
   }
 }
 
