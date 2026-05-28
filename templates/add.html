@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block body_class %}transaction-form-page{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Transaction</span>
+        <h1>{% if editing %}Edit Transaction{% else %}Add Transaction{% endif %}</h1>
+        <p>{% if editing %}Update this expense and keep balance aligned.{% else %}Record a new expense using India date and time.{% endif %}</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">View Transactions</a>
+    </div>
+</section>
+
+<div class="row">
+    <div class="col-lg-6 col-md-8 offset-md-2 offset-lg-3">
+        <div class="card form-card shadow-sm">
+            <div class="card-body">
+                <form method="post"
+                    action="{{ url_for('edit_transaction', tx_id=tx_id) if editing else url_for('add') }}"
+                    {% if editing %}
+                    data-offline-queue="transaction-edit"
+                    data-transaction-id="{{ tx_id }}"
+                    {% else %}
+                    data-offline-queue="transaction-create"
+                    {% endif %}>
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ form.amount.label(class="form-label") }}
+                        {{ form.amount(class="form-control", step="0.01", min="0.01") }}
+                        {% for err in form.amount.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control", placeholder="e.g. Grocery shopping", maxlength="120") }}
+                        {% for err in form.description.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.category.label(class="form-label") }}
+                        {{ form.category(class="form-select") }}
+                    </div>
+
+                    <div class="row g-2 transaction-date-grid">
+                        <div class="col-sm-6 mb-3">
+                            {{ form.date.label(class="form-label") }}
+                            {{ form.date(class="form-control", type="date") }}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ form.time.label(class="form-label") }}
+                            {{ form.time(class="form-control", type="time") }}
+                        </div>
+                    </div>
+
+                    <div class="transaction-submit-row">
+                        <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Cashflow</span>
+        <h1>Balance Overview</h1>
+        <p>Track current balance, adjustments, and recent entries.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">View Transactions</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('analytics') }}">Analytics</a>
+    </div>
+</section>
+
+<div class="row g-3">
+    <div class="col-lg-4 col-md-6 col-sm-12">
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
+                <div class="balance-amount">
+                    Rs. <span id="currentBalance">0.00</span>
+                </div>
+                <small class="text-muted" id="balanceTimestamp">-</small>
+                <hr>
+                <div class="mb-3">
+                    <label class="form-label small" for="periodSelect">Select Period</label>
+                    <select id="periodSelect" class="form-select form-select-sm">
+                        <option value="daily" selected>Daily</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
+                </div>
+                <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
+            </div>
+        </div>
+
+        {% if not session.get('view_only') %}
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="addAmount">Add Amount</label>
+                    <div class="input-group">
+                        <input id="addAmount" type="number" step="0.01" class="form-control form-control-sm"
+                            placeholder="Enter amount">
+                        <button id="addBtn" class="btn btn-outline-success btn-sm">Add</button>
+                    </div>
+                    <input id="addNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)"
+                        maxlength="120">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="syncAmount">Sync Balance</label>
+                    <div class="input-group">
+                        <input id="syncAmount" type="number" step="0.01" class="form-control form-control-sm"
+                            placeholder="Set absolute balance">
+                        <button id="syncBtn" class="btn btn-outline-warning btn-sm">Sync</button>
+                    </div>
+                    <input id="syncNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)"
+                        maxlength="120">
+                </div>
+
+                <div>
+                    <label class="form-label small">Undo Entries</label>
+                    <button id="undoBtn" class="btn btn-outline-danger btn-sm w-100">Undo Last</button>
+                    <small class="text-muted d-block mt-2">
+                        Undo removes the most recent balance record. Use with caution.
+                    </small>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+                <p class="mb-2 small text-muted">
+                    You are viewing this account in <strong>view-only</strong> mode. Action controls are not available.
+                </p>
+                <p class="small mb-0">Sign in with editing access to make changes.</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-8 col-md-6 col-sm-12">
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Balance Chart</h6>
+                <div class="chart-wrapper">
+                    <canvas id="balanceChart" height="380" role="img" aria-label="Balance over time"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
+                <div class="table-shell table-responsive recent-entries">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Type</th>
+                                <th class="text-end">Delta</th>
+                                <th class="text-end">Balance</th>
+                                <th>Note</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/balance.js') }}"></script>
+{% endblock %}

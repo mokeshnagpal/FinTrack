@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Settings</span>
+        <h1>Management</h1>
+        <p>Manage view-only access and transaction categories.</p>
+    </div>
+</section>
+
+<div class="management-grid">
+    <div class="management-panel">
+        <div class="card shadow-sm h-100 management-card">
+            <div class="card-body">
+                <div class="management-section-heading">
+                    <div>
+                        <span class="kicker">Read-only access</span>
+                        <h5>View-only Password</h5>
+                    </div>
+                    {% if has_db_password %}
+                    <span class="badge success">Database password active</span>
+                    {% else %}
+                    <span class="badge danger">Not configured</span>
+                    {% endif %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="currentViewPassword">Current view-only password</label>
+                    {% if can_copy_current_view_password %}
+                    <input id="currentViewPassword" class="form-control" type="text"
+                        value="{{ current_view_password }}" readonly>
+                    {% elif has_db_password %}
+                    <input id="currentViewPassword" class="form-control" type="text"
+                        value="{{ revealed_current_view_password if revealed_current_view_password else 'Verify current password below' }}" readonly>
+                    {% else %}
+                    <input id="currentViewPassword" class="form-control" type="text"
+                        value="Not configured" readonly>
+                    {% endif %}
+                </div>
+
+                <div class="management-copy-panel mb-3">
+                    {% if can_copy_current_view_password %}
+                    <button type="button" class="btn btn-outline-secondary btn-sm"
+                        data-copy-secret="{{ current_view_password }}">
+                        Copy current password
+                    </button>
+                    <span class="small text-muted">Copies the active environment fallback password.</span>
+                    {% elif has_db_password %}
+                    {% if revealed_current_view_password %}
+                    <button type="button" class="btn btn-outline-secondary btn-sm"
+                        data-copy-secret="{{ revealed_current_view_password }}">
+                        Copy current password
+                    </button>
+                    <span class="small text-muted">Verified for this page view.</span>
+                    {% else %}
+                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled>
+                        Copy current password
+                    </button>
+                    <span class="small text-muted">Verify the current password below to show and copy it.</span>
+                    {% endif %}
+                    {% else %}
+                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled>
+                        Copy current password
+                    </button>
+                    <span class="small text-muted">No current view-only password is configured.</span>
+                    {% endif %}
+                </div>
+
+                {% if has_db_password %}
+                <form method="post" class="management-form-box mb-3" novalidate>
+                    {{ reveal_form.hidden_tag() }}
+                    <input type="hidden" name="action" value="reveal_view_password">
+                    <div class="mb-3">
+                        {{ reveal_form.current_password.label(class="form-label") }}
+                        {{ reveal_form.current_password(class="form-control", autocomplete="current-password", maxlength="128") }}
+                        {% for err in reveal_form.current_password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+                    <button class="btn btn-outline-primary w-100">{{ reveal_form.submit.label.text }}</button>
+                </form>
+                {% endif %}
+
+                <form method="post" class="management-form-box" novalidate>
+                    {{ form.hidden_tag() }}
+                    <input type="hidden" name="action" value="update_view_password">
+
+                    <div class="mb-3">
+                        {{ form.password.label(class="form-label") }}
+                        {{ form.password(class="form-control", autocomplete="new-password", minlength="7", maxlength="128", pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{7,128}", title="Use more than 6 characters with at least 1 uppercase letter, 1 lowercase letter, and 1 number") }}
+                        {% for err in form.password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.confirm_password.label(class="form-label") }}
+                        {{ form.confirm_password(class="form-control", autocomplete="new-password", maxlength="128") }}
+                        {% for err in form.confirm_password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="management-panel">
+        <div class="card shadow-sm h-100 management-card">
+            <div class="card-body">
+                <div class="management-section-heading">
+                    <div>
+                        <span class="kicker">Account access</span>
+                        <h5>Original Login</h5>
+                    </div>
+                </div>
+
+                <form method="post" class="management-form-box management-form-block" novalidate>
+                    {{ username_form.hidden_tag() }}
+                    <input type="hidden" name="action" value="update_username">
+
+                    <div class="mb-3">
+                        {{ username_form.username.label(class="form-label") }}
+                        {{ username_form.username(class="form-control", type="email", autocomplete="username", maxlength="120", value=current_username) }}
+                        {% for err in username_form.username.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <button class="btn btn-primary w-100">{{ username_form.submit.label.text }}</button>
+                </form>
+
+                <form method="post" class="management-form-box management-form-block" novalidate>
+                    {{ password_form.hidden_tag() }}
+                    <input type="hidden" name="action" value="update_password">
+
+                    <div class="mb-3">
+                        {{ password_form.current_password.label(class="form-label") }}
+                        {{ password_form.current_password(class="form-control", autocomplete="current-password", maxlength="128") }}
+                        {% for err in password_form.current_password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ password_form.password.label(class="form-label") }}
+                        {{ password_form.password(class="form-control", autocomplete="new-password", minlength="7", maxlength="128", pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{7,128}", title="Use more than 6 characters with at least 1 uppercase letter, 1 lowercase letter, and 1 number") }}
+                        {% for err in password_form.password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ password_form.confirm_password.label(class="form-label") }}
+                        {{ password_form.confirm_password(class="form-control", autocomplete="new-password", maxlength="128") }}
+                        {% for err in password_form.confirm_password.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <button class="btn btn-primary w-100">{{ password_form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="management-panel management-panel-wide">
+        <div class="card shadow-sm h-100 management-card">
+            <div class="card-body">
+                <div class="management-section-heading">
+                    <div>
+                        <span class="kicker">Transaction setup</span>
+                        <h5>Categories</h5>
+                    </div>
+                </div>
+
+                <form method="post" class="management-form-box mb-3"
+                    action="{{ url_for('management_category_edit', category_name=editing_category) if editing_category else url_for('management') }}"
+                    novalidate>
+                    {{ category_form.hidden_tag() }}
+                    {% if not editing_category %}
+                    <input type="hidden" name="action" value="add_category">
+                    {% endif %}
+
+                    <div class="input-group">
+                        {{ category_form.name(class="form-control", placeholder="Category name", maxlength="40") }}
+                        <button class="btn btn-primary">{{ category_form.submit.label.text }}</button>
+                    </div>
+                    {% for err in category_form.name.errors %}
+                    <div class="text-danger small mt-1">{{ err }}</div>
+                    {% endfor %}
+                    {% if editing_category %}
+                    <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('management') }}">Cancel Edit</a>
+                    {% endif %}
+                </form>
+
+                <div class="table-shell table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Category</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for category in categories %}
+                            <tr>
+                                <td>{{ category }}</td>
+                                <td class="text-end">
+                                    <div class="table-actions">
+                                        <a class="btn btn-sm btn-outline-primary"
+                                            href="{{ url_for('management_category_edit', category_name=category) }}">
+                                            Edit
+                                        </a>
+                                        <form method="post"
+                                            action="{{ url_for('management_category_delete', category_name=category) }}"
+                                            data-confirm="Delete this category from future dropdowns?"
+                                            class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button class="btn btn-sm btn-danger"
+                                                {% if categories|length <= 1 %}disabled{% endif %}>
+                                                Delete
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="2" class="text-center text-muted py-4">No categories configured.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

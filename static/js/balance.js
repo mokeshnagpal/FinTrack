@@ -1,0 +1,414 @@
+async function fetchJSON(url, params = {}, opts = {}) {
+  const query = new URLSearchParams(params).toString();
+  const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  const headers = { ...(opts.headers || {}) };
+
+  if (opts.method && opts.method.toUpperCase() !== 'GET' && token) {
+    headers['X-CSRFToken'] = token;
+  }
+
+  const response = await fetch(url + (query ? `?${query}` : ''), { ...opts, headers });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
+  return data;
+}
+
+function formatNumber(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function rupee(value) {
+  return `Rs. ${formatNumber(value)}`;
+}
+
+function formatDisplayDate(value) {
+  return window.FinTrak && window.FinTrak.formatFriendlyDate
+    ? window.FinTrak.formatFriendlyDate(value)
+    : value;
+}
+
+function escapeHtml(unsafe) {
+  if (unsafe === null || unsafe === undefined) return '';
+  return String(unsafe).replace(/[&<>"'`=/]/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+    '/': '&#x2F;',
+    '`': '&#x60;',
+    '=': '&#x3D;',
+  })[char]);
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, '&quot;');
+}
+
+function isEmptyInput(el) {
+  return !el || String(el.value || '').trim() === '';
+}
+
+function noteError(value) {
+  return String(value || '').trim().length > 120 ? 'Use 120 characters or fewer for the note.' : '';
+}
+
+function showToast(title, type = 'info', message = '') {
+  let container = document.getElementById('toastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.className = 'toast-container position-fixed top-0 end-0 p-3';
+    container.style.zIndex = '2000';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast text-bg-${type} border-0 shadow-sm mb-2`;
+  toast.setAttribute('role', 'alert');
+  toast.setAttribute('aria-live', 'assertive');
+  toast.setAttribute('aria-atomic', 'true');
+  toast.innerHTML = `
+    <div class="d-flex align-items-center">
+      <div class="toast-body">
+        <strong>${escapeHtml(title)}</strong>${message ? `<div class="small mt-1">${escapeHtml(message)}</div>` : ''}
+      </div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto"
+        data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  `;
+
+  container.appendChild(toast);
+  if (typeof bootstrap !== 'undefined') {
+    const bsToast = new bootstrap.Toast(toast, { delay: 4000 });
+    bsToast.show();
+    toast.addEventListener('hidden.bs.toast', () => toast.remove());
+  } else {
+    setTimeout(() => toast.remove(), 4000);
+  }
+}
+
+let balanceChart = null;
+
+function destroyChart(canvas) {
+  if (balanceChart && typeof balanceChart.destroy === 'function') {
+    balanceChart.destroy();
+    balanceChart = null;
+  }
+
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  canvas.width = canvas.clientWidth || canvas.width;
+  canvas.height = canvas.clientHeight || canvas.height;
+}
+
+async function renderChart(period = 'daily', canvasEl) {
+  if (!canvasEl) return;
+  destroyChart(canvasEl);
+
+  let response;
+  try {
+    response = await fetchJSON('/api/balance_series', { period, count: 30 });
+  } catch (error) {
+    console.error('chart fetch failed', error);
+    showToast('Failed to load chart', 'warning', error.message);
+    return;
+  }
+
+  if (typeof Chart === 'undefined') {
+    return;
+  }
+
+  balanceChart = new Chart(canvasEl.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: response.labels || [],
+      datasets: [{
+        label: 'Balance',
+        data: response.values || [],
+        fill: true,
+        tension: 0.2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { tooltip: { mode: 'index', intersect: false } },
+      scales: { x: { ticks: { maxRotation: 0 } } },
+    },
+  });
+}
+
+async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
+  const data = await fetchJSON('/api/balance_current');
+  const current = data.current || { balance: 0.0, timestamp: null };
+
+  if (currentBalanceEl) currentBalanceEl.innerText = formatNumber(current.balance);
+  if (balanceTimestampEl) {
+    balanceTimestampEl.innerText = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
+  }
+
+  if (!historyBody) return;
+  historyBody.innerHTML = '';
+
+  (data.history || []).forEach((entry) => {
+    const tr = document.createElement('tr');
+    const type = String(entry.type || '').toLowerCase();
+    const canEdit = ['add', 'sync'].includes(type) && document.body.dataset.viewOnly !== 'true';
+    const editButton = canEdit
+      ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn"
+            data-id="${escapeAttr(entry.id || '')}"
+            data-type="${escapeAttr(type)}"
+            data-delta="${escapeAttr(entry.delta)}"
+            data-balance="${escapeAttr(entry.balance)}"
+            data-note="${escapeAttr(entry.note || '')}">
+            Edit
+          </button>`
+      : `<button class="btn btn-sm btn-outline-secondary" disabled
+            title="Edit the source transaction for transaction-linked entries.">
+            Edit
+          </button>`;
+
+    tr.innerHTML = `<td>${escapeHtml(formatDisplayDate(entry.timestamp || ''))}</td>
+                    <td>${escapeHtml(entry.type || '')}</td>
+                    <td class="text-end">${formatNumber(entry.delta)}</td>
+                    <td class="text-end">${formatNumber(entry.balance)}</td>
+                    <td>${escapeHtml(entry.note || '')}</td>
+                    <td class="text-end">${editButton}</td>`;
+    historyBody.appendChild(tr);
+  });
+}
+
+function ensureEditModal() {
+  let modal = document.getElementById('balanceEditModal');
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'balanceEditModal';
+  modal.className = 'confirm-modal balance-edit-modal';
+  modal.innerHTML = `
+    <div class="confirm-content balance-edit-content">
+      <h5 class="fw-bold mb-3">Edit Balance Entry</h5>
+      <input type="hidden" id="editBalanceId">
+      <input type="hidden" id="editBalanceType">
+      <div class="mb-3">
+        <label class="form-label" id="editBalanceValueLabel" for="editBalanceValue">Amount</label>
+        <input id="editBalanceValue" class="form-control" type="number" step="0.01">
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="editBalanceNote">Note</label>
+        <input id="editBalanceNote" class="form-control" maxlength="120">
+      </div>
+      <div class="d-flex gap-2 justify-content-end">
+        <button type="button" class="btn btn-outline-secondary" data-balance-edit-cancel>Cancel</button>
+        <button type="button" class="btn btn-primary" data-balance-edit-save>Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal || event.target.closest('[data-balance-edit-cancel]')) {
+      modal.classList.remove('show');
+    }
+  });
+
+  return modal;
+}
+
+function openEditModal(button) {
+  const modal = ensureEditModal();
+  const type = button.dataset.type;
+  modal.querySelector('#editBalanceId').value = button.dataset.id || '';
+  modal.querySelector('#editBalanceType').value = type || '';
+  modal.querySelector('#editBalanceValueLabel').textContent = type === 'sync' ? 'Balance' : 'Delta';
+  modal.querySelector('#editBalanceValue').value = type === 'sync' ? button.dataset.balance || '' : button.dataset.delta || '';
+  modal.querySelector('#editBalanceNote').value = button.dataset.note || '';
+  modal.classList.add('show');
+}
+
+async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas) {
+  const modal = ensureEditModal();
+  const id = modal.querySelector('#editBalanceId').value;
+  const type = modal.querySelector('#editBalanceType').value;
+  const value = parseFloat(modal.querySelector('#editBalanceValue').value);
+  const note = modal.querySelector('#editBalanceNote').value || '';
+
+  if (!id || Number.isNaN(value) || !Number.isFinite(value) || Math.abs(value) > 999999999) {
+    showToast('Enter a valid value.', 'warning');
+    return;
+  }
+  const editNoteError = noteError(note);
+  if (editNoteError) {
+    showToast(editNoteError, 'warning');
+    return;
+  }
+
+  const payload = type === 'sync' ? { balance: value, note } : { delta: value, note };
+  try {
+    await fetchJSON(`/api/balance/${encodeURIComponent(id)}/update`, {}, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    modal.classList.remove('show');
+    showToast('Balance entry updated', 'success');
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+  } catch (error) {
+    console.error('balance edit failed', error);
+    showToast('Edit failed', 'danger', error.message);
+  }
+}
+
+async function confirmAsync(message) {
+  try {
+    if (window.FinTrak && typeof window.FinTrak.confirm === 'function') {
+      return await window.FinTrak.confirm(message, 'Yes, Undo');
+    }
+    return window.confirm(message);
+  } catch (error) {
+    return false;
+  }
+}
+
+async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas) {
+  await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody);
+  await renderChart(periodSelect ? periodSelect.value : 'daily', balanceCanvas);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const currentBalanceEl = document.getElementById('currentBalance');
+  const balanceTimestampEl = document.getElementById('balanceTimestamp');
+  const periodSelect = document.getElementById('periodSelect');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const addAmount = document.getElementById('addAmount');
+  const addNote = document.getElementById('addNote');
+  const addBtn = document.getElementById('addBtn');
+  const syncAmount = document.getElementById('syncAmount');
+  const syncNote = document.getElementById('syncNote');
+  const syncBtn = document.getElementById('syncBtn');
+  const undoBtn = document.getElementById('undoBtn');
+  const historyBody = document.getElementById('historyBody');
+  const balanceCanvas = document.getElementById('balanceChart');
+
+  if (addBtn && addAmount) {
+    addBtn.addEventListener('click', async () => {
+      if (isEmptyInput(addAmount)) {
+        showToast('Enter an amount to add.', 'warning');
+        return;
+      }
+
+      const amount = parseFloat(addAmount.value);
+      if (Number.isNaN(amount) || !Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 999999999) {
+        showToast('Enter a valid amount to add.', 'warning');
+        return;
+      }
+      const addNoteError = noteError(addNote ? addNote.value : '');
+      if (addNoteError) {
+        showToast(addNoteError, 'warning');
+        return;
+      }
+
+      try {
+        const result = await fetchJSON('/api/balance/add', {}, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount, note: addNote ? addNote.value || '' : '' }),
+        });
+        showToast(`Added ${rupee(amount)}`, 'success', `New balance ${rupee(result.balance)}`);
+        addAmount.value = '';
+        if (addNote) addNote.value = '';
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+      } catch (error) {
+        console.error('add failed', error);
+        showToast('Add failed', 'danger', error.message);
+      }
+    });
+  }
+
+  if (syncBtn && syncAmount) {
+    syncBtn.addEventListener('click', async () => {
+      if (isEmptyInput(syncAmount)) {
+        showToast('Enter a balance to sync.', 'warning');
+        return;
+      }
+
+      const balance = parseFloat(syncAmount.value);
+      if (Number.isNaN(balance) || !Number.isFinite(balance) || Math.abs(balance) > 999999999) {
+        showToast('Enter a valid balance value to sync.', 'warning');
+        return;
+      }
+      const syncNoteError = noteError(syncNote ? syncNote.value : '');
+      if (syncNoteError) {
+        showToast(syncNoteError, 'warning');
+        return;
+      }
+
+      try {
+        const result = await fetchJSON('/api/balance/sync', {}, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ balance, note: syncNote ? syncNote.value || '' : '' }),
+        });
+        showToast(`Balance synced to ${rupee(result.balance)}`, 'success', `Delta ${formatNumber(result.delta)}`);
+        syncAmount.value = '';
+        if (syncNote) syncNote.value = '';
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+      } catch (error) {
+        console.error('sync failed', error);
+        showToast('Sync failed', 'danger', error.message);
+      }
+    });
+  }
+
+  if (undoBtn) {
+    undoBtn.addEventListener('click', async () => {
+      const ok = await confirmAsync('Undo last balance entry? This removes the most recent add/sync.');
+      if (!ok) return;
+
+      try {
+        const result = await fetchJSON('/api/balance/undo', {}, { method: 'POST' });
+        showToast('Undo successful', 'success', `New balance ${rupee(result.current_balance)}`);
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+      } catch (error) {
+        console.error('undo failed', error);
+        showToast('Undo failed', 'danger', error.message);
+      }
+    });
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => (
+      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas)
+        .catch((error) => showToast('Refresh failed', 'danger', error.message))
+    ));
+  }
+
+  if (historyBody) {
+    historyBody.addEventListener('click', (event) => {
+      const button = event.target.closest('.balance-edit-btn');
+      if (!button) return;
+      openEditModal(button);
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('[data-balance-edit-save]')) return;
+    saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+  });
+
+  if (periodSelect) {
+    periodSelect.addEventListener('change', () => renderChart(periodSelect.value, balanceCanvas));
+  }
+
+  try {
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+  } catch (error) {
+    console.error('Balance script initialization error', error);
+    showToast('Balance script error', 'danger', error.message);
+  }
+});

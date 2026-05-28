@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FinTrak - Sign in</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+</head>
+
+<body>
+    <div class="auth-wrapper">
+        <div class="auth-card card">
+            <div class="card-body">
+                <div class="stack auth-stack">
+                    <div class="center auth-heading">
+                        <div class="auth-brand">FT</div>
+                        <div>
+                            <div class="page-title">FinTrak</div>
+                            <div class="kicker">Sign in</div>
+                        </div>
+                    </div>
+
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                    {% for category, msg in messages %}
+                    <div class="flash-inline {{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
+                    {% endfor %}
+                    {% endif %}
+                    {% endwith %}
+
+                    <form method="post" action="{{ url_for('login') }}" novalidate>
+                        {{ form.hidden_tag() }}
+                        <div class="stack">
+                            <label class="kicker" for="username">Username</label>
+                            <input id="username" name="username" class="form-control" type="email" placeholder="email"
+                                maxlength="120"
+                                value="{{ request.form.username or '' }}" autocomplete="username" autofocus />
+
+                            <label class="kicker" for="password">Password</label>
+                            <input id="password" name="password" class="form-control" type="password"
+                                placeholder="Password" autocomplete="current-password" maxlength="128" />
+                        </div>
+
+                        <div class="form-foot">
+                            <button type="submit" class="btn btn-primary">Sign in</button>
+                            <a class="small-muted" href="{{ url_for('view_login') }}">View Mode</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/flash.js') }}"></script>
+</body>
+
+</html>

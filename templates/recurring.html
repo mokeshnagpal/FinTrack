@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Automation</span>
+        <h1>Recurring Rules</h1>
+        <p>Create, edit, and remove recurring expenses.</p>
+    </div>
+</section>
+
+<div class="row g-3">
+    <div class="col-lg-5 col-md-12">
+        <div class="card form-card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
+                    <h4 class="page-title mb-0">
+                        {% if editing %}Edit Rule{% else %}Set Rule{% endif %}
+                    </h4>
+                    {% if editing %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('recurring') }}">Cancel</a>
+                    {% endif %}
+                </div>
+
+                <form method="post"
+                    action="{{ url_for('recurring_edit', r_id=edit_id) if editing else url_for('recurring') }}">
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ form.amount.label(class="form-label") }}
+                        {{ form.amount(class="form-control", step="0.01", min="0.01") }}
+                        {% for err in form.amount.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control", maxlength="120") }}
+                        {% for err in form.description.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.category.label(class="form-label") }}
+                        {{ form.category(class="form-select") }}
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-sm-6 mb-3">
+                            {{ form.start_date.label(class="form-label") }}
+                            {{ form.start_date(class="form-control", type="date") }}
+                            {% for err in form.start_date.errors %}
+                            <div class="text-danger small">{{ err }}</div>
+                            {% endfor %}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ form.start_time.label(class="form-label") }}
+                            {{ form.start_time(class="form-control", type="time") }}
+                            {% for err in form.start_time.errors %}
+                            <div class="text-danger small">{{ err }}</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.frequency.label(class="form-label") }}
+                        {{ form.frequency(class="form-select") }}
+                    </div>
+
+                    <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7 col-md-12">
+        <h4 class="page-title mb-2">Active Rules</h4>
+        <div class="table-shell table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>Amount</th>
+                        <th>Description</th>
+                        <th>Start</th>
+                        <th>Frequency</th>
+                        <th>Last Applied</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in recs %}
+                    {% set rid = (r.id or r._id) %}
+                    <tr class="{{ 'table-active' if editing and rid == edit_id else '' }}">
+                        <td><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                        <td><small>{{ r.description }}</small></td>
+                        <td>
+                            <small>
+                                {% if r.start_datetime %}
+                                <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </small>
+                        </td>
+                        <td><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                        <td>
+                            <small>
+                                {% if r.last_applied %}
+                                <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </small>
+                        </td>
+                        <td class="text-end">
+                            {% if rid %}
+                            <div class="table-actions">
+                                <a class="btn btn-sm btn-outline-primary"
+                                    href="{{ url_for('recurring_edit', r_id=rid) }}">Edit</a>
+                                <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
+                                    data-confirm="Delete recurring rule?" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-danger">Delete</button>
+                                </form>
+                            </div>
+                            {% else %}
+                            <em class="small">missing id</em>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">No recurring rules found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

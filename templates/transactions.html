@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">History</span>
+        <h1>Transactions</h1>
+        <p>Review recent spending activity.</p>
+    </div>
+    {% if not session.get('view_only') %}
+    <div class="page-actions">
+        <a class="btn btn-primary" href="{{ url_for('add') }}">Add Transaction</a>
+    </div>
+    {% endif %}
+</section>
+
+<form class="transaction-toolbar" method="get" action="{{ url_for('transactions') }}">
+    <input type="hidden" name="sort" value="{{ txns.sort }}">
+    <input type="hidden" name="dir" value="{{ txns.direction }}">
+    <label class="visually-hidden" for="transactionSearch">Search transactions</label>
+    <input id="transactionSearch" class="form-control" type="search" name="q"
+        value="{{ txns.search }}" placeholder="Search description, category, amount, or date">
+    <button class="btn btn-primary" type="submit">Search</button>
+    {% if txns.search %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('transactions', sort=txns.sort, dir=txns.direction) }}">Clear</a>
+    {% endif %}
+</form>
+
+{% macro sort_link(label, field, align='') -%}
+    {% set active = txns.sort == field %}
+    {% set next_dir = 'asc' if not active or txns.direction == 'desc' else 'desc' %}
+    <a class="sortable-header {{ 'active' if active else '' }} {{ align }}"
+        href="{{ url_for('transactions', sort=field, dir=next_dir, q=txns.search) }}"
+        title="Sort by {{ label }}">
+        <span>{{ label }}</span>
+        <span class="sort-icon">
+            {% if active and txns.direction == 'asc' %}&uarr;{% elif active %}&darr;{% else %}&#8597;{% endif %}
+        </span>
+    </a>
+{%- endmacro %}
+
+<div class="table-shell table-responsive">
+    <table class="table table-sm table-striped align-middle">
+        <thead>
+            <tr>
+                <th>{{ sort_link('Date', 'timestamp') }}</th>
+                <th>{{ sort_link('Description', 'description') }}</th>
+                <th>{{ sort_link('Category', 'category') }}</th>
+                <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for txn in txns.items %}
+            <tr>
+                <td><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                <td><small>{{ txn.description }}</small></td>
+                <td><small>{{ txn.category or 'Uncategorized' }}</small></td>
+                <td class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
+                <td class="text-end">
+                    {% if not session.get('view_only') %}
+                    <div class="table-actions">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('edit_transaction', tx_id=txn.id) }}">Edit</a>
+                        <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
+                            class="delete-form d-inline"
+                            data-offline-queue="transaction-delete"
+                            data-transaction-id="{{ txn.id }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
+                                data-bs-target="#deleteModal{{ txn.id }}">
+                                Delete
+                            </button>
+
+                            <div class="modal fade" id="deleteModal{{ txn.id }}" tabindex="-1"
+                                aria-labelledby="deleteModalLabel{{ txn.id }}" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content shadow-lg border-0">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="deleteModalLabel{{ txn.id }}">
+                                                Confirm Deletion
+                                            </h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+                                                aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body text-center">
+                                            <p class="fw-semibold mb-1">Delete this transaction?</p>
+                                            <p class="text-muted small mb-0">This action cannot be undone.</p>
+                                        </div>
+                                        <div class="modal-footer d-flex justify-content-center gap-2">
+                                            <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
+                                                Cancel
+                                            </button>
+                                            <button type="submit" class="btn btn-danger px-4">Delete</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    {% else %}
+                    <span class="badge">Read only</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if txns.items %}
+<nav aria-label="Transactions pagination">
+    <ul class="pagination justify-content-center">
+        {% if txns.has_prev %}
+        <li class="page-item">
+            <a class="page-link"
+                href="{{ url_for('transactions', page=txns.prev_num, cursor=txns.prev_cursor, q=txns.search, sort=txns.sort, dir=txns.direction) }}">
+                Previous
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Previous</span></li>
+        {% endif %}
+
+        <li class="page-item active"><span class="page-link">{{ txns.page }}</span></li>
+
+        {% if txns.has_next %}
+        <li class="page-item">
+            <a class="page-link"
+                href="{{ url_for('transactions', page=txns.next_num, cursor=txns.next_cursor, q=txns.search, sort=txns.sort, dir=txns.direction) }}">
+                Next
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Next</span></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}
