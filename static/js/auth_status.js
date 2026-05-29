@@ -3,27 +3,17 @@
   const renderMessage = document.getElementById('authRenderMessage');
   const cacheState = document.getElementById('authCacheState');
   const cacheMessage = document.getElementById('authCacheMessage');
-  const passwordCacheState = document.getElementById('authPasswordCacheState');
-  const passwordCacheMessage = document.getElementById('authPasswordCacheMessage');
   const usernameInput = document.getElementById('username');
   const pollMs = Number(window.FinTrakConstants?.sync_status_poll_seconds || 12) * 1000;
   let cacheRefreshRequested = false;
-  let passwordCacheTimer = null;
+  let authCacheTimer = null;
 
   if (!renderState || !renderMessage || !cacheState || !cacheMessage) return;
 
   function setWaiting() {
     renderState.textContent = 'Waking';
     renderMessage.textContent = 'Waiting for the service to respond.';
-    setBrowserCacheStatus();
-  }
-
-  function setBrowserCacheStatus() {
-    const hasCache = Boolean(window.FinTrak?.cache?.hasUsableSnapshot?.());
-    cacheState.textContent = hasCache ? 'Available' : 'Not available';
-    cacheMessage.textContent = hasCache
-      ? 'Usable local cache is available.'
-      : 'No usable local cache is available.';
+    checkAuthCache();
   }
 
   function setInitialStatusFromBrowserCache() {
@@ -35,14 +25,14 @@
 
     renderState.textContent = 'Cached';
     renderMessage.textContent = 'Cached app data is available while service status is checked.';
-    setBrowserCacheStatus();
+    checkAuthCache();
   }
 
   async function checkWake() {
     const shouldRefreshCache = !cacheRefreshRequested;
     renderState.textContent = 'Checking';
     renderMessage.textContent = 'Checking whether the service is awake.';
-    setBrowserCacheStatus();
+    checkAuthCache();
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
@@ -60,7 +50,7 @@
       renderMessage.textContent = awake
         ? 'The service responded. Login is ready.'
         : 'The service did not return a ready response yet.';
-      setBrowserCacheStatus();
+      checkAuthCache();
     } catch (error) {
       cacheRefreshRequested = false;
       setWaiting();
@@ -69,17 +59,17 @@
     }
   }
 
-  async function checkPasswordCache() {
-    if (!passwordCacheState || !passwordCacheMessage || !usernameInput) return;
+  async function checkAuthCache() {
+    if (!usernameInput) return;
     const username = String(usernameInput.value || '').trim();
     if (!username) {
-      passwordCacheState.textContent = 'Enter username';
-      passwordCacheMessage.textContent = 'Password hash cache status appears after username entry.';
+      cacheState.textContent = 'Not available';
+      cacheMessage.textContent = 'Enter username to check cached login.';
       return;
     }
 
-    passwordCacheState.textContent = 'Checking';
-    passwordCacheMessage.textContent = 'Checking server password-hash cache for this username.';
+    cacheState.textContent = 'Checking';
+    cacheMessage.textContent = 'Checking cached username and password hash.';
     try {
       const response = await fetch(`/api/login_password_cache_status?username=${encodeURIComponent(username)}`, {
         cache: 'no-store',
@@ -87,22 +77,22 @@
       });
       const data = await response.json().catch(() => ({}));
       const available = response.ok && data.cache_available;
-      passwordCacheState.textContent = available ? 'Available' : 'Not available';
-      passwordCacheMessage.textContent = available
-        ? 'A cached hash exists, but login still refreshes the real hash before comparison.'
-        : 'No server password cache yet. Login will read Firestore first.';
+      cacheState.textContent = available ? 'Available' : 'Not available';
+      cacheMessage.textContent = available
+        ? 'Cached username and password hash are available.'
+        : 'Cached login is not available for this username.';
     } catch (error) {
-      passwordCacheState.textContent = 'Unknown';
-      passwordCacheMessage.textContent = 'Password cache status could not be checked.';
+      cacheState.textContent = 'Unknown';
+      cacheMessage.textContent = 'Cached login status could not be checked.';
     }
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     setInitialStatusFromBrowserCache();
-    checkPasswordCache();
+    checkAuthCache();
     usernameInput?.addEventListener('input', () => {
-      clearTimeout(passwordCacheTimer);
-      passwordCacheTimer = setTimeout(checkPasswordCache, 350);
+      clearTimeout(authCacheTimer);
+      authCacheTimer = setTimeout(checkAuthCache, 350);
     });
     checkWake();
     setInterval(checkWake, pollMs);
