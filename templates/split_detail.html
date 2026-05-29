@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+{% set split_id = split_doc.id or split_doc._id %}
+<section class="page-header split-detail-header" data-split-id="{{ split_id }}" data-split-live="{{ 'true' if split_doc.is_live else 'false' }}">
+    <div>
+        <span class="kicker">Shared Bills</span>
+        <h1>{{ split_doc.title or 'Untitled split' }}</h1>
+        <p>
+            {% if split_doc.is_live %}
+            ✓ Live split bill. Cached totals and latest entries remain available.
+            {% else %}
+            Saved split bill. Full data available when backend responds.
+            {% endif %}
+        </p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-outline-secondary" href="{{ url_for('splits') }}">Back</a>
+    </div>
+</section>
+
+<div id="splitOfflineNotice" class="alert alert-warning d-none" role="status"></div>
+
+<div class="split-total-grid" id="splitTotals">
+    {% for person, amount in totals|dictsort %}
+    <div class="split-total-card">
+        <span>{{ person }}</span>
+        <strong>Rs. {{ '%.2f'|format(amount) }}</strong>
+    </div>
+    {% else %}
+    <div class="split-total-card split-total-empty">
+        <span>No entries yet</span>
+        <strong>Rs. 0.00</strong>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="row g-3 mt-1">
+    {% if not session.get('view_only') %}
+    <div class="col-lg-4 col-md-12">
+        <div class="card form-card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
+                    <h4 class="page-title mb-0">{% if editing_entry %}Edit Entry{% else %}Add Entry{% endif %}</h4>
+                    {% if editing_entry %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('split_detail', split_id=split_id) }}">Cancel</a>
+                    {% endif %}
+                </div>
+
+                <form method="post"
+                    action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=entry_id) if editing_entry else url_for('split_entry_add', split_id=split_id) }}"
+                    data-offline-queue="{{ 'split-entry-edit' if editing_entry else 'split-entry-create' }}"
+                    data-split-id="{{ split_id }}"
+                    {% if editing_entry %}data-split-entry-id="{{ entry_id }}" data-return-url="{{ url_for('split_detail', split_id=split_id) }}"{% endif %}
+                    novalidate>
+                    {{ entry_form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ entry_form.person.label(class="form-label") }}
+                        {{ entry_form.person(class="form-select") }}
+                        {% for err in entry_form.person.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ entry_form.amount.label(class="form-label") }}
+                        {{ entry_form.amount(class="form-control", step="0.01", min="0.01") }}
+                        {% for err in entry_form.amount.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ entry_form.description.label(class="form-label") }}
+                        {{ entry_form.description(class="form-control", maxlength="120") }}
+                        {% for err in entry_form.description.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ entry_form.category.label(class="form-label") }}
+                        {{ entry_form.category(class="form-select") }}
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-sm-6 mb-3">
+                            {{ entry_form.date.label(class="form-label") }}
+                            {{ entry_form.date(class="form-control", type="date") }}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ entry_form.time.label(class="form-label") }}
+                            {{ entry_form.time(class="form-control", type="time") }}
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary w-100">{{ entry_form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="{{ 'col-lg-8 col-md-12' if not session.get('view_only') else 'col-12' }}">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h4 class="page-title mb-3">Latest Entries</h4>
+                <div class="table-shell table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Person</th>
+                                <th>For</th>
+                                <th>Category</th>
+                                <th class="text-end">Amount</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="splitEntryBody">
+                            {% for entry in entries %}
+                            {% set eid = entry.id or entry._id %}
+                            <tr class="{{ 'table-active' if editing_entry and eid == entry_id else '' }}">
+                                <td data-label="When"><small data-format-date>{{ entry.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                                <td data-label="Person"><small>{{ entry.person }}</small></td>
+                                <td data-label="For"><small>{{ entry.description }}</small></td>
+                                <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
+                                <td data-label="Amount" class="text-end"><small>{{ '%.2f'|format(entry.amount) }}</small></td>
+                                <td data-label="Actions" class="text-end">
+                                    {% if not session.get('view_only') %}
+                                    <div class="table-actions">
+                                        <a class="btn btn-sm btn-outline-primary"
+                                            href="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}">Edit</a>
+                                        <form method="post" action="{{ url_for('split_entry_delete', split_id=split_id, entry_id=eid) }}"
+                                            data-offline-queue="split-entry-delete"
+                                            data-split-id="{{ split_id }}"
+                                            data-split-entry-id="{{ eid }}"
+                                            data-confirm="Delete this split entry?" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button class="btn btn-sm btn-danger">Delete</button>
+                                        </form>
+                                    </div>
+                                    {% else %}
+                                    <span class="badge">Read only</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">No split entries found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/splits.js') }}"></script>
+{% endblock %}

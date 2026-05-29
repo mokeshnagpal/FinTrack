@@ -80,16 +80,23 @@
 
   function formPayload(form) {
     const data = new FormData(form);
-    return {
+    const payload = {
       amount: data.get('amount'),
       description: data.get('description'),
       category: data.get('category'),
       date: data.get('date'),
       time: data.get('time'),
     };
+    if (data.has('person')) {
+      payload.person = data.get('person');
+    }
+    return payload;
   }
 
-  function validatePayload(payload) {
+  function validatePayload(payload, options = {}) {
+    if (options.requirePerson && !String(payload.person || '').trim()) {
+      return 'Select a person.';
+    }
     const amount = Number(payload.amount);
     if (!amount || Number.isNaN(amount) || !Number.isFinite(amount) || amount <= 0 || amount > 999999999) {
       return 'Enter an amount greater than zero.';
@@ -115,11 +122,22 @@
 
   function endpointFor(form, queueType) {
     const transactionId = form.dataset.transactionId || '';
+    const splitId = form.dataset.splitId || '';
+    const splitEntryId = form.dataset.splitEntryId || '';
     if (queueType === 'transaction-edit') {
       return `/api/transactions/${encodeURIComponent(transactionId)}/update`;
     }
     if (queueType === 'transaction-delete') {
       return `/api/transactions/${encodeURIComponent(transactionId)}/delete`;
+    }
+    if (queueType === 'split-entry-create') {
+      return `/api/splits/${encodeURIComponent(splitId)}/entries/create`;
+    }
+    if (queueType === 'split-entry-edit') {
+      return `/api/splits/${encodeURIComponent(splitId)}/entries/${encodeURIComponent(splitEntryId)}/update`;
+    }
+    if (queueType === 'split-entry-delete') {
+      return `/api/splits/${encodeURIComponent(splitId)}/entries/${encodeURIComponent(splitEntryId)}/delete`;
     }
     return '/api/transactions/create';
   }
@@ -127,12 +145,11 @@
   function endpointForActionType(type) {
     if (type === 'balance_add') return '/api/balance/add';
     if (type === 'balance_sync') return '/api/balance/sync';
-    if (type === 'balance_update') return '/api/balance/update_queued';
     return '';
   }
 
   function payloadFor(form, queueType) {
-    if (queueType === 'transaction-delete') {
+    if (queueType === 'transaction-delete' || queueType === 'split-entry-delete') {
       return {};
     }
     return formPayload(form);
@@ -218,7 +235,7 @@
     }
 
     if (!options.quiet && synced > 0) {
-      notify(`${synced} pending transaction${synced === 1 ? '' : 's'} synced.`, 'success');
+      notify(`${synced} pending action${synced === 1 ? '' : 's'} synced.`, 'success');
     } else if (!options.quiet && failed > 0 && remaining.length > 0) {
       notify('Saved locally. Will sync when the server responds.', 'info');
     }
@@ -230,7 +247,14 @@
     document.querySelectorAll('form[data-offline-queue]').forEach((form) => {
       form.addEventListener('submit', (event) => {
         const queueType = form.dataset.offlineQueue;
-        if (!['transaction-create', 'transaction-edit', 'transaction-delete'].includes(queueType)) {
+        if (![
+          'transaction-create',
+          'transaction-edit',
+          'transaction-delete',
+          'split-entry-create',
+          'split-entry-edit',
+          'split-entry-delete',
+        ].includes(queueType)) {
           return;
         }
 
@@ -243,7 +267,10 @@
 
         const submitButton = form.querySelector('button[type="submit"], button:not([type])');
         const payload = payloadFor(form, queueType);
-        const validationError = queueType === 'transaction-delete' ? '' : validatePayload(payload);
+        const isDeleteAction = queueType === 'transaction-delete' || queueType === 'split-entry-delete';
+        const validationError = isDeleteAction ? '' : validatePayload(payload, {
+          requirePerson: queueType.startsWith('split-entry-'),
+        });
         if (validationError) {
           notify(validationError, 'error');
           return;
@@ -251,7 +278,7 @@
         payload.client_action_id = actionId();
 
         enqueue({
-          type: queueType.replace('-', '_'),
+          type: queueType.replace(/-/g, '_'),
           endpoint: endpointFor(form, queueType),
           payload,
           created_at: new Date().toISOString(),
@@ -264,6 +291,12 @@
         } else if (queueType === 'transaction-edit') {
           notify('Update saved locally. Syncing in background.', 'success');
           window.location.href = '/transactions';
+        } else if (queueType === 'split-entry-create') {
+          form.reset();
+          notify('Split entry saved locally. Syncing in background.', 'success');
+        } else if (queueType === 'split-entry-edit') {
+          notify('Split entry update saved locally. Syncing in background.', 'success');
+          window.location.href = form.dataset.returnUrl || window.location.pathname.replace(/\/entries\/.+\/edit$/, '');
         } else {
           const row = form.closest('tr');
           const modal = form.querySelector('.modal.show');

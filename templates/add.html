@@ -3,8 +3,8 @@
 {% block content %}
 <section class="page-header">
     <div>
-        <span class="kicker">Transaction</span>
-        <h1>{% if editing %}Edit Transaction{% else %}Add Transaction{% endif %}</h1>
+        <span class="kicker">{% if editing %}Edit Record{% else %}New Record{% endif %}</span>
+        <h1>{% if editing %}Edit Transaction{% else %}Record Spending{% endif %}</h1>
         <p>{% if editing %}Update this expense and keep balance aligned.{% else %}Record a new expense using India date and time.{% endif %}</p>
     </div>
     <div class="page-actions">

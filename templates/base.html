@@ -41,16 +41,18 @@
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0 align-items-lg-center">
                     {% if session.get('view_only') %}
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Analytics</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Spend Analytics</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['splits', 'split_detail'] else '' }}" href="{{ url_for('splits') }}">Split Bills</a></li>
                     {% else %}
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['add', 'edit_transaction'] else '' }}" href="{{ url_for('add') }}">Add</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'sync_status' else '' }}" href="{{ url_for('sync_status') }}">Sync <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span></a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'] else '' }}" href="{{ url_for('recurring') }}">Recurring</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Analytics</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['management', 'management_category_delete', 'management_category_edit'] else '' }}" href="{{ url_for('management') }}">Management</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['add', 'edit_transaction'] else '' }}" href="{{ url_for('add') }}">Add Transaction</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Spend Analytics</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'] else '' }}" href="{{ url_for('recurring') }}">Recurring Bills</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['splits', 'split_detail', 'split_edit', 'split_entry_edit'] else '' }}" href="{{ url_for('splits') }}">Split Bills</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['management', 'management_category_delete', 'management_category_edit', 'management_split_person_edit', 'management_split_person_delete'] else '' }}" href="{{ url_for('management') }}">Setup & Settings</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'sync_status' else '' }}" href="{{ url_for('sync_status') }}">Offline Sync <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span></a></li>
                     {% endif %}
                 </ul>
 
@@ -72,6 +74,8 @@
             </div>
         </div>
     </nav>
+
+
 
     <main class="container my-4">
         {% block content %}{% endblock %}

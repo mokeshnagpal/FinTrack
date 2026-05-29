@@ -1,16 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
+{% if editing or balance_editing %}
+<div class="edit-backdrop"></div>
+{% endif %}
 <section class="page-header">
     <div>
-        <span class="kicker">Automation</span>
-        <h1>Recurring Rules</h1>
-        <p>Create, edit, and remove recurring expenses and balance additions.</p>
+        <span class="kicker">Schedules</span>
+        <h1>Recurring Bills</h1>
+        <p>Create, edit, and remove recurring expense rules and scheduled balance additions.</p>
     </div>
 </section>
 
 <div class="row g-3 mb-4">
     <div class="col-lg-5 col-md-12">
-        <div class="card form-card shadow-sm">
+        <div class="card form-card shadow-sm {% if editing %}editing-active{% endif %}">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
                     <h4 class="page-title mb-0">
@@ -92,9 +95,9 @@
                     {% for r in recs %}
                     {% set rid = (r.id or r._id) %}
                     <tr class="{{ 'table-active' if editing and rid == edit_id else '' }}">
-                        <td><small>{{ '%.2f'|format(r.amount) }}</small></td>
-                        <td><small>{{ r.description }}</small></td>
-                        <td>
+                        <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                        <td data-label="Description"><small>{{ r.description }}</small></td>
+                        <td data-label="Start">
                             <small>
                                 {% if r.start_datetime %}
                                 <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
@@ -103,8 +106,8 @@
                                 {% endif %}
                             </small>
                         </td>
-                        <td><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                        <td>
+                        <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                        <td data-label="Last Applied">
                             <small>
                                 {% if r.last_applied %}
                                 <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
@@ -113,7 +116,7 @@
                                 {% endif %}
                             </small>
                         </td>
-                        <td class="text-end">
+                        <td data-label="Actions" class="text-end">
                             {% if rid %}
                             <div class="table-actions">
                                 <a class="btn btn-sm btn-outline-primary"
@@ -142,7 +145,7 @@
 
 <div class="row g-3">
     <div class="col-lg-5 col-md-12">
-        <div class="card form-card shadow-sm">
+        <div class="card form-card shadow-sm {% if balance_editing %}editing-active{% endif %}">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
                     <h4 class="page-title mb-0">
@@ -195,7 +198,7 @@
                         {{ balance_form.frequency(class="form-select") }}
                     </div>
 
-                    <button class="btn btn-success w-100">{{ balance_form.submit.label.text }}</button>
+                    <button class="btn btn-primary w-100">{{ balance_form.submit.label.text }}</button>
                 </form>
             </div>
         </div>
@@ -219,9 +222,9 @@
                     {% for r in balance_recs %}
                     {% set rid = (r.id or r._id) %}
                     <tr class="{{ 'table-active' if balance_editing and rid == balance_edit_id else '' }}">
-                        <td><small>{{ '%.2f'|format(r.amount) }}</small></td>
-                        <td><small>{{ r.description }}</small></td>
-                        <td>
+                        <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                        <td data-label="Note"><small>{{ r.description }}</small></td>
+                        <td data-label="Start">
                             <small>
                                 {% if r.start_datetime %}
                                 <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
@@ -230,8 +233,8 @@
                                 {% endif %}
                             </small>
                         </td>
-                        <td><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                        <td>
+                        <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                        <td data-label="Last Added">
                             <small>
                                 {% if r.last_applied %}
                                 <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
@@ -240,7 +243,7 @@
                                 {% endif %}
                             </small>
                         </td>
-                        <td class="text-end">
+                        <td data-label="Actions" class="text-end">
                             {% if rid %}
                             <div class="table-actions">
                                 <a class="btn btn-sm btn-outline-primary"

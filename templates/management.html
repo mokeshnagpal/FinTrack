@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
+{% if editing_category or editing_split_person %}
+<div class="edit-backdrop"></div>
+{% endif %}
 <section class="page-header">
     <div>
-        <span class="kicker">Settings</span>
-        <h1>Management</h1>
+        <span class="kicker">Configuration</span>
+        <h1>Setup & Settings</h1>
         <p>Manage view-only access and transaction categories.</p>
     </div>
 </section>
@@ -167,7 +170,7 @@
     </div>
 
     <div class="management-panel management-panel-wide">
-        <div class="card shadow-sm h-100 management-card">
+        <div class="card shadow-sm h-100 management-card {% if editing_category %}editing-active{% endif %}">
             <div class="card-body">
                 <div class="management-section-heading">
                     <div>
@@ -207,8 +210,8 @@
                         <tbody>
                             {% for category in categories %}
                             <tr>
-                                <td>{{ category }}</td>
-                                <td class="text-end">
+                                <td data-label="Category">{{ category }}</td>
+                                <td data-label="Actions" class="text-end">
                                     <div class="table-actions">
                                         <a class="btn btn-sm btn-outline-primary"
                                             href="{{ url_for('management_category_edit', category_name=category) }}">
@@ -230,6 +233,79 @@
                             {% else %}
                             <tr>
                                 <td colspan="2" class="text-center text-muted py-4">No categories configured.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="management-panel management-panel-wide">
+        <div class="card shadow-sm h-100 management-card {% if editing_split_person %}editing-active{% endif %}">
+            <div class="card-body">
+                <div class="management-section-heading">
+                    <div>
+                        <span class="kicker">Split setup</span>
+                        <h5>People</h5>
+                    </div>
+                </div>
+
+                <form method="post" class="management-form-box mb-3"
+                    action="{{ url_for('management_split_person_edit', person_name=editing_split_person) if editing_split_person else url_for('management') }}"
+                    novalidate>
+                    {{ split_person_form.hidden_tag() }}
+                    {% if not editing_split_person %}
+                    <input type="hidden" name="action" value="add_split_person">
+                    {% endif %}
+
+                    <div class="input-group">
+                        {{ split_person_form.name(class="form-control", placeholder="Person name", maxlength="40") }}
+                        <button class="btn btn-primary">{{ split_person_form.submit.label.text }}</button>
+                    </div>
+                    {% for err in split_person_form.name.errors %}
+                    <div class="text-danger small mt-1">{{ err }}</div>
+                    {% endfor %}
+                    {% if editing_split_person %}
+                    <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('management') }}">Cancel Edit</a>
+                    {% endif %}
+                </form>
+
+                <div class="table-shell table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Person</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for person in split_people %}
+                            <tr>
+                                <td data-label="Person">{{ person }}</td>
+                                <td data-label="Actions" class="text-end">
+                                    <div class="table-actions">
+                                        <a class="btn btn-sm btn-outline-primary"
+                                            href="{{ url_for('management_split_person_edit', person_name=person) }}">
+                                            Edit
+                                        </a>
+                                        <form method="post"
+                                            action="{{ url_for('management_split_person_delete', person_name=person) }}"
+                                            data-confirm="Delete this person from future split dropdowns?"
+                                            class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button class="btn btn-sm btn-danger"
+                                                {% if split_people|length <= 1 %}disabled{% endif %}>
+                                                Delete
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="2" class="text-center text-muted py-4">No people configured.</td>
                             </tr>
                             {% endfor %}
                         </tbody>

@@ -24,11 +24,13 @@
   const cacheItems = [
     { id: 'view_only_password', group: 'Server', label: 'View-only password hash', detail: 'Waiting for Render.' },
     { id: 'categories', group: 'Server', label: 'Categories', detail: 'Waiting for Render.' },
+    { id: 'split_people', group: 'Server', label: 'Split people', detail: 'Waiting for Render.' },
     { id: 'user_auth', group: 'Server', label: 'Current user auth hash', detail: 'Waiting for Render.' },
     { id: 'browser_categories', group: 'Browser', label: 'Cached categories', detail: 'No local snapshot checked yet.' },
     { id: 'browser_balance', group: 'Browser', label: 'Cached balance', detail: 'No local snapshot checked yet.' },
     { id: 'browser_balance_history', group: 'Browser', label: 'Cached balance history', detail: 'No local snapshot checked yet.' },
     { id: 'browser_transactions', group: 'Browser', label: 'Cached recent transactions', detail: 'No local snapshot checked yet.' },
+    { id: 'browser_live_split', group: 'Browser', label: 'Cached live split', detail: 'No local snapshot checked yet.' },
   ];
   const cacheItemState = new Map(cacheItems.map((item) => [item.id, { status: 'Waiting', detail: item.detail }]));
 
@@ -42,6 +44,15 @@
 
   function formatActionType(type) {
     return String(type || 'transaction_action').replace(/_/g, ' ');
+  }
+
+  function describeAction(action) {
+    const payload = action.payload || {};
+    if (payload.description) return payload.description;
+    if (payload.note) return payload.note;
+    if (payload.balance !== undefined) return `Balance ${payload.balance}`;
+    if (payload.amount !== undefined) return `Amount ${payload.amount}`;
+    return action.endpoint || 'Pending action';
   }
 
   function formatTime(value) {
@@ -69,14 +80,35 @@
       const node = document.createElement('div');
       node.className = 'sync-cache-item';
 
+      const statusText = state.status || 'Waiting';
+      let statusClass = 'danger'; // Default Red for Not Updated / Failed / Waiting
+      if (statusText === 'Updating') {
+        statusClass = 'warning'; // Yellow for Updating
+      } else if (statusText === 'Updated') {
+        statusClass = 'success'; // Green for Updated
+      }
+
+      const groupContainer = document.createElement('div');
+      groupContainer.className = 'd-flex justify-content-between align-items-center';
+
       const group = document.createElement('span');
       group.textContent = item.group;
+
+      const statusBadge = document.createElement('span');
+      statusBadge.className = `badge ${statusClass}`;
+      statusBadge.style.fontSize = '0.62rem';
+      statusBadge.style.padding = '0.1rem 0.3rem';
+      statusBadge.textContent = statusText;
+
+      groupContainer.append(group, statusBadge);
+
       const label = document.createElement('strong');
       label.textContent = item.label;
-      const detail = document.createElement('small');
-      detail.textContent = `${state.status || 'Waiting'} - ${state.detail || item.detail}`;
 
-      node.append(group, label, detail);
+      const detail = document.createElement('small');
+      detail.textContent = state.detail || item.detail;
+
+      node.append(groupContainer, label, detail);
       elements.cacheDetailList.appendChild(node);
     });
   }
@@ -87,14 +119,14 @@
   }
 
   function setServerCacheUpdating() {
-    ['view_only_password', 'categories', 'user_auth'].forEach((id) => {
+    ['view_only_password', 'categories', 'split_people', 'user_auth'].forEach((id) => {
       setCacheItem(id, 'Updating', 'Checking Firestore.');
     });
     setCacheDetailBadge('Updating', '');
   }
 
   function setBrowserCacheUpdating(reason) {
-    ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions'].forEach((id) => {
+    ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions', 'browser_live_split'].forEach((id) => {
       setCacheItem(id, 'Updating', reason);
     });
     setCacheDetailBadge('Updating', '');
@@ -105,7 +137,7 @@
     const updated = new Set(Array.isArray(cacheRefresh.updated) ? cacheRefresh.updated : []);
     const errors = new Set(Array.isArray(cacheRefresh.errors) ? cacheRefresh.errors : []);
 
-    ['view_only_password', 'categories', 'user_auth'].forEach((id) => {
+    ['view_only_password', 'categories', 'split_people', 'user_auth'].forEach((id) => {
       if (updated.has(id)) {
         setCacheItem(id, 'Updated', 'Server cache refreshed.');
       } else if (errors.has(id)) {
@@ -122,11 +154,14 @@
     const history = Array.isArray(snapshot.balance?.history) ? snapshot.balance.history.length : 0;
     const transactions = Array.isArray(snapshot.transactions) ? snapshot.transactions.length : 0;
     const currentBalance = snapshot.balance?.current?.balance;
+    const liveSplit = snapshot.live_split;
+    const liveSplitEntries = Array.isArray(liveSplit?.entries) ? liveSplit.entries.length : 0;
 
     setCacheItem('browser_categories', 'Updated', `${categories} categor${categories === 1 ? 'y' : 'ies'} cached.`);
     setCacheItem('browser_balance', 'Updated', `Current balance cached: ${currentBalance ?? '0.00'}.`);
     setCacheItem('browser_balance_history', 'Updated', `${history} balance histor${history === 1 ? 'y item' : 'y items'} cached.`);
     setCacheItem('browser_transactions', 'Updated', `${transactions} recent transaction${transactions === 1 ? '' : 's'} cached.`);
+    setCacheItem('browser_live_split', 'Updated', liveSplit ? `${liveSplit.title || 'Live split'} cached with ${liveSplitEntries} entr${liveSplitEntries === 1 ? 'y' : 'ies'}.` : 'No live split selected.');
     setCacheDetailBadge('Updated', 'success');
   }
 
@@ -139,7 +174,7 @@
       return snapshot;
     } catch (error) {
       console.warn('browser cache snapshot refresh failed', error);
-      ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions'].forEach((id) => {
+      ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions', 'browser_live_split'].forEach((id) => {
         setCacheItem(id, 'Failed', 'Browser cache snapshot could not update.');
       });
       setCacheDetailBadge('Needs retry', 'danger');
@@ -165,8 +200,8 @@
     if (count === 0) {
       elements.syncHeadline.textContent = 'You can close now';
       elements.syncMessage.textContent = renderAwake
-        ? 'All pending transaction actions are synced.'
-        : 'No pending transaction actions are stored in this browser.';
+        ? 'All pending actions are synced.'
+        : 'No pending actions are stored in this browser.';
       setBadge('Clear', 'success');
       renderEmptyPendingList();
       lastRenderedPendingCount = count;
@@ -185,8 +220,7 @@
 
     elements.pendingList.textContent = '';
     queue.forEach((action, index) => {
-      const payload = action.payload || {};
-      const description = payload.description || action.endpoint || 'Transaction action';
+      const description = describeAction(action);
 
       const item = document.createElement('div');
       item.className = 'sync-pending-item';
@@ -298,12 +332,19 @@
     syncRequestedForCurrentWake = false;
     cacheRefreshRequestedForCurrentWake = false;
     renderQueue();
+    refresh(true);
   });
 
   document.addEventListener('DOMContentLoaded', () => {
     renderCacheDetails();
     renderQueue();
     refresh(true);
-    setInterval(() => refresh(true), pollMs);
+    setInterval(() => {
+      const queue = readQueue();
+      if (renderAwake && cacheRefreshRequestedForCurrentWake && queue.length === 0) {
+        return;
+      }
+      refresh(true);
+    }, pollMs);
   });
 }());

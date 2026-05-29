@@ -1,3 +1,5 @@
+const HISTORY_DISPLAY_LIMIT = Number(window.FinTrakConstants?.balance_history_table_limit || 12);
+
 async function fetchJSON(url, params = {}, opts = {}) {
   const query = new URLSearchParams(params).toString();
   const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -177,10 +179,11 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   if (!historyBody) return;
   historyBody.innerHTML = '';
 
-  (data.history || []).forEach((entry) => {
+  (data.history || []).slice(0, HISTORY_DISPLAY_LIMIT).forEach((entry, index) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
-    const canEdit = ['add', 'sync'].includes(type) && document.body.dataset.viewOnly !== 'true';
+    const isLatest = index === 0;
+    const canEdit = isLatest && ['add', 'sync'].includes(type) && document.body.dataset.viewOnly !== 'true';
     const editButton = canEdit
       ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn"
             data-id="${escapeAttr(entry.id || '')}"
@@ -191,16 +194,16 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
             Edit
           </button>`
       : `<button class="btn btn-sm btn-outline-secondary" disabled
-            title="Edit the source transaction for transaction-linked entries.">
-            Edit
+            title="${isLatest ? 'Edit the source transaction for transaction-linked entries.' : 'Only the latest manual balance entry can be edited.'}">
+            Locked
           </button>`;
 
-    tr.innerHTML = `<td>${escapeHtml(formatDisplayDate(entry.timestamp || ''))}</td>
-                    <td>${escapeHtml(entry.type || '')}</td>
-                    <td class="text-end">${formatNumber(entry.delta)}</td>
-                    <td class="text-end">${formatNumber(entry.balance)}</td>
-                    <td>${escapeHtml(entry.note || '')}</td>
-                    <td class="text-end">${editButton}</td>`;
+    tr.innerHTML = `<td data-label="When">${escapeHtml(formatDisplayDate(entry.timestamp || ''))}</td>
+                    <td data-label="Type">${escapeHtml(entry.type || '')}</td>
+                    <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
+                    <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
+                    <td data-label="Note">${escapeHtml(entry.note || '')}</td>
+                    <td data-label="Actions" class="text-end"><div class="table-actions">${editButton}</div></td>`;
     historyBody.appendChild(tr);
   });
 }
@@ -217,10 +220,14 @@ function ensureEditModal() {
       <h5 class="fw-bold mb-3">Edit Balance Entry</h5>
       <input type="hidden" id="editBalanceId">
       <input type="hidden" id="editBalanceType">
+      <input type="hidden" id="editBalanceOriginalDelta">
+      <input type="hidden" id="editBalanceOriginalBalance">
       <div class="mb-3">
         <label class="form-label" id="editBalanceValueLabel" for="editBalanceValue">Amount</label>
         <input id="editBalanceValue" class="form-control" type="number" step="0.01">
+        <small class="text-muted d-block mt-2" id="editBalanceModeHelp"></small>
       </div>
+      <div class="balance-edit-impact mb-3" id="editBalanceImpact" aria-live="polite"></div>
       <div class="mb-3">
         <label class="form-label" for="editBalanceNote">Note</label>
         <input id="editBalanceNote" class="form-control" maxlength="120">
@@ -238,8 +245,48 @@ function ensureEditModal() {
       modal.classList.remove('show');
     }
   });
+  modal.querySelector('#editBalanceValue').addEventListener('input', () => updateEditImpact(modal));
 
   return modal;
+}
+
+function readMoneyValue(value) {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function updateEditImpact(modal) {
+  const type = modal.querySelector('#editBalanceType').value;
+  const rawValue = modal.querySelector('#editBalanceValue').value;
+  const value = parseFloat(rawValue);
+  const originalDelta = readMoneyValue(modal.querySelector('#editBalanceOriginalDelta').value);
+  const originalBalance = readMoneyValue(modal.querySelector('#editBalanceOriginalBalance').value);
+  const impactEl = modal.querySelector('#editBalanceImpact');
+
+  if (!impactEl) return;
+  if (rawValue === '' || Number.isNaN(value) || !Number.isFinite(value)) {
+    impactEl.innerHTML = '<span class="text-muted">Enter a value to preview the balance impact.</span>';
+    return;
+  }
+
+  if (type === 'sync') {
+    const shiftAmount = value - originalBalance;
+    const resultingDelta = originalDelta + shiftAmount;
+    impactEl.innerHTML = `
+      <span>New absolute balance: <strong>Rs. ${formatNumber(value)}</strong></span>
+      <span>Entry change becomes: <strong>Rs. ${formatNumber(resultingDelta)}</strong></span>
+      <span>Later balances shift by: <strong>Rs. ${formatNumber(shiftAmount)}</strong></span>
+    `;
+    return;
+  }
+
+  const shiftAmount = value - originalDelta;
+  const resultingBalance = originalBalance + shiftAmount;
+  impactEl.innerHTML = `
+    <span>Entry change becomes: <strong>Rs. ${formatNumber(value)}</strong></span>
+    <span>Entry balance becomes: <strong>Rs. ${formatNumber(resultingBalance)}</strong></span>
+    <span>Later balances shift by: <strong>Rs. ${formatNumber(shiftAmount)}</strong></span>
+  `;
 }
 
 function openEditModal(button) {
@@ -247,9 +294,15 @@ function openEditModal(button) {
   const type = button.dataset.type;
   modal.querySelector('#editBalanceId').value = button.dataset.id || '';
   modal.querySelector('#editBalanceType').value = type || '';
-  modal.querySelector('#editBalanceValueLabel').textContent = type === 'sync' ? 'Balance' : 'Delta';
+  modal.querySelector('#editBalanceOriginalDelta').value = button.dataset.delta || '0';
+  modal.querySelector('#editBalanceOriginalBalance').value = button.dataset.balance || '0';
+  modal.querySelector('#editBalanceValueLabel').textContent = type === 'sync' ? 'New Absolute Balance' : 'New Change Amount';
+  modal.querySelector('#editBalanceModeHelp').textContent = type === 'sync'
+    ? 'Sync entries are edited as an absolute balance. The change amount is calculated from the previous balance.'
+    : 'Add entries are edited as a change amount. Later balances move by the difference.';
   modal.querySelector('#editBalanceValue').value = type === 'sync' ? button.dataset.balance || '' : button.dataset.delta || '';
   modal.querySelector('#editBalanceNote').value = button.dataset.note || '';
+  updateEditImpact(modal);
   modal.classList.add('show');
 }
 
@@ -286,17 +339,6 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, 
   }
 }
 
-async function confirmAsync(message) {
-  try {
-    if (window.FinTrak && typeof window.FinTrak.confirm === 'function') {
-      return await window.FinTrak.confirm(message, 'Yes, Undo');
-    }
-    return window.confirm(message);
-  } catch (error) {
-    return false;
-  }
-}
-
 async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas) {
   await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody);
   await renderChart(periodSelect ? periodSelect.value : 'daily', balanceCanvas);
@@ -313,7 +355,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const syncAmount = document.getElementById('syncAmount');
   const syncNote = document.getElementById('syncNote');
   const syncBtn = document.getElementById('syncBtn');
-  const undoBtn = document.getElementById('undoBtn');
   const historyBody = document.getElementById('historyBody');
   const balanceCanvas = document.getElementById('balanceChart');
 
@@ -397,22 +438,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
           showToast('Sync failed', 'danger', error.message);
         }
-      }
-    });
-  }
-
-  if (undoBtn) {
-    undoBtn.addEventListener('click', async () => {
-      const ok = await confirmAsync('Undo last balance entry? This removes the most recent add/sync.');
-      if (!ok) return;
-
-      try {
-        const result = await fetchJSON('/api/balance/undo', {}, { method: 'POST' });
-        showToast('Undo successful', 'success', `New balance ${rupee(result.current_balance)}`);
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
-      } catch (error) {
-        console.error('undo failed', error);
-        showToast('Undo failed', 'danger', error.message);
       }
     });
   }

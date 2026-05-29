@@ -14,11 +14,15 @@ from forms import (
     LoginForm,
     RecurringBalanceForm,
     RecurringForm,
+    SplitDocumentForm,
+    SplitEntryForm,
+    SplitPersonForm,
     TransactionForm,
     ViewPasswordForm,
     ViewPasswordRevealForm,
 )
 from constants import (
+    BALANCE_HISTORY_TABLE_LIMIT,
     BROWSER_CACHE_BALANCE_HISTORY,
     BROWSER_CACHE_RECENT_TRANSACTIONS,
     BROWSER_CACHE_TTL_SECONDS,
@@ -26,7 +30,12 @@ from constants import (
     DEFAULT_CACHE_TTL_SECONDS,
     DEFAULT_RECURRING_THROTTLE_SECONDS,
     DEFAULT_WAKE_REFRESH_IDLE_SECONDS,
+    RECENT_TRANSACTIONS_CACHE_LIMIT,
+    RECURRING_RULE_TABLE_LIMIT,
+    SPLIT_DOCUMENT_TABLE_LIMIT,
+    SPLIT_ENTRY_TABLE_LIMIT,
     SYNC_STATUS_POLL_SECONDS,
+    TRANSACTION_PAGE_SIZE,
 )
 import os
 import io
@@ -121,6 +130,7 @@ fs = firestore.client()
 SETTINGS_COL = "settings"
 VIEW_ONLY_SETTINGS_DOC = "view_only_access"
 CATEGORIES_SETTINGS_DOC = "categories"
+SPLIT_PEOPLE_SETTINGS_DOC = "split_people"
 CLIENT_ACTIONS_COL = "client_actions"
 CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', DEFAULT_CACHE_TTL_SECONDS)
 AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', DEFAULT_AUTH_CACHE_TTL_SECONDS)
@@ -169,8 +179,16 @@ def ist_datetime_filter(value, fmt='%Y-%m-%d %H:%M'):
 def client_constants_context():
     return {
         'client_constants': {
+            'balance_history_table_limit': BALANCE_HISTORY_TABLE_LIMIT,
+            'browser_cache_balance_history': BROWSER_CACHE_BALANCE_HISTORY,
+            'browser_cache_recent_transactions': RECENT_TRANSACTIONS_CACHE_LIMIT,
+            'browser_cache_refresh_timeout_ms': 8000,
             'browser_cache_ttl_seconds': BROWSER_CACHE_TTL_SECONDS,
+            'recurring_rule_table_limit': RECURRING_RULE_TABLE_LIMIT,
+            'split_document_table_limit': SPLIT_DOCUMENT_TABLE_LIMIT,
+            'split_entry_table_limit': SPLIT_ENTRY_TABLE_LIMIT,
             'sync_status_poll_seconds': SYNC_STATUS_POLL_SECONDS,
+            'transaction_page_size': TRANSACTION_PAGE_SIZE,
         }
     }
 
@@ -184,8 +202,11 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/balance',
     '/analytics',
     '/transactions',
+    '/splits',
     '/api/balance_current',
     '/api/balance_series',
+    '/api/splits',
+    '/api/cache_snapshot',
     '/api/totals',
     '/api/category_breakdown',
     '/api/transactions_range',
@@ -249,6 +270,12 @@ def rec_balance_collection(username=None):
 def bal_collection(username=None):
     return user_doc_ref(username).collection('balances')
 
+def splits_collection(username=None):
+    return user_doc_ref(username).collection('splits')
+
+def split_entries_collection(split_id, username=None):
+    return splits_collection(username).document(str(split_id)).collection('entries')
+
 def client_actions_collection(username=None):
     return user_doc_ref(username).collection(CLIENT_ACTIONS_COL)
 
@@ -257,6 +284,9 @@ def view_only_settings_ref():
 
 def categories_settings_ref():
     return fs.collection(SETTINGS_COL).document(CATEGORIES_SETTINGS_DOC)
+
+def split_people_settings_ref():
+    return fs.collection(SETTINGS_COL).document(SPLIT_PEOPLE_SETTINGS_DOC)
 
 def cache_get(key):
     cached = _APP_CACHE.get(key)
@@ -335,6 +365,7 @@ def refresh_cache_job(username=None, reason='manual'):
     jobs = (
         ('view_only_password', lambda: load_view_only_password_hash_from_store()),
         ('categories', load_categories_from_store),
+        ('split_people', load_split_people_from_store),
     )
     for name, loader in jobs:
         try:
@@ -482,12 +513,78 @@ def save_categories(categories, updated_by=None):
     cache_set('categories', clean_categories)
     return clean_categories
 
+def default_split_people():
+    return ['Me']
+
+def normalize_person_name(name):
+    return ' '.join(str(name or '').strip().split())
+
+def person_key(name):
+    return normalize_person_name(name).lower()
+
+def person_exists(people, name):
+    return person_key(name) in {person_key(item) for item in people}
+
+def load_split_people_from_store():
+    people = []
+    doc = split_people_settings_ref().get(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    )
+    if doc.exists:
+        raw_people = (doc.to_dict() or {}).get('items') or []
+        people = [normalize_person_name(item) for item in raw_people]
+        people = [item for item in people if item]
+    if not people:
+        people = default_split_people()
+    return list(cache_set('split_people', people))
+
+def get_split_people():
+    cached_people = cache_get('split_people')
+    if cached_people is not None:
+        return list(cached_people)
+
+    try:
+        return load_split_people_from_store()
+    except Exception:
+        app.logger.exception("Failed to load split people settings")
+    return list(cache_set('split_people', default_split_people()))
+
+def save_split_people(people, updated_by=None):
+    clean_people = []
+    seen = set()
+    for item in people:
+        name = normalize_person_name(item)
+        key = name.lower()
+        if name and key not in seen:
+            clean_people.append(name)
+            seen.add(key)
+
+    if not clean_people:
+        clean_people = default_split_people()
+
+    split_people_settings_ref().set({
+        'items': clean_people,
+        'updated_at': datetime.now(UTC),
+        'updated_by': updated_by,
+    }, merge=True)
+    cache_set('split_people', clean_people)
+    return clean_people
+
 def apply_category_choices(form, include=None):
     categories = get_categories()
     include_name = normalize_category_name(include)
     if include_name and not category_exists(categories, include_name):
         categories.append(include_name)
     form.category.choices = [(item, item) for item in categories]
+
+def apply_split_entry_choices(form, person_include=None, category_include=None):
+    apply_category_choices(form, include=category_include)
+    people = get_split_people()
+    include_name = normalize_person_name(person_include)
+    if include_name and not person_exists(people, include_name):
+        people.append(include_name)
+    form.person.choices = [(item, item) for item in people]
 
 def view_password_status_context():
     has_db_password = bool(get_view_only_password_hash())
@@ -508,6 +605,9 @@ def render_management(
     revealed_current_view_password='',
     username_form=None,
     password_form=None,
+    split_person_form=None,
+    split_people=None,
+    editing_split_person=None,
 ):
     return render_template(
         'management.html',
@@ -520,6 +620,9 @@ def render_management(
         category_form=category_form or CategoryForm(prefix='category'),
         categories=categories if categories is not None else get_categories(),
         editing_category=editing_category,
+        split_person_form=split_person_form or SplitPersonForm(prefix='split_person'),
+        split_people=split_people if split_people is not None else get_split_people(),
+        editing_split_person=editing_split_person,
         **view_password_status_context(),
     )
 
@@ -637,7 +740,7 @@ def doc_to_txn(doc):
     elif 'id' in d and '_id' not in d:
         d['_id'] = d['id']
 
-    for fld in ('timestamp', 'start_datetime', 'last_applied'):
+    for fld in ('timestamp', 'start_datetime', 'last_applied', 'created_at', 'updated_at'):
         if fld in d and d[fld] is not None:
             try:
                 d[fld] = ts_to_dt(d[fld])
@@ -1169,6 +1272,7 @@ def api_cache_snapshot():
             .limit(BROWSER_CACHE_RECENT_TRANSACTIONS)
         )
     ]
+    live_split = get_live_split(username=username)
 
     return jsonify({
         'ok': True,
@@ -1176,8 +1280,10 @@ def api_cache_snapshot():
         'limits': {
             'recent_transactions': BROWSER_CACHE_RECENT_TRANSACTIONS,
             'balance_history': BROWSER_CACHE_BALANCE_HISTORY,
+            'split_entries': SPLIT_ENTRY_TABLE_LIMIT,
         },
         'categories': get_categories(),
+        'split_people': get_split_people(),
         'balance': {
             'current': {
                 'balance': round(float(latest_balance.get('balance', 0.0)), 2) if latest_balance else 0.0,
@@ -1186,6 +1292,7 @@ def api_cache_snapshot():
             'history': [serialize_balance_for_cache(entry) for entry in balance_docs],
         },
         'transactions': [serialize_transaction_for_cache(txn) for txn in txn_docs],
+        'live_split': build_split_summary(live_split, username=username),
     })
 
 def build_transaction_doc(form):
@@ -1295,6 +1402,61 @@ def create_transaction(username, txn_doc, client_action_id=None):
     return txn_id, False
 
 
+def get_latest_transaction_id(username=None):
+    if username is None:
+        username = require_user()
+    docs = list(
+        stream_with_timeout(
+            tx_collection(username)
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .limit(1)
+        )
+    )
+    return docs[0].id if docs else None
+
+
+def is_latest_transaction(tx_id, username=None):
+    latest_id = get_latest_transaction_id(username=username)
+    return bool(latest_id and str(latest_id) == str(tx_id))
+
+
+def has_newer_transaction_after_edit(tx_id, new_timestamp, username=None):
+    if username is None:
+        username = require_user()
+    docs = stream_with_timeout(
+        tx_collection(username)
+        .where('timestamp', '>', new_timestamp)
+        .order_by('timestamp', direction=firestore.Query.DESCENDING)
+        .limit(2)
+    )
+    return any(str(doc.id) != str(tx_id) for doc in docs)
+
+
+def latest_transaction_error_response(tx_id=None, username=None, action='mutation'):
+    app.logger.warning(
+        "Latest-only transaction guard blocked action=%s tx_id=%s user=%s",
+        action,
+        tx_id,
+        username,
+    )
+    return jsonify({
+        'ok': False,
+        'error': 'Only the latest transaction can be edited or deleted. Delete the latest transaction first to unlock the previous one.',
+    }), 400
+
+
+def transaction_must_remain_latest_response(tx_id=None, username=None):
+    app.logger.warning(
+        "Latest transaction edit would no longer remain latest tx_id=%s user=%s",
+        tx_id,
+        username,
+    )
+    return jsonify({
+        'ok': False,
+        'error': 'The edited transaction must remain the latest transaction. Keep its date/time after all previous transactions.',
+    }), 400
+
+
 def populate_transaction_form(form, transaction):
     txn_time = utc_to_ist(transaction.get('timestamp')) or now_ist()
     form.amount.data = transaction.get('amount')
@@ -1350,6 +1512,7 @@ def api_transaction_create():
             'transaction_id': txn_id,
         })
     except ValueError as exc:
+        app.logger.warning("Transaction API create validation failed user=%s error=%s", get_current_username(), exc)
         return jsonify({'ok': False, 'error': str(exc)}), 400
     except Exception:
         app.logger.exception("Transaction API create failed")
@@ -1397,6 +1560,7 @@ def api_transaction_update(tx_id):
         app.logger.info("Transaction API update id=%s user=%s", tx_id, username)
         return jsonify({'ok': True, 'duplicate': False, 'transaction_id': tx_id})
     except ValueError as exc:
+        app.logger.warning("Transaction API update validation failed id=%s user=%s error=%s", tx_id, username, exc)
         return jsonify({'ok': False, 'error': str(exc)}), 400
     except Exception:
         app.logger.exception("Transaction API update failed id=%s", tx_id)
@@ -1497,7 +1661,7 @@ def edit_transaction(tx_id):
 @login_required
 def transactions():
     page = parse_positive_int(request.args.get('page'), default=1)
-    per = 10
+    per = TRANSACTION_PAGE_SIZE
     search = (request.args.get('q') or '').strip()
     sort_field = sanitize_sort(
         request.args.get('sort'),
@@ -1571,6 +1735,7 @@ def transactions():
         search=search,
         sort=sort_field,
         direction=sort_dir,
+        latest_transaction_id=get_latest_transaction_id(username=username),
     )
 
     return render_template('transactions.html', txns=paginate_obj)
@@ -1653,7 +1818,9 @@ def get_recurring_rules_for_page(username):
     return [
         doc_to_txn(doc)
         for doc in stream_with_timeout(
-            rec_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
+            rec_collection(username)
+            .order_by('start_datetime', direction=firestore.Query.DESCENDING)
+            .limit(RECURRING_RULE_TABLE_LIMIT)
         )
     ]
 
@@ -1661,7 +1828,9 @@ def get_recurring_balance_rules_for_page(username):
     return [
         doc_to_txn(doc)
         for doc in stream_with_timeout(
-            rec_balance_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
+            rec_balance_collection(username)
+            .order_by('start_datetime', direction=firestore.Query.DESCENDING)
+            .limit(RECURRING_RULE_TABLE_LIMIT)
         )
     ]
 
@@ -1734,7 +1903,8 @@ def recurring_edit(r_id):
         flash('Recurring rule updated.', 'success')
         return redirect(url_for('recurring'))
 
-    populate_recurring_form(form, recurring_rule)
+    if request.method == 'GET':
+        populate_recurring_form(form, recurring_rule)
     return render_template(
         'recurring.html',
         form=form,
@@ -1817,7 +1987,8 @@ def recurring_balance_edit(r_id):
         flash('Recurring balance updated.', 'success')
         return redirect(url_for('recurring'))
 
-    populate_recurring_balance_form(balance_form, recurring_rule)
+    if request.method == 'GET':
+        populate_recurring_balance_form(balance_form, recurring_rule)
     form = RecurringForm()
     apply_category_choices(form)
     return render_template(
@@ -1848,6 +2019,620 @@ def recurring_balance_delete(r_id):
     app.logger.info("Recurring balance rule deleted id=%s user=%s", r_id, username)
     flash('Recurring balance deleted.', 'info')
     return redirect(url_for('recurring'))
+
+
+def build_split_document_doc(form):
+    now = datetime.now(UTC)
+    return {
+        'title': validate_short_text(form.title.data, 'Split name', max_length=80),
+        'is_live': True,
+        'updated_at': now,
+    }
+
+def populate_split_document_form(form, split_doc):
+    form.title.data = split_doc.get('title') or ''
+
+def build_split_entry_doc(form):
+    entry_datetime = local_datetime_to_utc(
+        form.date.data or now_ist().date(),
+        form.time.data or now_ist().time(),
+    )
+    person = normalize_person_name(form.person.data)
+    if not person_exists(get_split_people(), person):
+        raise ValueError('Select a valid person.')
+    category = normalize_category_name(form.category.data) or 'Uncategorized'
+    if not category_exists(get_categories(), category):
+        raise ValueError('Select a valid category.')
+    return {
+        'person': person,
+        'amount': parse_money(form.amount.data),
+        'description': validate_short_text(form.description.data, 'Description'),
+        'category': category,
+        'timestamp': entry_datetime,
+        'updated_at': datetime.now(UTC),
+    }
+
+def build_split_entry_doc_from_payload(payload):
+    entry_date = parse_iso_date(payload.get('date'))
+    if entry_date is None:
+        raise ValueError('Date must use YYYY-MM-DD format.')
+    try:
+        entry_time = datetime.strptime(str(payload.get('time') or ''), '%H:%M').time()
+    except (TypeError, ValueError):
+        raise ValueError('Time must use HH:MM format.')
+
+    person = normalize_person_name(payload.get('person'))
+    if not person_exists(get_split_people(), person):
+        raise ValueError('Select a valid person.')
+
+    category = normalize_category_name(payload.get('category')) or 'Uncategorized'
+    if not category_exists(get_categories(), category):
+        raise ValueError('Select a valid category.')
+
+    return {
+        'person': person,
+        'amount': parse_money(payload.get('amount')),
+        'description': validate_short_text(payload.get('description'), 'Description'),
+        'category': category,
+        'timestamp': local_datetime_to_utc(entry_date, entry_time),
+        'updated_at': datetime.now(UTC),
+    }
+
+def populate_split_entry_form(form, entry):
+    entry_time = utc_to_ist(entry.get('timestamp')) or now_ist()
+    form.person.data = entry.get('person')
+    form.amount.data = entry.get('amount')
+    form.description.data = entry.get('description') or ''
+    form.category.data = entry.get('category') or 'Other'
+    form.date.data = entry_time.date()
+    form.time.data = entry_time.time().replace(second=0, microsecond=0, tzinfo=None)
+
+def get_split_documents(username=None):
+    if username is None:
+        username = require_user()
+    docs = stream_with_timeout(
+        splits_collection(username)
+        .order_by('updated_at', direction=firestore.Query.DESCENDING)
+        .limit(SPLIT_DOCUMENT_TABLE_LIMIT)
+    )
+    return [doc_to_txn(doc) for doc in docs]
+
+def get_live_split(username=None):
+    if username is None:
+        username = require_user()
+    docs = [doc_to_txn(doc) for doc in stream_with_timeout(
+        splits_collection(username).where('is_live', '==', True)
+    )]
+    docs.sort(key=lambda item: item.get('updated_at') or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return docs[0] if docs else None
+
+def set_live_split(split_id, username=None):
+    if username is None:
+        username = require_user()
+    now = datetime.now(UTC)
+    for doc in stream_with_timeout(splits_collection(username).where('is_live', '==', True)):
+        if str(doc.id) != str(split_id):
+            splits_collection(username).document(doc.id).set({'is_live': False, 'updated_at': now}, merge=True)
+    splits_collection(username).document(str(split_id)).set({'is_live': True, 'updated_at': now}, merge=True)
+
+def get_split_entries(split_id, username=None, limit=SPLIT_ENTRY_TABLE_LIMIT):
+    if username is None:
+        username = require_user()
+    docs = stream_with_timeout(
+        split_entries_collection(split_id, username)
+        .order_by('timestamp', direction=firestore.Query.DESCENDING)
+        .limit(limit)
+    )
+    return [doc_to_txn(doc) for doc in docs]
+
+def get_split_totals(split_id, username=None):
+    if username is None:
+        username = require_user()
+    totals = {}
+    docs = stream_with_timeout(split_entries_collection(split_id, username).order_by('person'))
+    for doc in docs:
+        entry = doc_to_txn(doc)
+        person = normalize_person_name(entry.get('person')) or 'Unknown'
+        totals[person] = round(totals.get(person, 0.0) + float(entry.get('amount', 0.0)), 2)
+    return totals
+
+def serialize_split_entry(entry):
+    return {
+        'id': entry.get('_id') or entry.get('id'),
+        'person': entry.get('person') or '',
+        'amount': round(float(entry.get('amount', 0.0)), 2),
+        'description': entry.get('description') or '',
+        'category': entry.get('category') or '',
+        'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
+    }
+
+def build_split_summary(split_doc, username=None):
+    if not split_doc:
+        return None
+    split_id = split_doc.get('_id') or split_doc.get('id')
+    totals = get_split_totals(split_id, username=username)
+    entries = get_split_entries(split_id, username=username, limit=SPLIT_ENTRY_TABLE_LIMIT)
+    return {
+        'id': split_id,
+        'title': split_doc.get('title') or 'Untitled split',
+        'is_live': bool(split_doc.get('is_live')),
+        'updated_at': format_ist(split_doc.get('updated_at')) if split_doc.get('updated_at') else None,
+        'totals': [{'person': person, 'amount': amount} for person, amount in sorted(totals.items())],
+        'entries': [serialize_split_entry(entry) for entry in entries],
+    }
+
+def create_split_entry(username, split_id, entry_doc, client_action_id=None):
+    action_id = clean_client_action_id(client_action_id)
+    if action_id:
+        completed, _ = get_completed_client_action(username, action_id)
+        if completed:
+            return completed.get('result', {}).get('entry_id'), True
+
+    split_ref = splits_collection(username).document(split_id)
+    if not split_ref.get().exists:
+        raise LookupError('Split not found.')
+
+    entry_doc = dict(entry_doc)
+    entry_doc['created_at'] = entry_doc.get('created_at') or datetime.now(UTC)
+    entry_ref = split_entries_collection(split_id, username).document(action_id) if action_id else split_entries_collection(split_id, username).document()
+    entry_ref.set(entry_doc, merge=True)
+    split_ref.set({'updated_at': datetime.now(UTC)}, merge=True)
+
+    if action_id:
+        save_completed_client_action(
+            username,
+            action_id,
+            'split_entry_create',
+            {'split_id': split_id, 'entry_id': entry_ref.id},
+        )
+
+    return entry_ref.id, False
+
+
+@app.route('/splits', methods=['GET', 'POST'])
+@login_required
+def splits():
+    username = require_user()
+    form = SplitDocumentForm()
+    if session.get('view_only'):
+        form = SplitDocumentForm(formdata=None)
+
+    if not session.get('view_only') and form.validate_on_submit():
+        split_doc = build_split_document_doc(form)
+        split_doc['created_at'] = datetime.now(UTC)
+        doc_ref = splits_collection(username).document()
+        doc_ref.set(split_doc)
+        if split_doc.get('is_live'):
+            set_live_split(doc_ref.id, username=username)
+        app.logger.info("Split created id=%s user=%s live=%s", doc_ref.id, username, split_doc.get('is_live'))
+        flash('Split created.', 'success')
+        return redirect(url_for('split_detail', split_id=doc_ref.id))
+    if not session.get('view_only') and request.method == 'POST':
+        app.logger.warning("Split create validation failed user=%s errors=%s", username, form.errors)
+
+    return render_template(
+        'splits.html',
+        form=form,
+        splits=get_split_documents(username=username),
+        live_split=get_live_split(username=username),
+        editing=False,
+        edit_id=None,
+    )
+
+
+@app.route('/splits/<string:split_id>')
+@login_required
+def split_detail(split_id):
+    username = require_user()
+    split_ref = splits_collection(username).document(split_id)
+    split_doc = split_ref.get()
+    if not split_doc.exists:
+        app.logger.warning("Split detail requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+
+    split_data = doc_to_txn(split_doc)
+    entry_form = SplitEntryForm()
+    apply_split_entry_choices(entry_form)
+    return render_template(
+        'split_detail.html',
+        split_doc=split_data,
+        entry_form=entry_form,
+        entries=get_split_entries(split_id, username=username),
+        totals=get_split_totals(split_id, username=username),
+        editing_entry=False,
+        entry_id=None,
+    )
+
+
+@app.route('/splits/edit/<string:split_id>', methods=['GET', 'POST'])
+@login_required
+def split_edit(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot edit splits")
+    username = require_user()
+    doc_ref = splits_collection(username).document(split_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        app.logger.warning("Split edit requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+
+    split_doc = doc_to_txn(doc)
+    form = SplitDocumentForm()
+    form.submit.label.text = 'Update Split'
+    if form.validate_on_submit():
+        update_doc = build_split_document_doc(form)
+        update_doc['is_live'] = bool(split_doc.get('is_live'))
+        update_doc['created_at'] = split_doc.get('created_at') or datetime.now(UTC)
+        doc_ref.set(update_doc, merge=True)
+        if update_doc.get('is_live'):
+            set_live_split(split_id, username=username)
+        app.logger.info("Split updated id=%s user=%s live=%s", split_id, username, update_doc.get('is_live'))
+        flash('Split updated.', 'success')
+        return redirect(url_for('splits'))
+    if request.method == 'POST':
+        app.logger.warning("Split update validation failed id=%s user=%s errors=%s", split_id, username, form.errors)
+
+    if request.method == 'GET':
+        populate_split_document_form(form, split_doc)
+    return render_template(
+        'splits.html',
+        form=form,
+        splits=get_split_documents(username=username),
+        live_split=get_live_split(username=username),
+        editing=True,
+        edit_id=split_id,
+    )
+
+
+@app.route('/splits/delete/<string:split_id>', methods=['POST'])
+@login_required
+def split_delete(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot delete splits")
+    username = require_user()
+    doc_ref = splits_collection(username).document(split_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        app.logger.warning("Split delete requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+
+    for entry in stream_with_timeout(split_entries_collection(split_id, username)):
+        split_entries_collection(split_id, username).document(entry.id).delete()
+    doc_ref.delete()
+    app.logger.info("Split deleted id=%s user=%s", split_id, username)
+    flash('Split deleted.', 'info')
+    return redirect(url_for('splits'))
+
+
+@app.route('/splits/<string:split_id>/live', methods=['POST'])
+@login_required
+def split_make_live(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot change live splits")
+    username = require_user()
+    doc = splits_collection(username).document(split_id).get()
+    if not doc.exists:
+        app.logger.warning("Split live update requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+    set_live_split(split_id, username=username)
+    app.logger.info("Split marked live id=%s user=%s", split_id, username)
+    flash('Live split updated.', 'success')
+    return redirect(url_for('splits'))
+
+
+@app.route('/splits/<string:split_id>/unlive', methods=['POST'])
+@login_required
+def split_remove_live(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot change live splits")
+    username = require_user()
+    doc_ref = splits_collection(username).document(split_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        app.logger.warning("Split unlive requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+    now = datetime.now(UTC)
+    doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
+    app.logger.info("Split live removed id=%s user=%s", split_id, username)
+    flash('Live split status removed.', 'info')
+    return redirect(url_for('splits'))
+
+
+@app.route('/splits/<string:split_id>/entries', methods=['POST'])
+@login_required
+def split_entry_add(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot add split entries")
+    username = require_user()
+    if not splits_collection(username).document(split_id).get().exists:
+        app.logger.warning("Split entry add requested for missing split id=%s user=%s", split_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+
+    form = SplitEntryForm()
+    apply_split_entry_choices(form)
+    if form.validate_on_submit():
+        try:
+            entry_doc = build_split_entry_doc(form)
+            create_split_entry(username, split_id, entry_doc)
+            app.logger.info("Split entry added split=%s user=%s person=%s amount=%.2f", split_id, username, entry_doc['person'], entry_doc['amount'])
+            flash('Split entry added.', 'success')
+        except ValueError as exc:
+            app.logger.warning("Split entry validation failed split=%s user=%s error=%s", split_id, username, exc)
+            flash(str(exc), 'warning')
+    else:
+        app.logger.warning("Split entry form validation failed split=%s user=%s errors=%s", split_id, username, form.errors)
+        flash('Check the split entry form.', 'warning')
+    return redirect(url_for('split_detail', split_id=split_id))
+
+
+@app.route('/splits/<string:split_id>/entries/<string:entry_id>/edit', methods=['GET', 'POST'])
+@login_required
+def split_entry_edit(split_id, entry_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot edit split entries")
+    username = require_user()
+    split_doc = splits_collection(username).document(split_id).get()
+    if not split_doc.exists:
+        app.logger.warning("Split entry edit requested for missing split id=%s entry=%s user=%s", split_id, entry_id, username)
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+    entry_ref = split_entries_collection(split_id, username).document(entry_id)
+    entry_doc = entry_ref.get()
+    if not entry_doc.exists:
+        app.logger.warning("Split entry edit requested for missing entry split=%s entry=%s user=%s", split_id, entry_id, username)
+        flash('Split entry not found.', 'warning')
+        return redirect(url_for('split_detail', split_id=split_id))
+
+    entry = doc_to_txn(entry_doc)
+    form = SplitEntryForm()
+    form.submit.label.text = 'Update Entry'
+    apply_split_entry_choices(form, person_include=entry.get('person'), category_include=entry.get('category'))
+    if form.validate_on_submit():
+        try:
+            update_doc = build_split_entry_doc(form)
+            update_doc['created_at'] = entry.get('created_at') or datetime.now(UTC)
+            entry_ref.set(update_doc, merge=True)
+            splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
+            app.logger.info("Split entry updated split=%s entry=%s user=%s", split_id, entry_id, username)
+            flash('Split entry updated.', 'success')
+            return redirect(url_for('split_detail', split_id=split_id))
+        except ValueError as exc:
+            app.logger.warning("Split entry update validation failed split=%s entry=%s user=%s error=%s", split_id, entry_id, username, exc)
+            flash(str(exc), 'warning')
+
+    if request.method == 'GET':
+        populate_split_entry_form(form, entry)
+    split_data = doc_to_txn(split_doc)
+    return render_template(
+        'split_detail.html',
+        split_doc=split_data,
+        entry_form=form,
+        entries=get_split_entries(split_id, username=username),
+        totals=get_split_totals(split_id, username=username),
+        editing_entry=True,
+        entry_id=entry_id,
+    )
+
+
+@app.route('/splits/<string:split_id>/entries/<string:entry_id>/delete', methods=['POST'])
+@login_required
+def split_entry_delete(split_id, entry_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot delete split entries")
+    username = require_user()
+    entry_ref = split_entries_collection(split_id, username).document(entry_id)
+    if not entry_ref.get().exists:
+        app.logger.warning("Split entry delete requested for missing entry split=%s entry=%s user=%s", split_id, entry_id, username)
+        flash('Split entry not found.', 'warning')
+        return redirect(url_for('split_detail', split_id=split_id))
+    entry_ref.delete()
+    splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
+    app.logger.info("Split entry deleted split=%s entry=%s user=%s", split_id, entry_id, username)
+    flash('Split entry deleted.', 'info')
+    return redirect(url_for('split_detail', split_id=split_id))
+
+
+@app.route('/api/splits/<string:split_id>/entries/create', methods=['POST'])
+@login_required
+def api_split_entry_create(split_id):
+    if not session.get('logged_in'):
+        abort(403, description="Full authentication required")
+
+    payload = request.get_json(silent=True) or {}
+    username = require_user()
+    try:
+        entry_doc = build_split_entry_doc_from_payload(payload)
+        entry_id, duplicate = create_split_entry(
+            username,
+            split_id,
+            entry_doc,
+            client_action_id=payload.get('client_action_id'),
+        )
+        app.logger.info(
+            "Split entry API create split=%s entry=%s user=%s duplicate=%s",
+            split_id,
+            entry_id,
+            username,
+            duplicate,
+        )
+        split_doc = doc_to_txn(splits_collection(username).document(split_id).get())
+        return jsonify({
+            'ok': True,
+            'duplicate': duplicate,
+            'split_id': split_id,
+            'entry_id': entry_id,
+            'split': build_split_summary(split_doc, username=username),
+        })
+    except LookupError as exc:
+        app.logger.warning("Split entry API create requested for missing split=%s user=%s", split_id, username)
+        return jsonify({'ok': False, 'error': str(exc)}), 404
+    except ValueError as exc:
+        app.logger.warning("Split entry API create validation failed split=%s user=%s error=%s", split_id, username, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    except Exception:
+        app.logger.exception("Split entry API create failed split=%s", split_id)
+        return jsonify({'ok': False, 'error': 'Failed to create split entry.'}), 500
+
+
+@app.route('/api/splits/<string:split_id>/entries/<string:entry_id>/update', methods=['POST'])
+@login_required
+def api_split_entry_update(split_id, entry_id):
+    if not session.get('logged_in'):
+        abort(403, description="Full authentication required")
+
+    payload = request.get_json(silent=True) or {}
+    action_id = clean_client_action_id(payload.get('client_action_id'))
+    username = require_user()
+    try:
+        if action_id:
+            completed, _ = get_completed_client_action(username, action_id)
+            if completed:
+                return jsonify({'ok': True, 'duplicate': True, 'split_id': split_id, 'entry_id': entry_id})
+
+        split_doc = splits_collection(username).document(split_id).get()
+        if not split_doc.exists:
+            app.logger.warning("Split entry API update requested for missing split=%s entry=%s user=%s", split_id, entry_id, username)
+            return jsonify({'ok': False, 'error': 'Split not found.'}), 404
+
+        entry_ref = split_entries_collection(split_id, username).document(entry_id)
+        entry_doc = entry_ref.get()
+        if not entry_doc.exists:
+            app.logger.warning("Split entry API update requested for missing entry split=%s entry=%s user=%s", split_id, entry_id, username)
+            return jsonify({'ok': False, 'error': 'Split entry not found.'}), 404
+
+        existing = doc_to_txn(entry_doc)
+        update_doc = build_split_entry_doc_from_payload(payload)
+        update_doc['created_at'] = existing.get('created_at') or datetime.now(UTC)
+        entry_ref.set(update_doc, merge=True)
+        splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
+
+        if action_id:
+            save_completed_client_action(
+                username,
+                action_id,
+                'split_entry_update',
+                {'split_id': split_id, 'entry_id': entry_id},
+            )
+
+        app.logger.info("Split entry API update split=%s entry=%s user=%s", split_id, entry_id, username)
+        return jsonify({
+            'ok': True,
+            'duplicate': False,
+            'split_id': split_id,
+            'entry_id': entry_id,
+            'split': build_split_summary(doc_to_txn(split_doc), username=username),
+        })
+    except ValueError as exc:
+        app.logger.warning("Split entry API update validation failed split=%s entry=%s user=%s error=%s", split_id, entry_id, username, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    except Exception:
+        app.logger.exception("Split entry API update failed split=%s entry=%s", split_id, entry_id)
+        return jsonify({'ok': False, 'error': 'Failed to update split entry.'}), 500
+
+
+@app.route('/api/splits/<string:split_id>/entries/<string:entry_id>/delete', methods=['POST'])
+@login_required
+def api_split_entry_delete(split_id, entry_id):
+    if not session.get('logged_in'):
+        abort(403, description="Full authentication required")
+
+    payload = request.get_json(silent=True) or {}
+    action_id = clean_client_action_id(payload.get('client_action_id'))
+    username = require_user()
+    try:
+        if action_id:
+            completed, _ = get_completed_client_action(username, action_id)
+            if completed:
+                return jsonify({'ok': True, 'duplicate': True, 'split_id': split_id, 'entry_id': entry_id})
+
+        split_doc = splits_collection(username).document(split_id).get()
+        if not split_doc.exists:
+            app.logger.warning("Split entry API delete requested for missing split=%s entry=%s user=%s", split_id, entry_id, username)
+            return jsonify({'ok': False, 'error': 'Split not found.'}), 404
+
+        entry_ref = split_entries_collection(split_id, username).document(entry_id)
+        if not entry_ref.get().exists:
+            app.logger.warning("Split entry API delete requested for missing entry split=%s entry=%s user=%s", split_id, entry_id, username)
+            return jsonify({'ok': False, 'error': 'Split entry not found.'}), 404
+
+        entry_ref.delete()
+        splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
+
+        if action_id:
+            save_completed_client_action(
+                username,
+                action_id,
+                'split_entry_delete',
+                {'split_id': split_id, 'entry_id': entry_id},
+            )
+
+        app.logger.info("Split entry API delete split=%s entry=%s user=%s", split_id, entry_id, username)
+        return jsonify({
+            'ok': True,
+            'duplicate': False,
+            'split_id': split_id,
+            'entry_id': entry_id,
+            'split': build_split_summary(doc_to_txn(split_doc), username=username),
+        })
+    except Exception:
+        app.logger.exception("Split entry API delete failed split=%s entry=%s", split_id, entry_id)
+        return jsonify({'ok': False, 'error': 'Failed to delete split entry.'}), 500
+
+
+@app.route('/api/splits', methods=['GET'])
+@login_required
+def api_splits_list():
+    username = require_user()
+    try:
+        splits = get_split_documents(username=username)
+        live_split = get_live_split(username=username)
+
+        # Serialize splits
+        serialized_splits = []
+        for s in splits:
+            sid = s.get('id') or s.get('_id')
+            serialized_splits.append({
+                'id': sid,
+                'title': s.get('title') or 'Untitled split',
+                'is_live': bool(s.get('is_live')),
+                'updated_at': format_ist(s.get('updated_at')) if s.get('updated_at') else None
+            })
+
+        serialized_live = None
+        if live_split:
+            serialized_live = {
+                'id': live_split.get('id') or live_split.get('_id'),
+                'title': live_split.get('title') or 'Untitled split',
+                'is_live': True,
+                'updated_at': format_ist(live_split.get('updated_at')) if live_split.get('updated_at') else None
+            }
+
+        app.logger.info("API Splits requested user=%s count=%d", username, len(serialized_splits))
+        return jsonify({
+            'ok': True,
+            'splits': serialized_splits,
+            'live_split': serialized_live
+        })
+    except Exception as e:
+        app.logger.exception("Failed to fetch splits list API for user=%s", username)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/splits/<string:split_id>/summary')
+@login_required
+def api_split_summary(split_id):
+    username = require_user()
+    split_doc = splits_collection(username).document(split_id).get()
+    if not split_doc.exists:
+        return jsonify({'ok': False, 'error': 'Split not found'}), 404
+    return jsonify({'ok': True, 'split': build_split_summary(doc_to_txn(split_doc), username=username)})
+
 
 @app.route('/analytics')
 @login_required
@@ -1938,6 +2723,25 @@ def copy_user_subcollection(old_user_ref, new_user_ref, name):
         new_user_ref.collection(name).document(doc.id).set(doc.to_dict() or {})
     return docs
 
+def copy_user_splits(old_user_ref, new_user_ref):
+    docs = list(old_user_ref.collection('splits').stream(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    ))
+    copied = []
+    for doc in docs:
+        new_split_ref = new_user_ref.collection('splits').document(doc.id)
+        new_split_ref.set(doc.to_dict() or {})
+        copied.append(('splits', doc.id))
+        entries = list(doc.reference.collection('entries').stream(
+            retry=None,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        ))
+        for entry in entries:
+            new_split_ref.collection('entries').document(entry.id).set(entry.to_dict() or {})
+            copied.append((f'splits/{doc.id}/entries', entry.id))
+    return copied
+
 
 def rename_user_account(old_username, new_username, user_data):
     old_ref = fs.collection('users').document(old_username)
@@ -1954,9 +2758,14 @@ def rename_user_account(old_username, new_username, user_data):
     for collection_name in ('transactions', 'recurring', 'recurring_balances', 'balances', CLIENT_ACTIONS_COL):
         for doc in copy_user_subcollection(old_ref, new_ref, collection_name):
             copied_docs.append((collection_name, doc.id))
+    copied_docs.extend(copy_user_splits(old_ref, new_ref))
 
     for collection_name, doc_id in copied_docs:
-        old_ref.collection(collection_name).document(doc_id).delete()
+        if collection_name.startswith('splits/') and collection_name.endswith('/entries'):
+            split_id = collection_name.split('/')[1]
+            old_ref.collection('splits').document(split_id).collection('entries').document(doc_id).delete()
+        else:
+            old_ref.collection(collection_name).document(doc_id).delete()
     old_ref.delete()
 
 
@@ -1967,9 +2776,11 @@ def management():
     form = ViewPasswordForm(prefix='view_password')
     reveal_form = ViewPasswordRevealForm(prefix='reveal_view_password')
     category_form = CategoryForm(prefix='category')
+    split_person_form = SplitPersonForm(prefix='split_person')
     username_form = ChangeUsernameForm(prefix='account_username')
     password_form = ChangePasswordForm(prefix='account_password')
     categories = get_categories()
+    split_people = get_split_people()
     action = request.form.get('action')
 
     if action == 'update_view_password' and form.validate_on_submit():
@@ -1994,6 +2805,8 @@ def management():
                 revealed_current_view_password=entered_password,
                 category_form=category_form,
                 categories=categories,
+                split_person_form=split_person_form,
+                split_people=split_people,
                 username_form=username_form,
                 password_form=password_form,
             )
@@ -2007,6 +2820,16 @@ def management():
             save_categories([*categories, new_category], updated_by=username)
             app.logger.info("Category added name=%s user=%s", new_category, username)
             flash('Category added successfully.', 'success')
+        return redirect(url_for('management'))
+
+    if action == 'add_split_person' and split_person_form.validate_on_submit():
+        new_person = normalize_person_name(split_person_form.name.data)
+        if person_exists(split_people, new_person):
+            flash('Person already exists.', 'warning')
+        else:
+            save_split_people([*split_people, new_person], updated_by=username)
+            app.logger.info("Split person added name=%s user=%s", new_person, username)
+            flash('Person added successfully.', 'success')
         return redirect(url_for('management'))
 
     if action == 'update_username' and username_form.validate_on_submit():
@@ -2059,6 +2882,7 @@ def management():
         'update_view_password',
         'reveal_view_password',
         'add_category',
+        'add_split_person',
         'update_username',
         'update_password',
     }:
@@ -2070,6 +2894,8 @@ def management():
         reveal_form=reveal_form,
         category_form=category_form,
         categories=categories,
+        split_person_form=split_person_form,
+        split_people=split_people,
         username_form=username_form,
         password_form=password_form,
     )
@@ -2123,6 +2949,61 @@ def management_category_delete(category_name):
     save_categories(remaining, updated_by=username)
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
+    return redirect(url_for('management'))
+
+
+@app.route('/management/split-people/edit/<path:person_name>', methods=['GET', 'POST'])
+@login_required
+def management_split_person_edit(person_name):
+    username = require_user()
+    original = normalize_person_name(person_name)
+    split_people = get_split_people()
+    split_person_form = SplitPersonForm(prefix='split_person')
+    split_person_form.submit.label.text = 'Update Person'
+
+    if not person_exists(split_people, original):
+        flash('Person not found.', 'warning')
+        return redirect(url_for('management'))
+
+    if split_person_form.validate_on_submit():
+        updated = normalize_person_name(split_person_form.name.data)
+        if person_key(updated) != person_key(original) and person_exists(split_people, updated):
+            flash('Person already exists.', 'warning')
+            return redirect(url_for('management_split_person_edit', person_name=original))
+
+        renamed = [updated if person_key(item) == person_key(original) else item for item in split_people]
+        save_split_people(renamed, updated_by=username)
+        app.logger.info("Split person renamed old=%s new=%s user=%s", original, updated, username)
+        flash('Person updated.', 'success')
+        return redirect(url_for('management'))
+
+    split_person_form.name.data = original
+    return render_management(
+        split_person_form=split_person_form,
+        split_people=split_people,
+        editing_split_person=original,
+    )
+
+
+@app.route('/management/split-people/delete/<path:person_name>', methods=['POST'])
+@login_required
+def management_split_person_delete(person_name):
+    username = require_user()
+    person = normalize_person_name(person_name)
+    split_people = get_split_people()
+    remaining = [item for item in split_people if person_key(item) != person_key(person)]
+
+    if len(remaining) == len(split_people):
+        flash('Person not found.', 'warning')
+        return redirect(url_for('management'))
+
+    if not remaining:
+        flash('At least one person is required.', 'warning')
+        return redirect(url_for('management'))
+
+    save_split_people(remaining, updated_by=username)
+    app.logger.info("Split person deleted name=%s user=%s", person, username)
+    flash('Person deleted.', 'info')
     return redirect(url_for('management'))
 
 
@@ -2680,7 +3561,11 @@ def balance():
 def api_balance_current():
     username = require_user()
     latest = get_latest_balance(username=username)
-    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20)
+    q = (
+        bal_collection(username)
+        .order_by('timestamp', direction=firestore.Query.DESCENDING)
+        .limit(BALANCE_HISTORY_TABLE_LIMIT)
+    )
     docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
     history = [{
         'id': d.get('_id'),
@@ -2781,6 +3666,7 @@ def api_balance_add():
         delta = parse_money(data.get('amount'), field_name='Amount', allow_negative=True)
         note = validate_optional_note(data.get('note'))
     except ValueError as exc:
+        app.logger.warning("Balance add validation failed user=%s error=%s", username, exc)
         return jsonify({"error": str(exc)}), 400
     now = datetime.now(UTC)
     latest = get_latest_balance(username=username)
@@ -2796,6 +3682,7 @@ def api_balance_add():
     bal_collection(username).add(doc)
     result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add", "duplicate": False}
     save_completed_client_action(username, action_id, 'balance_add', result)
+    app.logger.info("Balance add created user=%s delta=%.2f new_balance=%.2f", username, delta, new_bal)
     return jsonify(result)
 
 @app.route('/api/balance/sync', methods=['POST'])
@@ -2818,6 +3705,7 @@ def api_balance_sync():
         )
         note = validate_optional_note(data.get('note'))
     except ValueError as exc:
+        app.logger.warning("Balance sync validation failed user=%s error=%s", username, exc)
         return jsonify({"error": str(exc)}), 400
     now = datetime.now(UTC)
     latest = get_latest_balance(username=username)
@@ -2839,6 +3727,7 @@ def api_balance_sync():
         "duplicate": False,
     }
     save_completed_client_action(username, action_id, 'balance_sync', result)
+    app.logger.info("Balance sync created user=%s delta=%.2f new_balance=%.2f", username, delta, new_balance)
     return jsonify(result)
 
 @app.route('/api/balance/<string:entry_id>/update', methods=['POST'])
@@ -2852,11 +3741,13 @@ def api_balance_update(entry_id):
     doc_ref = bal_collection(username).document(entry_id)
     doc = doc_ref.get()
     if not doc.exists:
+        app.logger.warning("Balance update requested for missing entry id=%s user=%s", entry_id, username)
         return jsonify({"error": "Balance entry not found"}), 404
 
     entry = doc_to_txn(doc)
     entry_type = (entry.get('type') or '').lower()
     if entry_type not in {'add', 'sync'}:
+        app.logger.warning("Balance update blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
         return jsonify({"error": "Only manual add/sync balance entries can be edited."}), 400
 
     try:
@@ -2906,6 +3797,7 @@ def api_balance_update(entry_id):
             "shifted": shifted,
         })
     except ValueError as exc:
+        app.logger.warning("Balance update validation failed id=%s user=%s error=%s", entry_id, username, exc)
         return jsonify({"error": str(exc)}), 400
     except Exception:
         app.logger.exception("Failed to update balance entry id=%s user=%s", entry_id, username)

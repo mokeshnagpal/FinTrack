@@ -347,6 +347,16 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => setActiveView(tab.dataset.view));
   });
 
+  elements.periodSelect.addEventListener('change', refreshAnalytics);
+  elements.fromDate.addEventListener('change', () => {
+    elements.presets.forEach((item) => item.classList.remove('active'));
+    refreshAnalytics();
+  });
+  elements.toDate.addEventListener('change', () => {
+    elements.presets.forEach((item) => item.classList.remove('active'));
+    refreshAnalytics();
+  });
+
   elements.exportCsvBtn.addEventListener('click', () => {
     window.open(`/export/transactions_csv?${new URLSearchParams(buildParams()).toString()}`, '_blank');
   });

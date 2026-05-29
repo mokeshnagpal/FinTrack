@@ -1,6 +1,7 @@
 (function () {
   const snapshotKey = 'fintrak_cache_snapshot_v1';
   const cacheTtlSeconds = Number(window.FinTrakConstants?.browser_cache_ttl_seconds || 10 * 24 * 60 * 60);
+  const refreshTimeoutMs = Number(window.FinTrakConstants?.browser_cache_refresh_timeout_ms || 8000);
   const cacheTtlMs = cacheTtlSeconds * 1000;
 
   function readJSON(key, fallback = null) {
@@ -42,17 +43,24 @@
   }
 
   async function refreshSnapshot() {
-    const response = await fetch('/api/cache_snapshot', {
-      cache: 'no-store',
-      headers: { Accept: 'application/json' },
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) {
-      throw new Error(data.error || `Cache snapshot failed (${response.status})`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), refreshTimeoutMs);
+    try {
+      const response = await fetch('/api/cache_snapshot', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || `Cache snapshot failed (${response.status})`);
+      }
+      writeSnapshot(data);
+      window.dispatchEvent(new CustomEvent('fintrak:cachechange', { detail: data }));
+      return data;
+    } finally {
+      clearTimeout(timeout);
     }
-    writeSnapshot(data);
-    window.dispatchEvent(new CustomEvent('fintrak:cachechange', { detail: data }));
-    return data;
   }
 
   window.FinTrak = window.FinTrak || {};

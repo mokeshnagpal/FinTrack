@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block content %}
+{% if editing %}
+<div class="edit-backdrop"></div>
+{% endif %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Shared Bills</span>
+        <h1>Split Bills</h1>
+        {% if session.get('view_only') %}
+        <p>Open shared-spend bill splits and review live split totals in read-only mode.</p>
+        {% else %}
+        <p>Create trip or shared-spend bill splits, and open each split to manage entries.</p>
+        {% endif %}
+    </div>
+    {% if not session.get('view_only') %}
+    <div class="page-actions">
+        <a class="btn btn-outline-primary" href="{{ url_for('management') }}">People</a>
+    </div>
+    {% endif %}
+</section>
+
+<div class="row g-3">
+    {% if not session.get('view_only') %}
+    <div class="col-lg-4 col-md-12">
+        <div class="card form-card shadow-sm {% if editing %}editing-active{% endif %}">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
+                    <h4 class="page-title mb-0">{% if editing %}Edit Split{% else %}New Split{% endif %}</h4>
+                    {% if editing %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('splits') }}">Cancel</a>
+                    {% endif %}
+                </div>
+
+                <form method="post" action="{{ url_for('split_edit', split_id=edit_id) if editing else url_for('splits') }}" novalidate>
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ form.title.label(class="form-label") }}
+                        {{ form.title(class="form-control", maxlength="80", placeholder="Chennai trip") }}
+                        {% for err in form.title.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+                    <div class="form-text small text-muted mb-3">
+                        ✓ New split will be set as live by default
+                    </div>
+                    <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="{{ 'col-lg-8 col-md-12' if not session.get('view_only') else 'col-12' }}">
+        {% if live_split %}
+        <div class="split-live-strip mb-3">
+            <div>
+                <span class="kicker">Live split</span>
+                <strong>{{ live_split.title or 'Untitled split' }}</strong>
+            </div>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=live_split.id) }}">Open</a>
+        </div>
+        {% endif %}
+
+        <div class="table-shell table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Updated</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for split in splits %}
+                    {% set sid = split.id or split._id %}
+                    <tr class="{{ 'table-active' if editing and sid == edit_id else '' }}">
+                        <td data-label="Name">
+                            <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
+                            {% if split.is_live %}
+                            <span class="badge bg-success ms-2 shadow-sm" style="font-size: 0.72rem; padding: 0.18rem 0.45rem;">Live</span>
+                            {% endif %}
+                        </td>
+                        <td data-label="Updated">
+                            <small>
+                                {% if split.updated_at %}
+                                <span data-format-date>{{ split.updated_at|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </small>
+                        </td>
+                        <td data-label="Actions" class="text-end">
+                            <div class="table-actions">
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=sid) }}">Open</a>
+                                {% if not session.get('view_only') %}
+                                {% if not split.is_live %}
+                                <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-outline-success">Make Live</button>
+                                </form>
+                                {% else %}
+                                <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-outline-warning">Remove Live</button>
+                                </form>
+                                {% endif %}
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_edit', split_id=sid) }}">Edit</a>
+                                <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
+                                    data-confirm="Delete this split and its entries?" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-danger">Delete</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3" class="text-center text-muted py-4">No split documents found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    if (window.FinTrak?.cache?.refreshSnapshot) {
+        window.FinTrak.cache.refreshSnapshot().catch(() => {});
+    }
+</script>
+{% endblock %}

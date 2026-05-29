@@ -3,9 +3,9 @@
 {% block content %}
 <section class="page-header">
     <div>
-        <span class="kicker">Queue</span>
-        <h1>Sync Status</h1>
-        <p>Check pending transaction actions and Render server readiness.</p>
+        <span class="kicker">System Status</span>
+        <h1>Offline Sync Queue</h1>
+        <p>Check pending actions and Render server readiness.</p>
     </div>
     <div class="page-actions">
         <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">Transactions</a>
@@ -21,7 +21,7 @@
         </div>
         <div>
             <h2 id="syncHeadline">Checking sync queue</h2>
-            <p id="syncMessage">Looking for pending transaction actions in this browser.</p>
+            <p id="syncMessage">Looking for pending actions in this browser.</p>
         </div>
     </div>
 

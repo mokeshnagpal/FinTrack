@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask_wtf import FlaskForm
 from wtforms import (
+    BooleanField,
     DateField,
     DecimalField,
     PasswordField,
@@ -106,6 +107,21 @@ class CategoryForm(FlaskForm):
     submit = SubmitField('Add Category')
 
 
+class SplitPersonForm(FlaskForm):
+    name = StringField(
+        'Person name',
+        validators=[
+            DataRequired(message='Person name is required'),
+            Length(min=2, max=40, message='Use 2 to 40 characters'),
+            Regexp(
+                r'^[a-zA-Z0-9 &()./_-]+$',
+                message='Use letters, numbers, spaces, and simple punctuation only',
+            ),
+        ],
+    )
+    submit = SubmitField('Add Person')
+
+
 class ChangeUsernameForm(FlaskForm):
     username = StringField(
         'Username',
@@ -173,6 +189,50 @@ class TransactionForm(FlaskForm):
         validators=[DataRequired(message='Time is required')],
     )
     submit = SubmitField('Save')
+
+
+class SplitDocumentForm(FlaskForm):
+    title = StringField(
+        'Split name',
+        validators=[
+            InputRequired(message='Split name is required'),
+            Length(min=2, max=80, message='Use 2 to 80 characters'),
+        ],
+    )
+    submit = SubmitField('Save Split')
+
+
+class SplitEntryForm(FlaskForm):
+    person = SelectField('Person', choices=[])
+    amount = DecimalField(
+        'Amount (Rs.)',
+        places=2,
+        validators=[
+            InputRequired(message='Amount is required'),
+            NumberRange(min=0.01, max=999999999, message='Amount must be between 0.01 and 999999999'),
+        ],
+    )
+    description = StringField(
+        'What was it for?',
+        validators=[
+            InputRequired(message='Description required'),
+            Length(max=120, message='Use 120 characters or fewer'),
+        ],
+    )
+    category = SelectField('Category', choices=CATEGORY_CHOICES, default='Other')
+    date = DateField(
+        'Date (IST)',
+        default=today_ist,
+        format='%Y-%m-%d',
+        validators=[DataRequired(message='Date is required')],
+    )
+    time = TimeField(
+        'Time (IST)',
+        default=current_time_ist,
+        format='%H:%M',
+        validators=[DataRequired(message='Time is required')],
+    )
+    submit = SubmitField('Save Entry')
 
 
 class RecurringForm(FlaskForm):

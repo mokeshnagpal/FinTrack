@@ -2,9 +2,9 @@
 {% block content %}
 <section class="page-header">
     <div>
-        <span class="kicker">Cashflow</span>
-        <h1>Balance Overview</h1>
-        <p>Track current balance, adjustments, and recent entries.</p>
+        <span class="kicker">Overview</span>
+        <h1>Balance</h1>
+        <p>Track current cashflow balance, adjustments, history, and analytics.</p>
     </div>
     <div class="page-actions">
         <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">View Transactions</a>
@@ -61,13 +61,6 @@
                         maxlength="120">
                 </div>
 
-                <div>
-                    <label class="form-label small">Undo Entries</label>
-                    <button id="undoBtn" class="btn btn-outline-danger btn-sm w-100">Undo Last</button>
-                    <small class="text-muted d-block mt-2">
-                        Undo removes the most recent balance record. Use with caution.
-                    </small>
-                </div>
             </div>
         </div>
         {% else %}

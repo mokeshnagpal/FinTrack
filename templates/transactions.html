@@ -2,8 +2,8 @@
 {% block content %}
 <section class="page-header">
     <div>
-        <span class="kicker">History</span>
-        <h1>Transactions</h1>
+        <span class="kicker">Records</span>
+        <h1>Transaction History</h1>
         <p>Review recent spending activity.</p>
     </div>
     {% if not session.get('view_only') %}
@@ -51,13 +51,14 @@
         </thead>
         <tbody>
             {% for txn in txns.items %}
+            {% set can_manage_txn = not session.get('view_only') %}
             <tr>
-                <td><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
-                <td><small>{{ txn.description }}</small></td>
-                <td><small>{{ txn.category or 'Uncategorized' }}</small></td>
-                <td class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
-                <td class="text-end">
-                    {% if not session.get('view_only') %}
+                <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                <td data-label="Description"><small>{{ txn.description }}</small></td>
+                <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
+                <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
+                <td data-label="Actions" class="text-end">
+                    {% if can_manage_txn %}
                     <div class="table-actions">
                         <a class="btn btn-sm btn-outline-primary" href="{{ url_for('edit_transaction', tx_id=txn.id) }}">Edit</a>
                         <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
