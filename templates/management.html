@@ -169,54 +169,33 @@
         </div>
     </div>
 
-    <div class="management-panel management-panel-wide">
-        <div class="card shadow-sm h-100 management-card {% if editing_category %}editing-active{% endif %}">
+    <div class="management-panel management-panel-wide col-12">
+        <div class="card shadow-sm h-100 management-card">
             <div class="card-body">
-                <div class="management-section-heading">
+                <div class="management-section-heading d-flex justify-content-between align-items-center mb-3">
                     <div>
                         <span class="kicker">Transaction setup</span>
-                        <h5>Categories</h5>
+                        <h5 class="mb-0">Categories</h5>
                     </div>
+                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">Add Category</button>
                 </div>
-
-                <form method="post" class="management-form-box mb-3"
-                    action="{{ url_for('management_category_edit', category_name=editing_category) if editing_category else url_for('management') }}"
-                    novalidate>
-                    {{ category_form.hidden_tag() }}
-                    {% if not editing_category %}
-                    <input type="hidden" name="action" value="add_category">
-                    {% endif %}
-
-                    <div class="input-group">
-                        {{ category_form.name(class="form-control", placeholder="Category name", maxlength="40") }}
-                        <button class="btn btn-primary">{{ category_form.submit.label.text }}</button>
-                    </div>
-                    {% for err in category_form.name.errors %}
-                    <div class="text-danger small mt-1">{{ err }}</div>
-                    {% endfor %}
-                    {% if editing_category %}
-                    <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('management') }}">Cancel Edit</a>
-                    {% endif %}
-                </form>
 
                 <div class="table-shell table-responsive">
                     <table class="table table-sm align-middle mb-0">
                         <thead>
                             <tr>
-                                <th>Category</th>
+                                <th class="sortable-header">Category <span class="sort-icon">&#8597;</span></th>
                                 <th class="text-end">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for category in categories %}
+                            {% set cat_slug = category|replace(' ', '_')|replace('&', '_')|replace('(', '_')|replace(')', '_')|replace('.', '_')|replace('/', '_') %}
                             <tr>
                                 <td data-label="Category">{{ category }}</td>
                                 <td data-label="Actions" class="text-end">
                                     <div class="table-actions">
-                                        <a class="btn btn-sm btn-outline-primary"
-                                            href="{{ url_for('management_category_edit', category_name=category) }}">
-                                            Edit
-                                        </a>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editCategoryModal{{ cat_slug }}">Edit</button>
                                         <form method="post"
                                             action="{{ url_for('management_category_delete', category_name=category) }}"
                                             data-confirm="Delete this category from future dropdowns?"
@@ -227,6 +206,28 @@
                                                 Delete
                                             </button>
                                         </form>
+                                    </div>
+
+                                    <!-- Edit Category Modal -->
+                                    <div class="modal fade text-start" id="editCategoryModal{{ cat_slug }}" tabindex="-1" aria-labelledby="editCategoryModalLabel{{ cat_slug }}" aria-hidden="true">
+                                        <div class="modal-dialog modal-dialog-centered">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title" id="editCategoryModalLabel{{ cat_slug }}">Edit Category</h5>
+                                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <form method="post" action="{{ url_for('management_category_edit', category_name=category) }}" novalidate>
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <div class="mb-3">
+                                                            <label class="form-label" for="cat_name{{ cat_slug }}">Category name</label>
+                                                            <input class="form-control" id="cat_name{{ cat_slug }}" name="name" type="text" maxlength="40" placeholder="Category name" value="{{ category }}" required>
+                                                        </div>
+                                                        <button type="submit" class="btn btn-primary w-100">Update Category</button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </td>
                             </tr>
@@ -242,54 +243,33 @@
         </div>
     </div>
 
-    <div class="management-panel management-panel-wide">
-        <div class="card shadow-sm h-100 management-card {% if editing_split_person %}editing-active{% endif %}">
+    <div class="management-panel management-panel-wide col-12">
+        <div class="card shadow-sm h-100 management-card">
             <div class="card-body">
-                <div class="management-section-heading">
+                <div class="management-section-heading d-flex justify-content-between align-items-center mb-3">
                     <div>
                         <span class="kicker">Split setup</span>
-                        <h5>People</h5>
+                        <h5 class="mb-0">People</h5>
                     </div>
+                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addPersonModal">Add Person</button>
                 </div>
-
-                <form method="post" class="management-form-box mb-3"
-                    action="{{ url_for('management_split_person_edit', person_name=editing_split_person) if editing_split_person else url_for('management') }}"
-                    novalidate>
-                    {{ split_person_form.hidden_tag() }}
-                    {% if not editing_split_person %}
-                    <input type="hidden" name="action" value="add_split_person">
-                    {% endif %}
-
-                    <div class="input-group">
-                        {{ split_person_form.name(class="form-control", placeholder="Person name", maxlength="40") }}
-                        <button class="btn btn-primary">{{ split_person_form.submit.label.text }}</button>
-                    </div>
-                    {% for err in split_person_form.name.errors %}
-                    <div class="text-danger small mt-1">{{ err }}</div>
-                    {% endfor %}
-                    {% if editing_split_person %}
-                    <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('management') }}">Cancel Edit</a>
-                    {% endif %}
-                </form>
 
                 <div class="table-shell table-responsive">
                     <table class="table table-sm align-middle mb-0">
                         <thead>
                             <tr>
-                                <th>Person</th>
+                                <th class="sortable-header">Person <span class="sort-icon">&#8597;</span></th>
                                 <th class="text-end">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for person in split_people %}
+                            {% set pers_slug = person|replace(' ', '_')|replace('&', '_')|replace('(', '_')|replace(')', '_')|replace('.', '_')|replace('/', '_') %}
                             <tr>
                                 <td data-label="Person">{{ person }}</td>
                                 <td data-label="Actions" class="text-end">
                                     <div class="table-actions">
-                                        <a class="btn btn-sm btn-outline-primary"
-                                            href="{{ url_for('management_split_person_edit', person_name=person) }}">
-                                            Edit
-                                        </a>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editPersonModal{{ pers_slug }}">Edit</button>
                                         <form method="post"
                                             action="{{ url_for('management_split_person_delete', person_name=person) }}"
                                             data-confirm="Delete this person from future split dropdowns?"
@@ -301,6 +281,28 @@
                                             </button>
                                         </form>
                                     </div>
+
+                                    <!-- Edit Person Modal -->
+                                    <div class="modal fade text-start" id="editPersonModal{{ pers_slug }}" tabindex="-1" aria-labelledby="editPersonModalLabel{{ pers_slug }}" aria-hidden="true">
+                                        <div class="modal-dialog modal-dialog-centered">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title" id="editPersonModalLabel{{ pers_slug }}">Edit Person</h5>
+                                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <form method="post" action="{{ url_for('management_split_person_edit', person_name=person) }}" novalidate>
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <div class="mb-3">
+                                                            <label class="form-label" for="pers_name{{ pers_slug }}">Person name</label>
+                                                            <input class="form-control" id="pers_name{{ pers_slug }}" name="name" type="text" maxlength="40" placeholder="Person name" value="{{ person }}" required>
+                                                        </div>
+                                                        <button type="submit" class="btn btn-primary w-100">Update Person</button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                             {% else %}
@@ -311,6 +313,52 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Category Modal -->
+<div class="modal fade" id="addCategoryModal" tabindex="-1" aria-labelledby="addCategoryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addCategoryModalLabel">Add Category</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('management') }}" novalidate>
+                    {{ category_form.hidden_tag() }}
+                    <input type="hidden" name="action" value="add_category">
+                    <div class="mb-3">
+                        {{ category_form.name.label(class="form-label") }}
+                        {{ category_form.name(class="form-control", placeholder="Category name", maxlength="40") }}
+                    </div>
+                    <button class="btn btn-primary w-100">Save Category</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Person Modal -->
+<div class="modal fade" id="addPersonModal" tabindex="-1" aria-labelledby="addPersonModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addPersonModalLabel">Add Person</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('management') }}" novalidate>
+                    {{ split_person_form.hidden_tag() }}
+                    <input type="hidden" name="action" value="add_split_person">
+                    <div class="mb-3">
+                        {{ split_person_form.name.label(class="form-label") }}
+                        {{ split_person_form.name(class="form-control", placeholder="Person name", maxlength="40") }}
+                    </div>
+                    <button class="btn btn-primary w-100">Save Person</button>
+                </form>
             </div>
         </div>
     </div>

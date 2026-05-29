@@ -1469,6 +1469,9 @@ def populate_transaction_form(form, transaction):
 @app.route('/add', methods=['GET', 'POST'])
 @login_required
 def add():
+    if request.method == 'GET':
+        return redirect(url_for('transactions', add='true'))
+
     form = TransactionForm()
     apply_category_choices(form)
     if form.validate_on_submit():
@@ -1481,9 +1484,13 @@ def add():
         except Exception as e:
             app.logger.exception("Failed to add transaction: %s", e)
             flash('Failed to add transaction.', 'warning')
-
         return redirect(url_for('transactions'))
-    return render_template('add.html', form=form, editing=False, tx_id=None)
+
+    # Validation failed
+    for fieldName, errorMessages in form.errors.items():
+        for err in errorMessages:
+            flash(f"{form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('transactions', add='true'))
 
 @app.route('/api/transactions/create', methods=['POST'])
 @login_required
@@ -1654,8 +1661,14 @@ def edit_transaction(tx_id):
             flash('Failed to update transaction.', 'warning')
         return redirect(url_for('transactions'))
 
-    populate_transaction_form(form, existing_txn)
-    return render_template('add.html', form=form, editing=True, tx_id=tx_id)
+    if request.method == 'GET':
+        return redirect(url_for('transactions', edit='true', edit_id=tx_id))
+
+    # POST validation failed
+    for fieldName, errorMessages in form.errors.items():
+        for err in errorMessages:
+            flash(f"{form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('transactions', edit='true', edit_id=tx_id))
 
 @app.route('/transactions')
 @login_required
@@ -1738,7 +1751,10 @@ def transactions():
         latest_transaction_id=get_latest_transaction_id(username=username),
     )
 
-    return render_template('transactions.html', txns=paginate_obj)
+    form = TransactionForm()
+    apply_category_choices(form)
+
+    return render_template('transactions.html', txns=paginate_obj, form=form)
 
 @app.route('/delete/<string:tx_id>', methods=['POST'])
 @login_required
@@ -1841,20 +1857,25 @@ def recurring():
     form = RecurringForm()
     balance_form = RecurringBalanceForm()
     apply_category_choices(form)
-    if form.validate_on_submit():
-        username = require_user()
-        rule_doc = build_recurring_doc(form)
-        rec_collection(username).add(rule_doc)
-        app.logger.info(
-            "Recurring rule created for user=%s amount=%.2f frequency=%s start=%s",
-            username,
-            rule_doc['amount'],
-            rule_doc['frequency'],
-            rule_doc['start_datetime'].isoformat(),
-        )
-
-        flash('Recurring rule saved.', 'success')
-        return redirect(url_for('recurring'))
+    if request.method == 'POST':
+        if form.validate_on_submit():
+            username = require_user()
+            rule_doc = build_recurring_doc(form)
+            rec_collection(username).add(rule_doc)
+            app.logger.info(
+                "Recurring rule created for user=%s amount=%.2f frequency=%s start=%s",
+                username,
+                rule_doc['amount'],
+                rule_doc['frequency'],
+                rule_doc['start_datetime'].isoformat(),
+            )
+            flash('Recurring rule saved.', 'success')
+            return redirect(url_for('recurring'))
+        else:
+            for fieldName, errorMessages in form.errors.items():
+                for err in errorMessages:
+                    flash(f"{form[fieldName].label.text}: {err}", "danger")
+            return redirect(url_for('recurring', add='true'))
 
     username = require_user()
     return render_template(
@@ -1888,7 +1909,6 @@ def recurring_edit(r_id):
     form.submit.label.text = 'Update Recurring Rule'
 
     if form.validate_on_submit():
-        # Preserve last_applied so editing metadata does not replay past occurrences.
         update_doc = build_recurring_doc(form, last_applied=recurring_rule.get('last_applied'))
         doc_ref.update(update_doc)
         app.logger.info(
@@ -1904,18 +1924,13 @@ def recurring_edit(r_id):
         return redirect(url_for('recurring'))
 
     if request.method == 'GET':
-        populate_recurring_form(form, recurring_rule)
-    return render_template(
-        'recurring.html',
-        form=form,
-        balance_form=RecurringBalanceForm(),
-        recs=get_recurring_rules_for_page(username),
-        balance_recs=get_recurring_balance_rules_for_page(username),
-        editing=True,
-        edit_id=r_id,
-        balance_editing=False,
-        balance_edit_id=None,
-    )
+        return redirect(url_for('recurring', edit='true', edit_id=r_id))
+
+    # POST validation failed
+    for fieldName, errorMessages in form.errors.items():
+        for err in errorMessages:
+            flash(f"{form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('recurring', edit='true', edit_id=r_id))
 
 @app.route('/recurring/delete/<string:r_id>', methods=['POST'])
 @login_required
@@ -1950,11 +1965,12 @@ def recurring_balance():
             rule_doc['start_datetime'].isoformat(),
         )
         flash('Recurring balance saved.', 'success')
+        return redirect(url_for('recurring'))
     else:
-        for errors in form.errors.values():
-            for error in errors:
-                flash(error, 'warning')
-    return redirect(url_for('recurring'))
+        for fieldName, errorMessages in form.errors.items():
+            for err in errorMessages:
+                flash(f"{form[fieldName].label.text}: {err}", "danger")
+        return redirect(url_for('recurring', add_balance='true'))
 
 @app.route('/recurring/balance/edit/<string:r_id>', methods=['GET', 'POST'])
 @login_required
@@ -1988,20 +2004,13 @@ def recurring_balance_edit(r_id):
         return redirect(url_for('recurring'))
 
     if request.method == 'GET':
-        populate_recurring_balance_form(balance_form, recurring_rule)
-    form = RecurringForm()
-    apply_category_choices(form)
-    return render_template(
-        'recurring.html',
-        form=form,
-        balance_form=balance_form,
-        recs=get_recurring_rules_for_page(username),
-        balance_recs=get_recurring_balance_rules_for_page(username),
-        editing=False,
-        edit_id=None,
-        balance_editing=True,
-        balance_edit_id=r_id,
-    )
+        return redirect(url_for('recurring', edit_balance='true', edit_id=r_id))
+
+    # POST validation failed
+    for fieldName, errorMessages in balance_form.errors.items():
+        for err in errorMessages:
+            flash(f"{balance_form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('recurring', edit_balance='true', edit_id=r_id))
 
 @app.route('/recurring/balance/delete/<string:r_id>', methods=['POST'])
 @login_required
@@ -2197,18 +2206,23 @@ def splits():
     if session.get('view_only'):
         form = SplitDocumentForm(formdata=None)
 
-    if not session.get('view_only') and form.validate_on_submit():
-        split_doc = build_split_document_doc(form)
-        split_doc['created_at'] = datetime.now(UTC)
-        doc_ref = splits_collection(username).document()
-        doc_ref.set(split_doc)
-        if split_doc.get('is_live'):
-            set_live_split(doc_ref.id, username=username)
-        app.logger.info("Split created id=%s user=%s live=%s", doc_ref.id, username, split_doc.get('is_live'))
-        flash('Split created.', 'success')
-        return redirect(url_for('split_detail', split_id=doc_ref.id))
     if not session.get('view_only') and request.method == 'POST':
-        app.logger.warning("Split create validation failed user=%s errors=%s", username, form.errors)
+        if form.validate_on_submit():
+            split_doc = build_split_document_doc(form)
+            split_doc['created_at'] = datetime.now(UTC)
+            doc_ref = splits_collection(username).document()
+            doc_ref.set(split_doc)
+            if split_doc.get('is_live'):
+                set_live_split(doc_ref.id, username=username)
+            app.logger.info("Split created id=%s user=%s live=%s", doc_ref.id, username, split_doc.get('is_live'))
+            flash('Split created.', 'success')
+            return redirect(url_for('split_detail', split_id=doc_ref.id))
+        else:
+            app.logger.warning("Split create validation failed user=%s errors=%s", username, form.errors)
+            for fieldName, errorMessages in form.errors.items():
+                for err in errorMessages:
+                    flash(f"{form[fieldName].label.text}: {err}", "danger")
+            return redirect(url_for('splits', add='true'))
 
     return render_template(
         'splits.html',
@@ -2271,19 +2285,15 @@ def split_edit(split_id):
         app.logger.info("Split updated id=%s user=%s live=%s", split_id, username, update_doc.get('is_live'))
         flash('Split updated.', 'success')
         return redirect(url_for('splits'))
-    if request.method == 'POST':
-        app.logger.warning("Split update validation failed id=%s user=%s errors=%s", split_id, username, form.errors)
 
     if request.method == 'GET':
-        populate_split_document_form(form, split_doc)
-    return render_template(
-        'splits.html',
-        form=form,
-        splits=get_split_documents(username=username),
-        live_split=get_live_split(username=username),
-        editing=True,
-        edit_id=split_id,
-    )
+        return redirect(url_for('splits', edit='true', edit_id=split_id))
+
+    # POST validation failed
+    for fieldName, errorMessages in form.errors.items():
+        for err in errorMessages:
+            flash(f"{form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('splits', edit='true', edit_id=split_id))
 
 
 @app.route('/splits/delete/<string:split_id>', methods=['POST'])
@@ -2362,13 +2372,17 @@ def split_entry_add(split_id):
             create_split_entry(username, split_id, entry_doc)
             app.logger.info("Split entry added split=%s user=%s person=%s amount=%.2f", split_id, username, entry_doc['person'], entry_doc['amount'])
             flash('Split entry added.', 'success')
+            return redirect(url_for('split_detail', split_id=split_id))
         except ValueError as exc:
             app.logger.warning("Split entry validation failed split=%s user=%s error=%s", split_id, username, exc)
             flash(str(exc), 'warning')
+            return redirect(url_for('split_detail', split_id=split_id, add='true'))
     else:
         app.logger.warning("Split entry form validation failed split=%s user=%s errors=%s", split_id, username, form.errors)
-        flash('Check the split entry form.', 'warning')
-    return redirect(url_for('split_detail', split_id=split_id))
+        for fieldName, errorMessages in form.errors.items():
+            for err in errorMessages:
+                flash(f"{form[fieldName].label.text}: {err}", "danger")
+        return redirect(url_for('split_detail', split_id=split_id, add='true'))
 
 
 @app.route('/splits/<string:split_id>/entries/<string:entry_id>/edit', methods=['GET', 'POST'])
@@ -2405,19 +2419,16 @@ def split_entry_edit(split_id, entry_id):
         except ValueError as exc:
             app.logger.warning("Split entry update validation failed split=%s entry=%s user=%s error=%s", split_id, entry_id, username, exc)
             flash(str(exc), 'warning')
+            return redirect(url_for('split_detail', split_id=split_id, edit='true', edit_id=entry_id))
 
     if request.method == 'GET':
-        populate_split_entry_form(form, entry)
-    split_data = doc_to_txn(split_doc)
-    return render_template(
-        'split_detail.html',
-        split_doc=split_data,
-        entry_form=form,
-        entries=get_split_entries(split_id, username=username),
-        totals=get_split_totals(split_id, username=username),
-        editing_entry=True,
-        entry_id=entry_id,
-    )
+        return redirect(url_for('split_detail', split_id=split_id, edit='true', edit_id=entry_id))
+
+    # POST validation failed
+    for fieldName, errorMessages in form.errors.items():
+        for err in errorMessages:
+            flash(f"{form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('split_detail', split_id=split_id, edit='true', edit_id=entry_id))
 
 
 @app.route('/splits/<string:split_id>/entries/<string:entry_id>/delete', methods=['POST'])
@@ -2812,25 +2823,39 @@ def management():
             )
         flash('Current view-only password is incorrect.', 'danger')
 
-    if action == 'add_category' and category_form.validate_on_submit():
-        new_category = normalize_category_name(category_form.name.data)
-        if category_exists(categories, new_category):
-            flash('Category already exists.', 'warning')
+    if action == 'add_category' and request.method == 'POST':
+        if category_form.validate_on_submit():
+            new_category = normalize_category_name(category_form.name.data)
+            if category_exists(categories, new_category):
+                flash('Category already exists.', 'warning')
+                return redirect(url_for('management', add_category='true'))
+            else:
+                save_categories([*categories, new_category], updated_by=username)
+                app.logger.info("Category added name=%s user=%s", new_category, username)
+                flash('Category added successfully.', 'success')
+                return redirect(url_for('management'))
         else:
-            save_categories([*categories, new_category], updated_by=username)
-            app.logger.info("Category added name=%s user=%s", new_category, username)
-            flash('Category added successfully.', 'success')
-        return redirect(url_for('management'))
+            for fieldName, errorMessages in category_form.errors.items():
+                for err in errorMessages:
+                    flash(f"{category_form[fieldName].label.text}: {err}", "danger")
+            return redirect(url_for('management', add_category='true'))
 
-    if action == 'add_split_person' and split_person_form.validate_on_submit():
-        new_person = normalize_person_name(split_person_form.name.data)
-        if person_exists(split_people, new_person):
-            flash('Person already exists.', 'warning')
+    if action == 'add_split_person' and request.method == 'POST':
+        if split_person_form.validate_on_submit():
+            new_person = normalize_person_name(split_person_form.name.data)
+            if person_exists(split_people, new_person):
+                flash('Person already exists.', 'warning')
+                return redirect(url_for('management', add_person='true'))
+            else:
+                save_split_people([*split_people, new_person], updated_by=username)
+                app.logger.info("Split person added name=%s user=%s", new_person, username)
+                flash('Person added successfully.', 'success')
+                return redirect(url_for('management'))
         else:
-            save_split_people([*split_people, new_person], updated_by=username)
-            app.logger.info("Split person added name=%s user=%s", new_person, username)
-            flash('Person added successfully.', 'success')
-        return redirect(url_for('management'))
+            for fieldName, errorMessages in split_person_form.errors.items():
+                for err in errorMessages:
+                    flash(f"{split_person_form[fieldName].label.text}: {err}", "danger")
+            return redirect(url_for('management', add_person='true'))
 
     if action == 'update_username' and username_form.validate_on_submit():
         new_username = normalize_username(username_form.username.data)
@@ -2918,7 +2943,7 @@ def management_category_edit(category_name):
         updated = normalize_category_name(category_form.name.data)
         if category_key(updated) != category_key(original) and category_exists(categories, updated):
             flash('Category already exists.', 'warning')
-            return redirect(url_for('management_category_edit', category_name=original))
+            return redirect(url_for('management', edit='true', edit_id=original))
 
         renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
         save_categories(renamed, updated_by=username)
@@ -2926,8 +2951,14 @@ def management_category_edit(category_name):
         flash('Category updated.', 'success')
         return redirect(url_for('management'))
 
-    category_form.name.data = original
-    return render_management(category_form=category_form, categories=categories, editing_category=original)
+    if request.method == 'GET':
+        return redirect(url_for('management', edit='true', edit_id=original))
+
+    # POST validation failed
+    for fieldName, errorMessages in category_form.errors.items():
+        for err in errorMessages:
+            flash(f"{category_form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('management', edit='true', edit_id=original))
 
 
 @app.route('/management/categories/delete/<path:category_name>', methods=['POST'])
@@ -2969,7 +3000,7 @@ def management_split_person_edit(person_name):
         updated = normalize_person_name(split_person_form.name.data)
         if person_key(updated) != person_key(original) and person_exists(split_people, updated):
             flash('Person already exists.', 'warning')
-            return redirect(url_for('management_split_person_edit', person_name=original))
+            return redirect(url_for('management', edit_person='true', edit_id=original))
 
         renamed = [updated if person_key(item) == person_key(original) else item for item in split_people]
         save_split_people(renamed, updated_by=username)
@@ -2977,12 +3008,14 @@ def management_split_person_edit(person_name):
         flash('Person updated.', 'success')
         return redirect(url_for('management'))
 
-    split_person_form.name.data = original
-    return render_management(
-        split_person_form=split_person_form,
-        split_people=split_people,
-        editing_split_person=original,
-    )
+    if request.method == 'GET':
+        return redirect(url_for('management', edit_person='true', edit_id=original))
+
+    # POST validation failed
+    for fieldName, errorMessages in split_person_form.errors.items():
+        for err in errorMessages:
+            flash(f"{split_person_form[fieldName].label.text}: {err}", "danger")
+    return redirect(url_for('management', edit_person='true', edit_id=original))
 
 
 @app.route('/management/split-people/delete/<path:person_name>', methods=['POST'])

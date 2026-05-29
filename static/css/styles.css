@@ -1730,4 +1730,132 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
   to { opacity: 1; }
 }
 
+/* ---------------------------------
+   Global Sortable Headers
+   --------------------------------- */
+.sortable-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text) !important;
+  text-decoration: none;
+  font-weight: 600;
+  transition: color var(--transition);
+}
+.sortable-header:hover {
+  color: var(--primary) !important;
+}
+.sortable-header .sort-icon {
+  font-size: 0.85rem;
+  opacity: 0.4;
+  transition: opacity var(--transition);
+}
+.sortable-header:hover .sort-icon,
+.sortable-header.active .sort-icon {
+  opacity: 1;
+  color: var(--primary);
+}
+
+/* ---------------------------------
+   Premium Bootstrap Modal Customizations
+   --------------------------------- */
+.modal-content {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-md) !important;
+  color: var(--text) !important;
+}
+[data-theme="dark"] .modal-content {
+  background: var(--surface) !important;
+}
+.modal-header {
+  border-bottom: 1px solid var(--border) !important;
+  background: var(--g-primary) !important;
+  color: #fff !important;
+  border-top-left-radius: calc(var(--radius-lg) - 1px) !important;
+  border-top-right-radius: calc(var(--radius-lg) - 1px) !important;
+  padding: 1rem 1.5rem !important;
+}
+.modal-header .modal-title {
+  font-weight: 700;
+  font-family: var(--font-heading);
+}
+.modal-body {
+  padding: 1.75rem 1.5rem !important;
+}
+.modal-footer {
+  border-top: 1px solid var(--border) !important;
+  padding: 1rem 1.5rem !important;
+}
+[data-theme="dark"] .btn-close {
+  filter: invert(1) grayscale(100%) brightness(200%);
+}
+
+/* ---------------------------------
+   Slide-Over Drawer Mobile Navigation
+   --------------------------------- */
+@media (max-width: 991.98px) {
+  .navbar-collapse {
+    position: fixed !important;
+    top: 0 !important;
+    right: -280px !important;
+    width: 280px !important;
+    height: 100vh !important;
+    z-index: 1050 !important;
+    background: rgba(10, 19, 34, 0.96) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    box-shadow: -5px 0 30px rgba(0, 0, 0, 0.3) !important;
+    padding: 2.5rem 1.5rem 1.5rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    overflow-y: auto !important;
+  }
+  [data-theme="light"] .navbar-collapse {
+    background: rgba(255, 255, 255, 0.97) !important;
+    box-shadow: -5px 0 30px rgba(17, 24, 39, 0.1) !important;
+  }
+  .navbar-collapse.collapsing {
+    right: -280px !important;
+    height: 100vh !important;
+    transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  .navbar-collapse.show {
+    right: 0 !important;
+  }
+  .navbar-nav {
+    flex-direction: column !important;
+    gap: 0.5rem !important;
+    margin-bottom: 2rem !important;
+  }
+  .navbar .nav-link {
+    padding: 0.75rem 1rem !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+  }
+  .navbar-menu-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 1040;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+  .navbar-menu-backdrop.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+
 

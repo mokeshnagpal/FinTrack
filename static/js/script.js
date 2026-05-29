@@ -381,12 +381,224 @@
         });
     }
 
+    function initMobileNavbarDrawer() {
+        const navMain = document.getElementById('navMain');
+        if (!navMain) return;
+
+        let backdrop = document.querySelector('.navbar-menu-backdrop');
+        if (!backdrop) {
+            backdrop = document.createElement('div');
+            backdrop.className = 'navbar-menu-backdrop';
+            document.body.appendChild(backdrop);
+        }
+
+        navMain.addEventListener('show.bs.collapse', () => {
+            backdrop.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        });
+
+        navMain.addEventListener('hide.bs.collapse', () => {
+            backdrop.classList.remove('show');
+            document.body.style.overflow = '';
+        });
+
+        backdrop.addEventListener('click', () => {
+            const bsCollapse = bootstrap.Collapse.getInstance(navMain);
+            if (bsCollapse) {
+                bsCollapse.hide();
+            }
+        });
+
+        navMain.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', () => {
+                const bsCollapse = bootstrap.Collapse.getInstance(navMain);
+                if (bsCollapse) {
+                    bsCollapse.hide();
+                }
+            });
+        });
+    }
+
+    function initClientTableSorting() {
+        document.querySelectorAll('table:not(.server-sorted)').forEach(table => {
+            const headers = table.querySelectorAll('th.sortable-header');
+            if (headers.length === 0) return;
+
+            headers.forEach((header, index) => {
+                header.style.cursor = 'pointer';
+                
+                let iconSpan = header.querySelector('.sort-icon');
+                if (!iconSpan) {
+                    iconSpan = document.createElement('span');
+                    iconSpan.className = 'sort-icon';
+                    iconSpan.innerHTML = ' &#8597;';
+                    header.appendChild(iconSpan);
+                }
+
+                header.addEventListener('click', () => {
+                    const currentDir = header.getAttribute('data-dir') || 'none';
+                    const nextDir = currentDir === 'asc' ? 'desc' : 'asc';
+                    
+                    headers.forEach(h => {
+                        h.removeAttribute('data-dir');
+                        const hIcon = h.querySelector('.sort-icon');
+                        if (hIcon) hIcon.innerHTML = ' &#8597;';
+                        h.classList.remove('active');
+                    });
+
+                    header.setAttribute('data-dir', nextDir);
+                    header.classList.add('active');
+                    iconSpan.innerHTML = nextDir === 'asc' ? ' &uarr;' : ' &darr;';
+
+                    sortRows(table, index, nextDir);
+                });
+            });
+        });
+    }
+
+    function sortRows(table, colIndex, direction) {
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        if (rows.length <= 1 && (rows[0] && rows[0].querySelector('td[colspan]'))) return;
+
+        let isDate = true;
+        let isNum = true;
+        
+        const samples = rows.map(row => {
+            const td = row.children[colIndex];
+            if (!td) return '';
+            const dateEl = td.querySelector('[data-format-date], [datetime]');
+            if (dateEl) {
+                return dateEl.getAttribute('datetime') || dateEl.getAttribute('data-raw-date') || dateEl.textContent.trim();
+            }
+            return td.textContent.trim();
+        }).filter(val => val !== '');
+
+        if (samples.length === 0) return;
+
+        samples.forEach(val => {
+            const cleaned = val.replace(/[^\d.-]/g, '');
+            if (isNaN(parseFloat(cleaned)) || !isFinite(cleaned)) {
+                isNum = false;
+            }
+            const dateParts = parseDateParts(val);
+            if (!dateParts && isNaN(Date.parse(val))) {
+                isDate = false;
+            }
+        });
+
+        rows.sort((a, b) => {
+            let valA = getCellValue(a.children[colIndex]);
+            let valB = getCellValue(b.children[colIndex]);
+
+            if (isNum) {
+                const numA = parseFloat(valA.replace(/[^\d.-]/g, '')) || 0;
+                const numB = parseFloat(valB.replace(/[^\d.-]/g, '')) || 0;
+                return direction === 'asc' ? numA - numB : numB - numA;
+            } else if (isDate) {
+                const dateA = parseDateOrValue(valA);
+                const dateB = parseDateOrValue(valB);
+                return direction === 'asc' ? dateA - dateB : dateB - dateA;
+            } else {
+                return direction === 'asc' 
+                    ? valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' })
+                    : valB.localeCompare(valA, undefined, { numeric: true, sensitivity: 'base' });
+            }
+        });
+
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    function getCellValue(td) {
+        if (!td) return '';
+        const dateEl = td.querySelector('[data-format-date], [datetime]');
+        if (dateEl) {
+            return dateEl.getAttribute('datetime') || dateEl.getAttribute('data-raw-date') || dateEl.textContent.trim();
+        }
+        return td.textContent.trim();
+    }
+
+    function parseDateOrValue(val) {
+        const parts = parseDateParts(val);
+        if (parts) {
+            return new Date(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0);
+        }
+        const parsed = Date.parse(val);
+        return isNaN(parsed) ? new Date(0) : new Date(parsed);
+    }
+
+    function initQueryParamModals() {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('add') === 'true') {
+            const addModalEl = document.getElementById('newExpenseModal') || document.querySelector('[id*="addModal"], [id*="newSplitModal"], [id*="addCategoryModal"], [id*="addPersonModal"], [id*="addTransactionModal"]');
+            if (addModalEl && typeof bootstrap !== 'undefined') {
+                const modal = new bootstrap.Modal(addModalEl);
+                modal.show();
+            }
+        } else if (params.get('add_balance') === 'true') {
+            const addModalEl = document.getElementById('newBalanceModal');
+            if (addModalEl && typeof bootstrap !== 'undefined') {
+                const modal = new bootstrap.Modal(addModalEl);
+                modal.show();
+            }
+        } else if (params.get('add_category') === 'true') {
+            const addModalEl = document.getElementById('addCategoryModal');
+            if (addModalEl && typeof bootstrap !== 'undefined') {
+                const modal = new bootstrap.Modal(addModalEl);
+                modal.show();
+            }
+        } else if (params.get('add_person') === 'true') {
+            const addModalEl = document.getElementById('addPersonModal');
+            if (addModalEl && typeof bootstrap !== 'undefined') {
+                const modal = new bootstrap.Modal(addModalEl);
+                modal.show();
+            }
+        } else if (params.get('edit') === 'true') {
+            const editId = params.get('edit_id');
+            if (editId) {
+                const escapedId = editId.replace(/ /g, '_').replace(/&/g, '_').replace(/\(/g, '_').replace(/\)/g, '_').replace(/\./g, '_').replace(/\//g, '_');
+                const editModalEl = document.getElementById(`editTransactionModal${escapedId}`) 
+                    || document.getElementById(`editSplitModal${escapedId}`)
+                    || document.getElementById(`editEntryModal${escapedId}`)
+                    || document.getElementById(`editExpenseModal${escapedId}`)
+                    || document.getElementById(`editCategoryModal${escapedId}`);
+                if (editModalEl && typeof bootstrap !== 'undefined') {
+                    const modal = new bootstrap.Modal(editModalEl);
+                    modal.show();
+                }
+            }
+        } else if (params.get('edit_balance') === 'true') {
+            const editId = params.get('edit_id');
+            if (editId) {
+                const editModalEl = document.getElementById(`editBalanceModal${editId}`);
+                if (editModalEl && typeof bootstrap !== 'undefined') {
+                    const modal = new bootstrap.Modal(editModalEl);
+                    modal.show();
+                }
+            }
+        } else if (params.get('edit_person') === 'true') {
+            const editId = params.get('edit_id');
+            if (editId) {
+                const escapedId = editId.replace(/ /g, '_').replace(/&/g, '_').replace(/\(/g, '_').replace(/\)/g, '_').replace(/\./g, '_').replace(/\//g, '_');
+                const editModalEl = document.getElementById(`editPersonModal${escapedId}`);
+                if (editModalEl && typeof bootstrap !== 'undefined') {
+                    const modal = new bootstrap.Modal(editModalEl);
+                    modal.show();
+                }
+            }
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         formatDateElements();
         initCopyButtons();
         initConfirmForms();
         initPasswordToggles();
         initCategorySelects();
+        initMobileNavbarDrawer();
+        initClientTableSorting();
+        initQueryParamModals();
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltipTriggers.forEach((el) => new bootstrap.Tooltip(el));

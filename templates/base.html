@@ -47,7 +47,6 @@
                     {% else %}
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['add', 'edit_transaction'] else '' }}" href="{{ url_for('add') }}">Add Transaction</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Spend Analytics</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'] else '' }}" href="{{ url_for('recurring') }}">Recurring Bills</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['splits', 'split_detail', 'split_edit', 'split_entry_edit'] else '' }}" href="{{ url_for('splits') }}">Split Bills</a></li>

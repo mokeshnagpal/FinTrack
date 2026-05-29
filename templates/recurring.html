@@ -1,100 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
-{% if editing or balance_editing %}
-<div class="edit-backdrop"></div>
-{% endif %}
 <section class="page-header">
     <div>
         <span class="kicker">Schedules</span>
         <h1>Recurring Bills</h1>
         <p>Create, edit, and remove recurring expense rules and scheduled balance additions.</p>
     </div>
+    {% if not session.get('view_only') %}
+    <div class="page-actions d-flex gap-2">
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newExpenseModal">Set Expense Rule</button>
+        <button class="btn btn-outline-primary text-primary-hover" data-bs-toggle="modal" data-bs-target="#newBalanceModal">Set Balance Rule</button>
+    </div>
+    {% endif %}
 </section>
 
-<div class="row g-3 mb-4">
-    <div class="col-lg-5 col-md-12">
-        <div class="card form-card shadow-sm {% if editing %}editing-active{% endif %}">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
-                    <h4 class="page-title mb-0">
-                        {% if editing %}Edit Expense Rule{% else %}Set Expense Rule{% endif %}
-                    </h4>
-                    {% if editing %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('recurring') }}">Cancel</a>
-                    {% endif %}
-                </div>
-
-                <form method="post"
-                    action="{{ url_for('recurring_edit', r_id=edit_id) if editing else url_for('recurring') }}">
-                    {{ form.hidden_tag() }}
-
-                    <div class="mb-3">
-                        {{ form.amount.label(class="form-label") }}
-                        {{ form.amount(class="form-control", step="0.01", min="0.01") }}
-                        {% for err in form.amount.errors %}
-                        <div class="text-danger small">{{ err }}</div>
-                        {% endfor %}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ form.description.label(class="form-label") }}
-                        {{ form.description(class="form-control", maxlength="120") }}
-                        {% for err in form.description.errors %}
-                        <div class="text-danger small">{{ err }}</div>
-                        {% endfor %}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ form.category.label(class="form-label") }}
-                        {{ form.category(class="form-select") }}
-                    </div>
-
-                    <div class="row g-2">
-                        <div class="col-sm-6 mb-3">
-                            {{ form.start_date.label(class="form-label") }}
-                            {{ form.start_date(class="form-control", type="date") }}
-                            {% for err in form.start_date.errors %}
-                            <div class="text-danger small">{{ err }}</div>
-                            {% endfor %}
-                        </div>
-                        <div class="col-sm-6 mb-3">
-                            {{ form.start_time.label(class="form-label") }}
-                            {{ form.start_time(class="form-control", type="time") }}
-                            {% for err in form.start_time.errors %}
-                            <div class="text-danger small">{{ err }}</div>
-                            {% endfor %}
-                        </div>
-                    </div>
-
-                    <div class="mb-3">
-                        {{ form.frequency.label(class="form-label") }}
-                        {{ form.frequency(class="form-select") }}
-                    </div>
-
-                    <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-7 col-md-12">
-        <h4 class="page-title mb-2">Recurring Expenses</h4>
+<div class="row g-3 mb-5">
+    <div class="col-12">
+        <h4 class="page-title mb-3">Recurring Expenses</h4>
         <div class="table-shell table-responsive">
-            <table class="table table-sm align-middle">
+            <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Amount</th>
-                        <th>Description</th>
-                        <th>Start</th>
-                        <th>Frequency</th>
-                        <th>Last Applied</th>
+                        <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Description <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Last Applied <span class="sort-icon">&#8597;</span></th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for r in recs %}
                     {% set rid = (r.id or r._id) %}
-                    <tr class="{{ 'table-active' if editing and rid == edit_id else '' }}">
+                    <tr>
                         <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
                         <td data-label="Description"><small>{{ r.description }}</small></td>
                         <td data-label="Start">
@@ -119,14 +57,77 @@
                         <td data-label="Actions" class="text-end">
                             {% if rid %}
                             <div class="table-actions">
-                                <a class="btn btn-sm btn-outline-primary"
-                                    href="{{ url_for('recurring_edit', r_id=rid) }}">Edit</a>
+                                {% if not session.get('view_only') %}
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editExpenseModal{{ rid }}">Edit</button>
                                 <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
                                     data-confirm="Delete recurring expense rule?" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
+                                {% else %}
+                                <span class="badge">Read only</span>
+                                {% endif %}
                             </div>
+
+                            {% if not session.get('view_only') %}
+                            <!-- Edit Expense Rule Modal -->
+                            <div class="modal fade text-start" id="editExpenseModal{{ rid }}" tabindex="-1" aria-labelledby="editExpenseModalLabel{{ rid }}" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="editExpenseModalLabel{{ rid }}">Edit Expense Rule</h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="amount{{ rid }}">Amount (Rs.)</label>
+                                                    <input class="form-control" id="amount{{ rid }}" name="amount" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(r.amount) }}" required>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="description{{ rid }}">Description</label>
+                                                    <input class="form-control" id="description{{ rid }}" name="description" type="text" maxlength="120" value="{{ r.description }}" required>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="category{{ rid }}">Category</label>
+                                                    <select class="form-select" id="category{{ rid }}" name="category">
+                                                        {% for val, lbl in form.category.choices %}
+                                                        <option value="{{ val }}" {% if r.category == val %}selected{% endif %}>{{ lbl }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+
+                                                <div class="row g-2">
+                                                    <div class="col-sm-6 mb-3">
+                                                        <label class="form-label" for="start_date{{ rid }}">Start Date (IST)</label>
+                                                        <input class="form-control" id="start_date{{ rid }}" name="start_date" type="date" value="{{ r.start_datetime|ist_datetime('%Y-%m-%d') }}" required>
+                                                    </div>
+                                                    <div class="col-sm-6 mb-3">
+                                                        <label class="form-label" for="start_time{{ rid }}">Start Time (IST)</label>
+                                                        <input class="form-control" id="start_time{{ rid }}" name="start_time" type="time" value="{{ r.start_datetime|ist_datetime('%H:%M') }}" required>
+                                                    </div>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="frequency{{ rid }}">Frequency</label>
+                                                    <select class="form-select" id="frequency{{ rid }}" name="frequency">
+                                                        {% for val, lbl in form.frequency.choices %}
+                                                        <option value="{{ val }}" {% if r.frequency == val %}selected{% endif %}>{{ lbl }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+
+                                                <button type="submit" class="btn btn-primary w-100">Update Expense Rule</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                             {% else %}
                             <em class="small">missing id</em>
                             {% endif %}
@@ -144,84 +145,24 @@
 </div>
 
 <div class="row g-3">
-    <div class="col-lg-5 col-md-12">
-        <div class="card form-card shadow-sm {% if balance_editing %}editing-active{% endif %}">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
-                    <h4 class="page-title mb-0">
-                        {% if balance_editing %}Edit Balance Rule{% else %}Set Balance Rule{% endif %}
-                    </h4>
-                    {% if balance_editing %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('recurring') }}">Cancel</a>
-                    {% endif %}
-                </div>
-
-                <form method="post"
-                    action="{{ url_for('recurring_balance_edit', r_id=balance_edit_id) if balance_editing else url_for('recurring_balance') }}">
-                    {{ balance_form.hidden_tag() }}
-
-                    <div class="mb-3">
-                        {{ balance_form.amount.label(class="form-label") }}
-                        {{ balance_form.amount(class="form-control", step="0.01", min="0.01") }}
-                        {% for err in balance_form.amount.errors %}
-                        <div class="text-danger small">{{ err }}</div>
-                        {% endfor %}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ balance_form.description.label(class="form-label") }}
-                        {{ balance_form.description(class="form-control", maxlength="120") }}
-                        {% for err in balance_form.description.errors %}
-                        <div class="text-danger small">{{ err }}</div>
-                        {% endfor %}
-                    </div>
-
-                    <div class="row g-2">
-                        <div class="col-sm-6 mb-3">
-                            {{ balance_form.start_date.label(class="form-label") }}
-                            {{ balance_form.start_date(class="form-control", type="date") }}
-                            {% for err in balance_form.start_date.errors %}
-                            <div class="text-danger small">{{ err }}</div>
-                            {% endfor %}
-                        </div>
-                        <div class="col-sm-6 mb-3">
-                            {{ balance_form.start_time.label(class="form-label") }}
-                            {{ balance_form.start_time(class="form-control", type="time") }}
-                            {% for err in balance_form.start_time.errors %}
-                            <div class="text-danger small">{{ err }}</div>
-                            {% endfor %}
-                        </div>
-                    </div>
-
-                    <div class="mb-3">
-                        {{ balance_form.frequency.label(class="form-label") }}
-                        {{ balance_form.frequency(class="form-select") }}
-                    </div>
-
-                    <button class="btn btn-primary w-100">{{ balance_form.submit.label.text }}</button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-7 col-md-12">
-        <h4 class="page-title mb-2">Recurring Balance Adds</h4>
+    <div class="col-12">
+        <h4 class="page-title mb-3">Recurring Balance Adds</h4>
         <div class="table-shell table-responsive">
-            <table class="table table-sm align-middle">
+            <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Amount</th>
-                        <th>Note</th>
-                        <th>Start</th>
-                        <th>Frequency</th>
-                        <th>Last Added</th>
+                        <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Note <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Last Added <span class="sort-icon">&#8597;</span></th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for r in balance_recs %}
                     {% set rid = (r.id or r._id) %}
-                    <tr class="{{ 'table-active' if balance_editing and rid == balance_edit_id else '' }}">
+                    <tr>
                         <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
                         <td data-label="Note"><small>{{ r.description }}</small></td>
                         <td data-label="Start">
@@ -246,14 +187,68 @@
                         <td data-label="Actions" class="text-end">
                             {% if rid %}
                             <div class="table-actions">
-                                <a class="btn btn-sm btn-outline-primary"
-                                    href="{{ url_for('recurring_balance_edit', r_id=rid) }}">Edit</a>
+                                {% if not session.get('view_only') %}
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editBalanceModal{{ rid }}">Edit</button>
                                 <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
                                     data-confirm="Delete recurring balance rule?" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
+                                {% else %}
+                                <span class="badge">Read only</span>
+                                {% endif %}
                             </div>
+
+                            {% if not session.get('view_only') %}
+                            <!-- Edit Balance Rule Modal -->
+                            <div class="modal fade text-start" id="editBalanceModal{{ rid }}" tabindex="-1" aria-labelledby="editBalanceModalLabel{{ rid }}" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="editBalanceModalLabel{{ rid }}">Edit Balance Rule</h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="bal_amount{{ rid }}">Amount (Rs.)</label>
+                                                    <input class="form-control" id="bal_amount{{ rid }}" name="amount" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(r.amount) }}" required>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="bal_description{{ rid }}">Note</label>
+                                                    <input class="form-control" id="bal_description{{ rid }}" name="description" type="text" maxlength="120" value="{{ r.description }}" required>
+                                                </div>
+
+                                                <div class="row g-2">
+                                                    <div class="col-sm-6 mb-3">
+                                                        <label class="form-label" for="bal_start_date{{ rid }}">Start Date (IST)</label>
+                                                        <input class="form-control" id="bal_start_date{{ rid }}" name="start_date" type="date" value="{{ r.start_datetime|ist_datetime('%Y-%m-%d') }}" required>
+                                                    </div>
+                                                    <div class="col-sm-6 mb-3">
+                                                        <label class="form-label" for="bal_start_time{{ rid }}">Start Time (IST)</label>
+                                                        <input class="form-control" id="bal_start_time{{ rid }}" name="start_time" type="time" value="{{ r.start_datetime|ist_datetime('%H:%M') }}" required>
+                                                    </div>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="bal_frequency{{ rid }}">Frequency</label>
+                                                    <select class="form-select" id="bal_frequency{{ rid }}" name="frequency">
+                                                        {% for val, lbl in balance_form.frequency.choices %}
+                                                        <option value="{{ val }}" {% if r.frequency == val %}selected{% endif %}>{{ lbl }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+
+                                                <button type="submit" class="btn btn-primary w-100">Update Balance Rule</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                             {% else %}
                             <em class="small">missing id</em>
                             {% endif %}
@@ -269,4 +264,101 @@
         </div>
     </div>
 </div>
+
+<!-- New Expense Modal -->
+{% if not session.get('view_only') %}
+<div class="modal fade" id="newExpenseModal" tabindex="-1" aria-labelledby="newExpenseModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="newExpenseModalLabel">Set Expense Rule</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('recurring') }}">
+                    {{ form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ form.amount.label(class="form-label") }}
+                        {{ form.amount(class="form-control", step="0.01", min="0.01") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control", maxlength="120") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.category.label(class="form-label") }}
+                        {{ form.category(class="form-select") }}
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-sm-6 mb-3">
+                            {{ form.start_date.label(class="form-label") }}
+                            {{ form.start_date(class="form-control", type="date") }}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ form.start_time.label(class="form-label") }}
+                            {{ form.start_time(class="form-control", type="time") }}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.frequency.label(class="form-label") }}
+                        {{ form.frequency(class="form-select") }}
+                    </div>
+
+                    <button class="btn btn-primary w-100">Save Expense Rule</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- New Balance Modal -->
+<div class="modal fade" id="newBalanceModal" tabindex="-1" aria-labelledby="newBalanceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="newBalanceModalLabel">Set Balance Rule</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('recurring_balance') }}">
+                    {{ balance_form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ balance_form.amount.label(class="form-label") }}
+                        {{ balance_form.amount(class="form-control", step="0.01", min="0.01") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ balance_form.description.label(class="form-label") }}
+                        {{ balance_form.description(class="form-control", maxlength="120") }}
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-sm-6 mb-3">
+                            {{ balance_form.start_date.label(class="form-label") }}
+                            {{ balance_form.start_date(class="form-control", type="date") }}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ balance_form.start_time.label(class="form-label") }}
+                            {{ balance_form.start_time(class="form-control", type="time") }}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        {{ balance_form.frequency.label(class="form-label") }}
+                        {{ balance_form.frequency(class="form-select") }}
+                    </div>
+
+                    <button class="btn btn-primary w-100">Save Balance Rule</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

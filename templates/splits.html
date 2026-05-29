@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-{% if editing %}
-<div class="edit-backdrop"></div>
-{% endif %}
 <section class="page-header">
     <div>
         <span class="kicker">Shared Bills</span>
@@ -16,42 +13,13 @@
     {% if not session.get('view_only') %}
     <div class="page-actions">
         <a class="btn btn-outline-primary" href="{{ url_for('management') }}">People</a>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newSplitModal">New Split</button>
     </div>
     {% endif %}
 </section>
 
 <div class="row g-3">
-    {% if not session.get('view_only') %}
-    <div class="col-lg-4 col-md-12">
-        <div class="card form-card shadow-sm {% if editing %}editing-active{% endif %}">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
-                    <h4 class="page-title mb-0">{% if editing %}Edit Split{% else %}New Split{% endif %}</h4>
-                    {% if editing %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('splits') }}">Cancel</a>
-                    {% endif %}
-                </div>
-
-                <form method="post" action="{{ url_for('split_edit', split_id=edit_id) if editing else url_for('splits') }}" novalidate>
-                    {{ form.hidden_tag() }}
-                    <div class="mb-3">
-                        {{ form.title.label(class="form-label") }}
-                        {{ form.title(class="form-control", maxlength="80", placeholder="Chennai trip") }}
-                        {% for err in form.title.errors %}
-                        <div class="text-danger small">{{ err }}</div>
-                        {% endfor %}
-                    </div>
-                    <div class="form-text small text-muted mb-3">
-                        ✓ New split will be set as live by default
-                    </div>
-                    <button class="btn btn-primary w-100">{{ form.submit.label.text }}</button>
-                </form>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    <div class="{{ 'col-lg-8 col-md-12' if not session.get('view_only') else 'col-12' }}">
+    <div class="col-12">
         {% if live_split %}
         <div class="split-live-strip mb-3">
             <div>
@@ -66,15 +34,15 @@
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Name</th>
-                        <th>Updated</th>
+                        <th class="sortable-header">Name <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Updated <span class="sort-icon">&#8597;</span></th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for split in splits %}
                     {% set sid = split.id or split._id %}
-                    <tr class="{{ 'table-active' if editing and sid == edit_id else '' }}">
+                    <tr>
                         <td data-label="Name">
                             <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
                             {% if split.is_live %}
@@ -105,7 +73,7 @@
                                     <button class="btn btn-sm btn-outline-warning">Remove Live</button>
                                 </form>
                                 {% endif %}
-                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_edit', split_id=sid) }}">Edit</a>
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSplitModal{{ sid }}">Edit</button>
                                 <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
                                     data-confirm="Delete this split and its entries?" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -113,6 +81,30 @@
                                 </form>
                                 {% endif %}
                             </div>
+
+                            {% if not session.get('view_only') %}
+                            <!-- Edit Split Modal -->
+                            <div class="modal fade text-start" id="editSplitModal{{ sid }}" tabindex="-1" aria-labelledby="editSplitModalLabel{{ sid }}" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="editSplitModalLabel{{ sid }}">Edit Split</h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <form method="post" action="{{ url_for('split_edit', split_id=sid) }}" novalidate>
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="title{{ sid }}">Split name</label>
+                                                    <input class="form-control" id="title{{ sid }}" name="title" type="text" maxlength="80" placeholder="Chennai trip" value="{{ split.title }}" required>
+                                                </div>
+                                                <button type="submit" class="btn btn-primary w-100">Update Split</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                         </td>
                     </tr>
                     {% else %}
@@ -125,6 +117,33 @@
         </div>
     </div>
 </div>
+
+<!-- New Split Modal -->
+{% if not session.get('view_only') %}
+<div class="modal fade" id="newSplitModal" tabindex="-1" aria-labelledby="newSplitModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="newSplitModalLabel">New Split</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('splits') }}" novalidate>
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ form.title.label(class="form-label") }}
+                        {{ form.title(class="form-control", maxlength="80", placeholder="Chennai trip") }}
+                    </div>
+                    <div class="form-text small text-muted mb-3">
+                        ✓ New split will be set as live by default
+                    </div>
+                    <button class="btn btn-primary w-100">Save Split</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
