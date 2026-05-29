@@ -7,6 +7,8 @@
     syncMessage: document.getElementById('syncMessage'),
     renderState: document.getElementById('renderState'),
     renderMessage: document.getElementById('renderMessage'),
+    cacheState: document.getElementById('cacheState'),
+    cacheMessage: document.getElementById('cacheMessage'),
     lastCheck: document.getElementById('lastCheck'),
     queueBadge: document.getElementById('queueBadge'),
     pendingList: document.getElementById('pendingList'),
@@ -15,6 +17,7 @@
   let renderAwake = false;
   let lastRenderedPendingCount = null;
   let syncRequestedForCurrentWake = false;
+  let cacheRefreshRequestedForCurrentWake = false;
 
   function readQueue() {
     try {
@@ -101,29 +104,55 @@
     return queue;
   }
 
-  async function checkRender() {
+  function renderCacheRefreshStatus(cacheRefresh) {
+    if (!elements.cacheState || !elements.cacheMessage) return;
+
+    if (!cacheRefresh) {
+      elements.cacheState.textContent = 'Waiting';
+      elements.cacheMessage.textContent = 'Cache check will run when Render responds.';
+      return;
+    }
+
+    const updated = Array.isArray(cacheRefresh.updated) ? cacheRefresh.updated : [];
+    elements.cacheState.textContent = cacheRefresh.ok ? 'Updated' : 'Needs retry';
+    elements.cacheMessage.textContent = cacheRefresh.ok
+      ? `Checked ${updated.length || 0} cache area${updated.length === 1 ? '' : 's'} before sync.`
+      : 'Cache check could not finish. It will retry on the next status check.';
+  }
+
+  async function checkRender(allowCacheRefresh) {
     elements.renderState.textContent = 'Checking';
     elements.renderMessage.textContent = 'Checking whether the server is awake.';
+    if (allowCacheRefresh && !cacheRefreshRequestedForCurrentWake && elements.cacheState && elements.cacheMessage) {
+      elements.cacheState.textContent = 'Checking';
+      elements.cacheMessage.textContent = 'Checking Firestore updates before sync.';
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
     try {
-      const response = await fetch('/api/render_status', {
+      const shouldRefreshCache = allowCacheRefresh && !cacheRefreshRequestedForCurrentWake;
+      const statusUrl = shouldRefreshCache ? '/api/render_status?refresh_cache=1' : '/api/render_status';
+      const response = await fetch(statusUrl, {
         cache: 'no-store',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
       const data = await response.json().catch(() => ({}));
       renderAwake = response.ok && data.ok;
+      if (shouldRefreshCache) cacheRefreshRequestedForCurrentWake = renderAwake;
       elements.renderState.textContent = renderAwake ? 'Awake' : 'Not ready';
       elements.renderMessage.textContent = renderAwake
-        ? 'The server responded. Pending actions can be sent.'
+        ? 'The server responded. Cache check ran before pending actions.'
         : 'The server did not return a ready response yet.';
+      renderCacheRefreshStatus(data.cache_refresh);
     } catch (error) {
       renderAwake = false;
       elements.renderState.textContent = 'Sleeping';
       elements.renderMessage.textContent = 'Waiting for Render to respond.';
+      renderCacheRefreshStatus(null);
       syncRequestedForCurrentWake = false;
+      cacheRefreshRequestedForCurrentWake = false;
     } finally {
       clearTimeout(timeout);
       elements.lastCheck.textContent = formatTime();
@@ -132,7 +161,7 @@
 
   async function refresh(allowSync) {
     const queue = renderQueue();
-    await checkRender();
+    await checkRender(allowSync);
     renderQueue();
 
     if (allowSync && renderAwake && queue.length > 0 && !syncRequestedForCurrentWake && window.FinTrak?.syncPendingActions) {
@@ -144,6 +173,7 @@
 
   elements.syncNowBtn?.addEventListener('click', async () => {
     syncRequestedForCurrentWake = false;
+    cacheRefreshRequestedForCurrentWake = false;
     await refresh(true);
   });
 
@@ -153,6 +183,7 @@
 
   window.addEventListener('fintrak:queuechange', () => {
     syncRequestedForCurrentWake = false;
+    cacheRefreshRequestedForCurrentWake = false;
     renderQueue();
   });
 

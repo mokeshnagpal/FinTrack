@@ -63,10 +63,15 @@ The app uses a small in-process TTL cache for:
 
 - category settings
 - view-only password hash status
+- full-login user auth documents
 
-The cache reduces repeated Firestore reads during normal page loads. Category and view-only password updates refresh the relevant cached value immediately.
+The cache reduces repeated Firestore reads during normal page loads and login. Category, view-only password, username, and full-login password updates refresh the relevant cached value immediately. After the app is idle or the system wakes, the next request runs a cache check/update job first so fresh Firestore updates are loaded into cache before normal work continues.
+
+The Sync Status page also asks `/api/render_status` to run one cache check/update job when Render wakes, before pending browser actions are synced.
 
 Configure the TTL with `CACHE_TTL_SECONDS`. Default: `300`.
+Configure the login auth TTL with `AUTH_CACHE_TTL_SECONDS`. Default: `604800` seconds, which is 7 days.
+Configure the wake/idle refresh threshold with `WAKE_REFRESH_IDLE_SECONDS`. Default: `300` seconds.
 
 ## Local Setup
 
@@ -111,6 +116,8 @@ Open `http://127.0.0.1:5000`.
 - `SESSION_LIFETIME_HOURS`: login duration. Default: `12`.
 - `OCCURRENCE_WINDOW_SECS`: recurring duplicate-detection window. Default: `60`.
 - `CACHE_TTL_SECONDS`: settings/category cache duration. Default: `300`.
+- `AUTH_CACHE_TTL_SECONDS`: login auth cache duration. Default: `604800` seconds, which is 7 days.
+- `WAKE_REFRESH_IDLE_SECONDS`: run the cache check/update job on the first request after this many idle seconds. Default: `300`.
 - `FIRESTORE_TIMEOUT_SECONDS`: timeout for critical Firestore reads used during auth/settings rendering. Default: `8`.
 - `ENABLE_DEBUG_ROUTES`: optional recurring diagnostics route switch. Keep unset or `false` in production.
 - `LOG_LEVEL`: Flask log level. Default: `INFO`.

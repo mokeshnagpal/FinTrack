@@ -112,12 +112,16 @@ VIEW_ONLY_SETTINGS_DOC = "view_only_access"
 CATEGORIES_SETTINGS_DOC = "categories"
 CLIENT_ACTIONS_COL = "client_actions"
 CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', 300)
+AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', 7 * 24 * 60 * 60)
+WAKE_REFRESH_IDLE_SECONDS = env_int('WAKE_REFRESH_IDLE_SECONDS', 5 * 60)
 FIRESTORE_TIMEOUT_SECONDS = env_int('FIRESTORE_TIMEOUT_SECONDS', 8)
 ENABLE_DEBUG_ROUTES = env_bool('ENABLE_DEBUG_ROUTES', False)
 MAX_MONEY_AMOUNT = 999999999
 MAX_DESCRIPTION_LENGTH = 120
 MAX_NOTE_LENGTH = 120
 _APP_CACHE = {}
+_LAST_REQUEST_MONOTONIC = time.monotonic()
+_LAST_CACHE_REFRESH_RESULT = None
 
 # ---------------------------------------------------------------------
 # Flask App Configuration
@@ -181,17 +185,13 @@ def is_valid_user(username):
     if not username:
         return False
 
-    normalized_username = str(username).strip().lower()
+    normalized_username = normalize_username(username)
 
     if normalized_username in ADMIN_USERS:
         return True
 
     try:
-        doc = fs.collection('users').document(normalized_username).get(
-            retry=None,
-            timeout=FIRESTORE_TIMEOUT_SECONDS,
-        )
-        return doc.exists
+        return get_user_auth_doc(normalized_username).exists
     except Exception:
         app.logger.exception("is_valid_user: Firestore check failed for %s", normalized_username)
         return False
@@ -248,19 +248,148 @@ def cache_set(key, value, ttl=CACHE_TTL_SECONDS):
     _APP_CACHE[key] = (time.monotonic() + ttl, value)
     return value
 
+def cache_delete(key):
+    _APP_CACHE.pop(key, None)
+
+def cache_clear():
+    _APP_CACHE.clear()
+
+def load_view_only_password_hash_from_store():
+    doc = view_only_settings_ref().get(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    )
+    password_hash = ''
+    if doc.exists:
+        password_hash = (doc.to_dict() or {}).get('password_hash') or ''
+    return cache_set('view_only_password_hash', password_hash)
+
+def load_categories_from_store():
+    categories = []
+    doc = categories_settings_ref().get(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    )
+    if doc.exists:
+        raw_categories = (doc.to_dict() or {}).get('items') or []
+        categories = [normalize_category_name(item) for item in raw_categories]
+        categories = [item for item in categories if item]
+    if not categories:
+        categories = default_categories()
+    return list(cache_set('categories', categories))
+
+def load_user_auth_from_store(username):
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        return {'exists': False, 'data': {}}
+
+    doc = fs.collection('users').document(normalized_username).get(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    )
+    entry = {
+        'exists': doc.exists,
+        'data': (doc.to_dict() or {}) if doc.exists else {},
+    }
+    if entry['exists']:
+        cache_user_auth(normalized_username, entry['data'], exists=True)
+    else:
+        forget_user_auth_cache(normalized_username)
+    return freeze_user_auth_entry(entry)
+
+def refresh_cache_job(username=None, reason='manual'):
+    global _LAST_CACHE_REFRESH_RESULT
+
+    result = {
+        'ok': True,
+        'reason': reason,
+        'checked_at': datetime.now(UTC).isoformat(),
+        'updated': [],
+        'errors': [],
+    }
+
+    jobs = (
+        ('view_only_password', lambda: load_view_only_password_hash_from_store()),
+        ('categories', load_categories_from_store),
+    )
+    for name, loader in jobs:
+        try:
+            loader()
+            result['updated'].append(name)
+        except Exception as exc:
+            result['ok'] = False
+            result['errors'].append(name)
+            app.logger.exception("Cache refresh job failed for %s: %s", name, exc)
+
+    normalized_username = normalize_username(username)
+    if normalized_username:
+        try:
+            load_user_auth_from_store(normalized_username)
+            result['updated'].append('user_auth')
+        except Exception as exc:
+            result['ok'] = False
+            result['errors'].append('user_auth')
+            app.logger.exception("Cache refresh job failed for user_auth user=%s: %s", normalized_username, exc)
+
+    _LAST_CACHE_REFRESH_RESULT = dict(result)
+    return result
+
+def refresh_cache_after_wake():
+    global _LAST_REQUEST_MONOTONIC
+
+    now_monotonic = time.monotonic()
+    idle_seconds = now_monotonic - _LAST_REQUEST_MONOTONIC
+    _LAST_REQUEST_MONOTONIC = now_monotonic
+
+    if idle_seconds >= WAKE_REFRESH_IDLE_SECONDS:
+        result = refresh_cache_job(get_current_username(), reason='wake')
+        app.logger.info(
+            "Ran cache refresh job after %.1fs idle/wake pause ok=%s updated=%s",
+            idle_seconds,
+            result['ok'],
+            ','.join(result['updated']),
+        )
+
+def normalize_username(username):
+    return str(username or '').strip().lower()
+
+def auth_cache_key(username):
+    return f"user_auth:{normalize_username(username)}"
+
+def freeze_user_auth_entry(entry):
+    return {
+        'exists': bool(entry.get('exists')),
+        'data': dict(entry.get('data') or {}),
+    }
+
+def cache_user_auth(username, user_data=None, exists=True):
+    entry = {
+        'exists': bool(exists),
+        'data': dict(user_data or {}),
+    }
+    return cache_set(auth_cache_key(username), entry, AUTH_CACHE_TTL_SECONDS)
+
+def forget_user_auth_cache(username):
+    cache_delete(auth_cache_key(username))
+
+def get_user_auth_entry(username):
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        return {'exists': False, 'data': {}}
+
+    cached_entry = cache_get(auth_cache_key(normalized_username))
+    if cached_entry is not None:
+        return freeze_user_auth_entry(cached_entry)
+
+    return load_user_auth_from_store(normalized_username)
+
 def get_view_only_password_hash():
     cached_hash = cache_get('view_only_password_hash')
     if cached_hash is not None:
         return cached_hash
 
     try:
-        doc = view_only_settings_ref().get(
-            retry=None,
-            timeout=FIRESTORE_TIMEOUT_SECONDS,
-        )
-        if not doc.exists:
-            return cache_set('view_only_password_hash', '')
-        return cache_set('view_only_password_hash', (doc.to_dict() or {}).get('password_hash') or '')
+        return load_view_only_password_hash_from_store()
     except Exception:
         app.logger.exception("Failed to load view-only password settings")
         return None
@@ -286,16 +415,7 @@ def get_categories():
         return list(cached_categories)
 
     try:
-        doc = categories_settings_ref().get(
-            retry=None,
-            timeout=FIRESTORE_TIMEOUT_SECONDS,
-        )
-        if doc.exists:
-            raw_categories = (doc.to_dict() or {}).get('items') or []
-            categories = [normalize_category_name(item) for item in raw_categories]
-            categories = [item for item in categories if item]
-            if categories:
-                return list(cache_set('categories', categories))
+        return load_categories_from_store()
     except Exception:
         app.logger.exception("Failed to load category settings")
     return list(cache_set('categories', default_categories()))
@@ -667,6 +787,8 @@ def apply_recurring_up_to_today():
 # Run before every request (minimal safe throttling)
 @app.before_request
 def ensure_recurring_applied():
+    refresh_cache_after_wake()
+
     # Only try to run for logged-in full users
     if not session.get('logged_in'):
         return
@@ -681,6 +803,7 @@ def ensure_recurring_applied():
         '/static/',
         '/favicon.ico',
         '/export/',
+        '/sync-status',
         '/debug/recurring_run',
         '/api/',
         '/login',
@@ -815,10 +938,15 @@ def sync_status():
 @app.route('/api/render_status')
 @login_required
 def api_render_status():
+    cache_refresh = _LAST_CACHE_REFRESH_RESULT
+    if request.args.get('refresh_cache') == '1':
+        cache_refresh = refresh_cache_job(get_current_username(), reason='render_status')
+
     return jsonify({
         'ok': True,
         'awake': True,
         'checked_at': datetime.now(UTC).isoformat(),
+        'cache_refresh': cache_refresh,
     })
 
 def build_transaction_doc(form):
@@ -1393,18 +1521,19 @@ def verify_view_only_password(provided_pw):
 
 
 def get_user_auth_doc(username):
-    return fs.collection('users').document(username).get(
-        retry=None,
-        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    entry = get_user_auth_entry(username)
+    return SimpleNamespace(
+        exists=entry['exists'],
+        to_dict=lambda: dict(entry['data']),
     )
 
 
 def verify_current_user_password(username, password):
-    user_doc = get_user_auth_doc(username)
-    if not user_doc.exists:
+    user_entry = get_user_auth_entry(username)
+    if not user_entry['exists']:
         return False, None
 
-    user_data = user_doc.to_dict() or {}
+    user_data = user_entry['data']
     if not verify_password(user_data.get('password'), password):
         return False, user_data
 
@@ -1492,7 +1621,7 @@ def management():
         return redirect(url_for('management'))
 
     if action == 'update_username' and username_form.validate_on_submit():
-        new_username = username_form.username.data.strip().lower()
+        new_username = normalize_username(username_form.username.data)
         user_doc = get_user_auth_doc(username)
         user_data = user_doc.to_dict() if user_doc.exists else {}
         if new_username == username:
@@ -1500,6 +1629,8 @@ def management():
         else:
             try:
                 rename_user_account(username, new_username, user_data)
+                forget_user_auth_cache(username)
+                cache_user_auth(new_username, user_data, exists=True)
                 session['username'] = new_username
                 app.logger.info("Username changed old=%s new=%s", username, new_username)
                 flash('Username updated successfully.', 'success')
@@ -1515,14 +1646,22 @@ def management():
 
     if action == 'update_password' and password_form.validate_on_submit():
         current_password = password_form.current_password.data.strip()
-        password_ok, _ = verify_current_user_password(username, current_password)
+        password_ok, user_data = verify_current_user_password(username, current_password)
         if not password_ok:
             flash('Current password is incorrect.', 'danger')
         else:
+            password_hash = make_password_hash(password_form.password.data.strip())
+            updated_at = datetime.now(UTC)
             user_doc_ref(username).set({
-                'password': make_password_hash(password_form.password.data.strip()),
-                'updated_at': datetime.now(UTC),
+                'password': password_hash,
+                'updated_at': updated_at,
             }, merge=True)
+            user_data = dict(user_data or {})
+            user_data.update({
+                'password': password_hash,
+                'updated_at': updated_at,
+            })
+            cache_user_auth(username, user_data, exists=True)
             app.logger.info("Full-login password updated user=%s", username)
             flash('Password updated successfully.', 'success')
             return redirect(url_for('management'))
@@ -1616,7 +1755,7 @@ def login():
         session.pop('view_only', None)
 
     if form.validate_on_submit():
-        username = (form.username.data or '').strip().lower()
+        username = normalize_username(form.username.data)
         password = (form.password.data or '').strip()
 
         if not username:
@@ -1628,16 +1767,13 @@ def login():
             return render_template('login.html', form=form)
 
         try:
-            user_doc = fs.collection('users').document(username).get(
-                retry=None,
-                timeout=FIRESTORE_TIMEOUT_SECONDS,
-            )
-            if not user_doc.exists:
+            user_entry = get_user_auth_entry(username)
+            if not user_entry['exists']:
                 app.logger.warning("Login failed: user document not found for %s", username)
                 flash('Invalid credentials', 'danger')
                 return render_template('login.html', form=form)
 
-            user_data = user_doc.to_dict() or {}
+            user_data = user_entry['data']
             stored_pw = user_data.get('password')
             if stored_pw is None:
                 app.logger.warning("Login failed: user %s has no password set in Firestore", username)
@@ -1682,7 +1818,7 @@ def view_login():
         return redirect(url_for('index'))
 
     if form.validate_on_submit():
-        username = (form.username.data or '').strip().lower()
+        username = normalize_username(form.username.data)
         password = (form.password.data or '').strip()
 
         if not username:
@@ -1739,7 +1875,7 @@ def view_only_login():
         username = ''
     else:
         password = request.form.get('password') or (request.get_json(silent=True) or {}).get('password')
-        username = (request.form.get('username') or '').strip().lower()
+        username = normalize_username(request.form.get('username'))
 
     if isinstance(password, str):
         password = password.strip()
@@ -1782,16 +1918,13 @@ def view_only_login():
 
     # Otherwise try full login with Firestore password
     try:
-        user_doc = fs.collection('users').document(username).get(
-            retry=None,
-            timeout=FIRESTORE_TIMEOUT_SECONDS,
-        )
-        if not user_doc.exists:
+        user_entry = get_user_auth_entry(username)
+        if not user_entry['exists']:
             app.logger.warning("Login failed: user document not found for %s", username)
             flash('Invalid credentials', 'danger')
             return redirect(url_for('login'))
 
-        user_data = user_doc.to_dict() or {}
+        user_data = user_entry['data']
         stored_pw = user_data.get('password')
         if stored_pw is None:
             app.logger.warning("Login failed: user %s has no password set in Firestore", username)
