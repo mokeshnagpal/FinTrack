@@ -4,17 +4,17 @@
     <div>
         <span class="kicker">Automation</span>
         <h1>Recurring Rules</h1>
-        <p>Create, edit, and remove recurring expenses.</p>
+        <p>Create, edit, and remove recurring expenses and balance additions.</p>
     </div>
 </section>
 
-<div class="row g-3">
+<div class="row g-3 mb-4">
     <div class="col-lg-5 col-md-12">
         <div class="card form-card shadow-sm">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
                     <h4 class="page-title mb-0">
-                        {% if editing %}Edit Rule{% else %}Set Rule{% endif %}
+                        {% if editing %}Edit Expense Rule{% else %}Set Expense Rule{% endif %}
                     </h4>
                     {% if editing %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('recurring') }}">Cancel</a>
@@ -75,7 +75,7 @@
     </div>
 
     <div class="col-lg-7 col-md-12">
-        <h4 class="page-title mb-2">Active Rules</h4>
+        <h4 class="page-title mb-2">Recurring Expenses</h4>
         <div class="table-shell table-responsive">
             <table class="table table-sm align-middle">
                 <thead>
@@ -119,7 +119,7 @@
                                 <a class="btn btn-sm btn-outline-primary"
                                     href="{{ url_for('recurring_edit', r_id=rid) }}">Edit</a>
                                 <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
-                                    data-confirm="Delete recurring rule?" class="d-inline">
+                                    data-confirm="Delete recurring expense rule?" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
@@ -131,7 +131,134 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="text-center text-muted py-4">No recurring rules found.</td>
+                        <td colspan="6" class="text-center text-muted py-4">No recurring expense rules found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-5 col-md-12">
+        <div class="card form-card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
+                    <h4 class="page-title mb-0">
+                        {% if balance_editing %}Edit Balance Rule{% else %}Set Balance Rule{% endif %}
+                    </h4>
+                    {% if balance_editing %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('recurring') }}">Cancel</a>
+                    {% endif %}
+                </div>
+
+                <form method="post"
+                    action="{{ url_for('recurring_balance_edit', r_id=balance_edit_id) if balance_editing else url_for('recurring_balance') }}">
+                    {{ balance_form.hidden_tag() }}
+
+                    <div class="mb-3">
+                        {{ balance_form.amount.label(class="form-label") }}
+                        {{ balance_form.amount(class="form-control", step="0.01", min="0.01") }}
+                        {% for err in balance_form.amount.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ balance_form.description.label(class="form-label") }}
+                        {{ balance_form.description(class="form-control", maxlength="120") }}
+                        {% for err in balance_form.description.errors %}
+                        <div class="text-danger small">{{ err }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-sm-6 mb-3">
+                            {{ balance_form.start_date.label(class="form-label") }}
+                            {{ balance_form.start_date(class="form-control", type="date") }}
+                            {% for err in balance_form.start_date.errors %}
+                            <div class="text-danger small">{{ err }}</div>
+                            {% endfor %}
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            {{ balance_form.start_time.label(class="form-label") }}
+                            {{ balance_form.start_time(class="form-control", type="time") }}
+                            {% for err in balance_form.start_time.errors %}
+                            <div class="text-danger small">{{ err }}</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        {{ balance_form.frequency.label(class="form-label") }}
+                        {{ balance_form.frequency(class="form-select") }}
+                    </div>
+
+                    <button class="btn btn-success w-100">{{ balance_form.submit.label.text }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7 col-md-12">
+        <h4 class="page-title mb-2">Recurring Balance Adds</h4>
+        <div class="table-shell table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>Amount</th>
+                        <th>Note</th>
+                        <th>Start</th>
+                        <th>Frequency</th>
+                        <th>Last Added</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in balance_recs %}
+                    {% set rid = (r.id or r._id) %}
+                    <tr class="{{ 'table-active' if balance_editing and rid == balance_edit_id else '' }}">
+                        <td><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                        <td><small>{{ r.description }}</small></td>
+                        <td>
+                            <small>
+                                {% if r.start_datetime %}
+                                <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </small>
+                        </td>
+                        <td><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                        <td>
+                            <small>
+                                {% if r.last_applied %}
+                                <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </small>
+                        </td>
+                        <td class="text-end">
+                            {% if rid %}
+                            <div class="table-actions">
+                                <a class="btn btn-sm btn-outline-primary"
+                                    href="{{ url_for('recurring_balance_edit', r_id=rid) }}">Edit</a>
+                                <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
+                                    data-confirm="Delete recurring balance rule?" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-danger">Delete</button>
+                                </form>
+                            </div>
+                            {% else %}
+                            <em class="small">missing id</em>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">No recurring balance rules found.</td>
                     </tr>
                     {% endfor %}
                 </tbody>

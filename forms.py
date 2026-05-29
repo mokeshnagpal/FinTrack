@@ -210,3 +210,39 @@ class RecurringForm(FlaskForm):
         default='monthly',
     )
     submit = SubmitField('Save Recurring Rule')
+
+
+class RecurringBalanceForm(FlaskForm):
+    amount = DecimalField(
+        'Amount (Rs.)',
+        places=2,
+        validators=[
+            InputRequired(message='Amount required'),
+            NumberRange(min=0.01, max=999999999, message='Amount must be between 0.01 and 999999999'),
+        ],
+    )
+    description = StringField(
+        'Note',
+        validators=[
+            InputRequired(message='Note required'),
+            Length(max=120, message='Use 120 characters or fewer'),
+        ],
+    )
+    start_date = DateField(
+        'Start Date (IST)',
+        default=today_ist,
+        format='%Y-%m-%d',
+        validators=[DataRequired(message='Start date is required')],
+    )
+    start_time = TimeField(
+        'Start Time (IST)',
+        default=current_time_ist,
+        format='%H:%M',
+        validators=[DataRequired(message='Start time is required')],
+    )
+    frequency = SelectField(
+        'Frequency',
+        choices=[('monthly', 'Monthly'), ('yearly', 'Yearly')],
+        default='monthly',
+    )
+    submit = SubmitField('Save Recurring Balance')

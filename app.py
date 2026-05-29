@@ -12,6 +12,7 @@ from forms import (
     ChangePasswordForm,
     ChangeUsernameForm,
     LoginForm,
+    RecurringBalanceForm,
     RecurringForm,
     TransactionForm,
     ViewPasswordForm,
@@ -241,6 +242,9 @@ def tx_collection(username=None):
 
 def rec_collection(username=None):
     return user_doc_ref(username).collection('recurring')
+
+def rec_balance_collection(username=None):
+    return user_doc_ref(username).collection('recurring_balances')
 
 def bal_collection(username=None):
     return user_doc_ref(username).collection('balances')
@@ -669,6 +673,12 @@ def get_recurring_active(username=None):
     docs = stream_with_timeout(rec_collection(username).where('active', '==', True))
     return [doc_to_txn(doc) for doc in docs]
 
+def get_recurring_balance_active(username=None):
+    if username is None:
+        username = require_user()
+    docs = stream_with_timeout(rec_balance_collection(username).where('active', '==', True))
+    return [doc_to_txn(doc) for doc in docs]
+
 # ---------------------------------------------------------------------
 # Recurring runner and helpers (kept intact)
 # ---------------------------------------------------------------------
@@ -695,6 +705,33 @@ def occurrence_exists(recurring_doc_id, occ_dt, window_secs=OCCURRENCE_WINDOW_SE
     except Exception as e:
         app.logger.exception("occurrence_exists query failed for %s at %s: %s", recurring_doc_id, occ_dt, e)
         return False
+
+def recurring_balance_note(recurring_doc_id, occ_dt):
+    occ_key = ts_to_dt(occ_dt).isoformat() if occ_dt else ''
+    return f"recurring_balance:{recurring_doc_id}:{occ_key}"
+
+def recurring_balance_occurrence_exists(recurring_doc_id, occ_dt, username=None):
+    if username is None:
+        username = require_user()
+    occurrence_key = recurring_balance_note(recurring_doc_id, occ_dt)
+    try:
+        q = bal_collection(username).where('recurring_balance_key', '==', occurrence_key).limit(1)
+        return len(list(stream_with_timeout(q))) > 0
+    except Exception as e:
+        app.logger.exception("recurring_balance occurrence check failed for %s at %s: %s", recurring_doc_id, occ_dt, e)
+        return False
+
+def next_recurring_occurrence(start_dt, last_applied, frequency):
+    if last_applied is None:
+        return start_dt
+    if frequency == 'yearly':
+        return last_applied + relativedelta(years=1)
+    return last_applied + relativedelta(months=1)
+
+def advance_recurring_occurrence(current_occurrence, frequency):
+    if frequency == 'yearly':
+        return current_occurrence + relativedelta(years=1)
+    return current_occurrence + relativedelta(months=1)
 
 def apply_recurring_up_to_today():
     if not session.get('logged_in'):
@@ -821,6 +858,87 @@ def apply_recurring_up_to_today():
         if safety_counter >= 1000:
             app.logger.error("Safety break triggered for recurring %s after %d iterations", rec_id, safety_counter)
 
+def apply_recurring_balances_up_to_today():
+    if not session.get('logged_in'):
+        return
+
+    username = require_user()
+    now = datetime.now(UTC)
+    recs = get_recurring_balance_active(username=username) or []
+    app.logger.debug("apply_recurring_balances_up_to_today: %d active recurring balance rules for user %s", len(recs), username)
+
+    for r in recs:
+        rec_id = r.get('_id') or r.get('id')
+        if not rec_id:
+            app.logger.warning("Recurring balance rule without id: %s", r)
+            continue
+
+        try:
+            start_dt = ts_to_dt(r.get('start_datetime')) if r.get('start_datetime') else now
+        except Exception as e:
+            app.logger.exception("Failed parsing balance start_datetime for %s: %s", rec_id, e)
+            start_dt = now
+
+        try:
+            last_applied = ts_to_dt(r.get('last_applied')) if r.get('last_applied') else None
+        except Exception as e:
+            app.logger.exception("Failed parsing balance last_applied for %s: %s", rec_id, e)
+            last_applied = None
+
+        frequency = (r.get('frequency') or 'monthly').lower()
+        next_occ = next_recurring_occurrence(start_dt, last_applied, frequency)
+
+        if last_applied is None and next_occ > now:
+            app.logger.debug("Recurring balance %s next_occ (%s) in future, skipping", rec_id, next_occ)
+            continue
+
+        rec_ref = rec_balance_collection(username).document(rec_id)
+        safety_counter = 0
+
+        while next_occ <= now and safety_counter < 1000:
+            safety_counter += 1
+            if next_occ.tzinfo is None:
+                next_occ = next_occ.replace(tzinfo=UTC)
+
+            occurrence_key = recurring_balance_note(rec_id, next_occ)
+            if recurring_balance_occurrence_exists(rec_id, next_occ, username=username):
+                app.logger.debug("Recurring balance occurrence already exists for %s at %s", rec_id, next_occ)
+                try:
+                    rec_ref.update({'last_applied': next_occ})
+                except Exception as e:
+                    app.logger.exception("Failed to update recurring balance last_applied for %s: %s", rec_id, e)
+            else:
+                amount = float(r.get('amount', 0.0))
+                balance_note = (r.get('description') or '').strip()
+                try:
+                    append_balance(
+                        amount,
+                        'recurring_balance',
+                        note=balance_note,
+                        username=username,
+                        extra_fields={
+                            'recurring_balance_id': str(rec_id),
+                            'recurring_balance_key': occurrence_key,
+                            'scheduled_for': next_occ,
+                        },
+                    )
+                    rec_ref.update({'last_applied': next_occ})
+                    app.logger.info(
+                        "Applied recurring balance id=%s user=%s amount=%.2f at=%s",
+                        rec_id,
+                        username,
+                        amount,
+                        next_occ,
+                    )
+                except Exception as e:
+                    app.logger.exception("Failed applying recurring balance %s at %s: %s", rec_id, next_occ, e)
+                    break
+
+            next_occ = advance_recurring_occurrence(next_occ, frequency)
+
+        if safety_counter >= 1000:
+            app.logger.error("Safety break triggered for recurring balance %s after %d iterations", rec_id, safety_counter)
+
 # Run before every request (minimal safe throttling)
 @app.before_request
 def ensure_recurring_applied():
@@ -876,7 +994,12 @@ def ensure_recurring_applied():
         # apply_recurring_up_to_today already computes next occurrences relative to now
         apply_recurring_up_to_today()
     except Exception:
-        app.logger.exception("Error applying recurring rules (throttled runner)")
+        app.logger.exception("Error applying recurring expense rules (throttled runner)")
+
+    try:
+        apply_recurring_balances_up_to_today()
+    except Exception:
+        app.logger.exception("Error applying recurring balance rules (throttled runner)")
 
 # ---------------------------------------------------------------------
 # Debug route (diagnostic)
@@ -1504,11 +1627,50 @@ def populate_recurring_form(form, recurring_rule):
     form.category.data = recurring_rule.get('category') or 'Other'
     form.frequency.data = recurring_rule.get('frequency') or 'monthly'
 
+def build_recurring_balance_doc(form, last_applied=None):
+    start_dt = local_datetime_to_utc(form.start_date.data, form.start_time.data)
+    return {
+        'amount': parse_money(form.amount.data),
+        'description': validate_short_text(form.description.data, 'Note'),
+        'start_datetime': start_dt,
+        'frequency': form.frequency.data,
+        'last_applied': last_applied,
+        'active': True
+    }
+
+def populate_recurring_balance_form(form, recurring_rule):
+    start_dt = recurring_rule.get('start_datetime')
+    if start_dt:
+        local_start = utc_to_ist(start_dt)
+        form.start_date.data = local_start.date()
+        form.start_time.data = local_start.time().replace(second=0, microsecond=0, tzinfo=None)
+
+    form.amount.data = recurring_rule.get('amount')
+    form.description.data = recurring_rule.get('description') or ''
+    form.frequency.data = recurring_rule.get('frequency') or 'monthly'
+
+def get_recurring_rules_for_page(username):
+    return [
+        doc_to_txn(doc)
+        for doc in stream_with_timeout(
+            rec_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
+        )
+    ]
+
+def get_recurring_balance_rules_for_page(username):
+    return [
+        doc_to_txn(doc)
+        for doc in stream_with_timeout(
+            rec_balance_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
+        )
+    ]
+
 
 @app.route('/recurring', methods=['GET', 'POST'])
 @login_required
 def recurring():
     form = RecurringForm()
+    balance_form = RecurringBalanceForm()
     apply_category_choices(form)
     if form.validate_on_submit():
         username = require_user()
@@ -1526,13 +1688,17 @@ def recurring():
         return redirect(url_for('recurring'))
 
     username = require_user()
-    recs = [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            rec_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
-        )
-    ]
-    return render_template('recurring.html', form=form, recs=recs, editing=False, edit_id=None)
+    return render_template(
+        'recurring.html',
+        form=form,
+        balance_form=balance_form,
+        recs=get_recurring_rules_for_page(username),
+        balance_recs=get_recurring_balance_rules_for_page(username),
+        editing=False,
+        edit_id=None,
+        balance_editing=False,
+        balance_edit_id=None,
+    )
 
 
 @app.route('/recurring/edit/<string:r_id>', methods=['GET', 'POST'])
@@ -1569,13 +1735,17 @@ def recurring_edit(r_id):
         return redirect(url_for('recurring'))
 
     populate_recurring_form(form, recurring_rule)
-    recs = [
-        doc_to_txn(item)
-        for item in stream_with_timeout(
-            rec_collection(username).order_by('start_datetime', direction=firestore.Query.DESCENDING)
-        )
-    ]
-    return render_template('recurring.html', form=form, recs=recs, editing=True, edit_id=r_id)
+    return render_template(
+        'recurring.html',
+        form=form,
+        balance_form=RecurringBalanceForm(),
+        recs=get_recurring_rules_for_page(username),
+        balance_recs=get_recurring_balance_rules_for_page(username),
+        editing=True,
+        edit_id=r_id,
+        balance_editing=False,
+        balance_edit_id=None,
+    )
 
 @app.route('/recurring/delete/<string:r_id>', methods=['POST'])
 @login_required
@@ -1592,6 +1762,91 @@ def recurring_delete(r_id):
     doc_ref.delete()
     app.logger.info("Recurring rule deleted id=%s user=%s", r_id, username)
     flash('Recurring rule deleted.', 'info')
+    return redirect(url_for('recurring'))
+
+@app.route('/recurring/balance', methods=['POST'])
+@login_required
+def recurring_balance():
+    form = RecurringBalanceForm()
+    if form.validate_on_submit():
+        username = require_user()
+        rule_doc = build_recurring_balance_doc(form)
+        rec_balance_collection(username).add(rule_doc)
+        app.logger.info(
+            "Recurring balance rule created for user=%s amount=%.2f frequency=%s start=%s",
+            username,
+            rule_doc['amount'],
+            rule_doc['frequency'],
+            rule_doc['start_datetime'].isoformat(),
+        )
+        flash('Recurring balance saved.', 'success')
+    else:
+        for errors in form.errors.values():
+            for error in errors:
+                flash(error, 'warning')
+    return redirect(url_for('recurring'))
+
+@app.route('/recurring/balance/edit/<string:r_id>', methods=['GET', 'POST'])
+@login_required
+def recurring_balance_edit(r_id):
+    username = require_user()
+    doc_ref = rec_balance_collection(username).document(r_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        app.logger.warning("Recurring balance edit requested for missing rule id=%s user=%s", r_id, username)
+        flash('Recurring balance rule not found.', 'warning')
+        return redirect(url_for('recurring'))
+
+    recurring_rule = doc_to_txn(doc)
+    balance_form = RecurringBalanceForm()
+    balance_form.submit.label.text = 'Update Recurring Balance'
+
+    if balance_form.validate_on_submit():
+        update_doc = build_recurring_balance_doc(balance_form, last_applied=recurring_rule.get('last_applied'))
+        doc_ref.update(update_doc)
+        app.logger.info(
+            "Recurring balance rule updated id=%s user=%s amount=%.2f frequency=%s start=%s last_applied_preserved=%s",
+            r_id,
+            username,
+            update_doc['amount'],
+            update_doc['frequency'],
+            update_doc['start_datetime'].isoformat(),
+            bool(update_doc.get('last_applied')),
+        )
+        flash('Recurring balance updated.', 'success')
+        return redirect(url_for('recurring'))
+
+    populate_recurring_balance_form(balance_form, recurring_rule)
+    form = RecurringForm()
+    apply_category_choices(form)
+    return render_template(
+        'recurring.html',
+        form=form,
+        balance_form=balance_form,
+        recs=get_recurring_rules_for_page(username),
+        balance_recs=get_recurring_balance_rules_for_page(username),
+        editing=False,
+        edit_id=None,
+        balance_editing=True,
+        balance_edit_id=r_id,
+    )
+
+@app.route('/recurring/balance/delete/<string:r_id>', methods=['POST'])
+@login_required
+def recurring_balance_delete(r_id):
+    username = require_user()
+    doc_ref = rec_balance_collection(username).document(r_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        app.logger.warning("Recurring balance delete requested for missing rule id=%s user=%s", r_id, username)
+        flash('Recurring balance rule not found.', 'warning')
+        return redirect(url_for('recurring'))
+
+    doc_ref.delete()
+    app.logger.info("Recurring balance rule deleted id=%s user=%s", r_id, username)
+    flash('Recurring balance deleted.', 'info')
     return redirect(url_for('recurring'))
 
 @app.route('/analytics')
@@ -1696,7 +1951,7 @@ def rename_user_account(old_username, new_username, user_data):
     new_ref.set(new_data, merge=True)
 
     copied_docs = []
-    for collection_name in ('transactions', 'recurring', 'balances', CLIENT_ACTIONS_COL):
+    for collection_name in ('transactions', 'recurring', 'recurring_balances', 'balances', CLIENT_ACTIONS_COL):
         for doc in copy_user_subcollection(old_ref, new_ref, collection_name):
             copied_docs.append((collection_name, doc.id))
 
@@ -2379,7 +2634,7 @@ def shift_balance_entries_after(timestamp, delta, username=None):
         count += 1
     return count
 
-def append_balance(delta, type_, note='', username=None):
+def append_balance(delta, type_, note='', username=None, extra_fields=None):
     if username is None:
         username = require_user()
     try:
@@ -2399,6 +2654,8 @@ def append_balance(delta, type_, note='', username=None):
         'note': (note or '')[:1024],
         'timestamp': datetime.now(UTC)
     }
+    if extra_fields:
+        doc.update(extra_fields)
     try:
         add_res = bal_collection(username).add(doc)
         if isinstance(add_res, tuple) and len(add_res) >= 1:

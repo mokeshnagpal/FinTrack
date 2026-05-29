@@ -47,7 +47,7 @@
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['add', 'edit_transaction'] else '' }}" href="{{ url_for('add') }}">Add</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'sync_status' else '' }}" href="{{ url_for('sync_status') }}">Sync <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span></a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit'] else '' }}" href="{{ url_for('recurring') }}">Recurring</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'] else '' }}" href="{{ url_for('recurring') }}">Recurring</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Analytics</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['management', 'management_category_delete', 'management_category_edit'] else '' }}" href="{{ url_for('management') }}">Management</a></li>
