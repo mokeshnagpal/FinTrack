@@ -274,8 +274,17 @@ async function refreshAnalytics() {
     }
   } catch (error) {
     console.error('analytics render failed', error);
-    setStatus(error.message, 'danger');
-    elements.insightsArea.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
+    if (snapshot?.transactions?.length) {
+      destroyCharts();
+      updateSummary({});
+      renderTransactions(snapshot.transactions || []);
+      setStatus('Showing cached recent transactions. Full analytics will load when the service wakes.', 'warning');
+      elements.insightsArea.innerHTML = '<p>Full analytics and graphs need fresh server data.</p>';
+    } else {
+      setStatus(error.message, 'danger');
+      elements.insightsArea.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    }
   } finally {
     elements.applyBtn.disabled = false;
   }

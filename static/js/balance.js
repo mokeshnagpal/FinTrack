@@ -114,9 +114,18 @@ async function renderChart(period = 'daily', canvasEl) {
   try {
     response = await fetchJSON('/api/balance_series', { period, count: 30 });
   } catch (error) {
+    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
+    if (snapshot?.balance?.history?.length) {
+      const cachedHistory = [...snapshot.balance.history].reverse();
+      response = {
+        labels: cachedHistory.map((entry) => entry.timestamp || ''),
+        values: cachedHistory.map((entry) => Number(entry.balance || 0)),
+      };
+    } else {
     console.error('chart fetch failed', error);
     showToast('Failed to load chart', 'warning', error.message);
     return;
+    }
   }
 
   if (typeof Chart === 'undefined') {
@@ -144,12 +153,25 @@ async function renderChart(period = 'daily', canvasEl) {
 }
 
 async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
-  const data = await fetchJSON('/api/balance_current');
+  let data;
+  let offline = false;
+  try {
+    data = await fetchJSON('/api/balance_current');
+    if (window.FinTrak?.cache?.refreshSnapshot) {
+      window.FinTrak.cache.refreshSnapshot().catch(() => {});
+    }
+  } catch (error) {
+    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
+    if (!snapshot?.balance) throw error;
+    data = snapshot.balance;
+    offline = true;
+  }
   const current = data.current || { balance: 0.0, timestamp: null };
 
   if (currentBalanceEl) currentBalanceEl.innerText = formatNumber(current.balance);
   if (balanceTimestampEl) {
-    balanceTimestampEl.innerText = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
+    const label = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
+    balanceTimestampEl.innerText = offline ? `${label} (cached)` : label;
   }
 
   if (!historyBody) return;
@@ -325,7 +347,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
       } catch (error) {
         console.error('add failed', error);
-        showToast('Add failed', 'danger', error.message);
+        if (window.FinTrak?.enqueueOfflineAction) {
+          window.FinTrak.enqueueOfflineAction('balance_add', { amount, note: addNote ? addNote.value || '' : '' });
+          showToast('Add saved locally', 'success', 'It will sync when the service wakes.');
+          addAmount.value = '';
+          if (addNote) addNote.value = '';
+        } else {
+          showToast('Add failed', 'danger', error.message);
+        }
       }
     });
   }
@@ -360,7 +389,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
       } catch (error) {
         console.error('sync failed', error);
-        showToast('Sync failed', 'danger', error.message);
+        if (window.FinTrak?.enqueueOfflineAction) {
+          window.FinTrak.enqueueOfflineAction('balance_sync', { balance, note: syncNote ? syncNote.value || '' : '' });
+          showToast('Sync saved locally', 'success', 'It will sync when the service wakes.');
+          syncAmount.value = '';
+          if (syncNote) syncNote.value = '';
+        } else {
+          showToast('Sync failed', 'danger', error.message);
+        }
       }
     });
   }

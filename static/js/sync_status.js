@@ -18,6 +18,7 @@
   let lastRenderedPendingCount = null;
   let syncRequestedForCurrentWake = false;
   let cacheRefreshRequestedForCurrentWake = false;
+  const pollMs = Number(window.FinTrakConstants?.sync_status_poll_seconds || 12) * 1000;
 
   function readQueue() {
     try {
@@ -146,6 +147,11 @@
         ? 'The server responded. Cache check ran before pending actions.'
         : 'The server did not return a ready response yet.';
       renderCacheRefreshStatus(data.cache_refresh);
+      if (renderAwake && window.FinTrak?.cache?.refreshSnapshot) {
+        await window.FinTrak.cache.refreshSnapshot().catch((error) => {
+          console.warn('browser cache snapshot refresh failed', error);
+        });
+      }
     } catch (error) {
       renderAwake = false;
       elements.renderState.textContent = 'Sleeping';
@@ -167,6 +173,11 @@
     if (allowSync && renderAwake && queue.length > 0 && !syncRequestedForCurrentWake && window.FinTrak?.syncPendingActions) {
       syncRequestedForCurrentWake = true;
       await window.FinTrak.syncPendingActions({ quiet: true });
+      if (window.FinTrak?.cache?.refreshSnapshot) {
+        await window.FinTrak.cache.refreshSnapshot().catch((error) => {
+          console.warn('browser cache snapshot refresh failed after sync', error);
+        });
+      }
       renderQueue();
     }
   }
@@ -190,6 +201,6 @@
   document.addEventListener('DOMContentLoaded', () => {
     renderQueue();
     refresh(true);
-    setInterval(() => refresh(true), 12000);
+    setInterval(() => refresh(true), pollMs);
   });
 }());

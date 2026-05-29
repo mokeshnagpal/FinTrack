@@ -124,6 +124,13 @@
     return '/api/transactions/create';
   }
 
+  function endpointForActionType(type) {
+    if (type === 'balance_add') return '/api/balance/add';
+    if (type === 'balance_sync') return '/api/balance/sync';
+    if (type === 'balance_update') return '/api/balance/update_queued';
+    return '';
+  }
+
   function payloadFor(form, queueType) {
     if (queueType === 'transaction-delete') {
       return {};
@@ -135,6 +142,21 @@
     const queue = readQueue();
     queue.push(action);
     writeQueue(queue);
+  }
+
+  function enqueueAction(type, payload, endpoint = '') {
+    const action = {
+      type,
+      endpoint: endpoint || endpointForActionType(type),
+      payload: {
+        ...(payload || {}),
+        client_action_id: payload?.client_action_id || actionId(),
+      },
+      created_at: new Date().toISOString(),
+    };
+    enqueue(action);
+    syncQueue({ quiet: true });
+    return action;
   }
 
   async function postAction(action) {
@@ -188,6 +210,12 @@
 
     writeQueue(remaining);
     syncing = false;
+
+    if (synced > 0 && window.FinTrak?.cache?.refreshSnapshot) {
+      window.FinTrak.cache.refreshSnapshot().catch((error) => {
+        console.warn('browser cache snapshot refresh failed after queued sync', error);
+      });
+    }
 
     if (!options.quiet && synced > 0) {
       notify(`${synced} pending transaction${synced === 1 ? '' : 's'} synced.`, 'success');
@@ -259,4 +287,5 @@
   window.FinTrak.syncPendingActions = syncQueue;
   window.FinTrak.pendingActionsCount = () => readQueue().length;
   window.FinTrak.readPendingActions = () => readQueue();
+  window.FinTrak.enqueueOfflineAction = enqueueAction;
 }());

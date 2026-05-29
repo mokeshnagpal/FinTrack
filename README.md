@@ -69,6 +69,10 @@ The cache reduces repeated Firestore reads during normal page loads and login. C
 
 The Sync Status page also asks `/api/render_status` to run one cache check/update job when Render wakes, before pending browser actions are synced.
 
+The login and view-only login pages show service/cache status too. They poll `/api/login_wake_status`, show a waking state while the service is not ready, and run one cache check/update job before login.
+
+Password checks always refresh the user's real Firestore password hash before comparison. If a password hash is already in server cache, the login page can show that cache as available, but the submitted password is still checked against the latest Firestore hash when the service is awake.
+
 Configure the TTL with `CACHE_TTL_SECONDS`. Default: `300`.
 Configure the login auth TTL with `AUTH_CACHE_TTL_SECONDS`. Default: `604800` seconds, which is 7 days.
 Configure the wake/idle refresh threshold with `WAKE_REFRESH_IDLE_SECONDS`. Default: `300` seconds.

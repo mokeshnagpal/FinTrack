@@ -17,6 +17,16 @@ from forms import (
     ViewPasswordForm,
     ViewPasswordRevealForm,
 )
+from constants import (
+    BROWSER_CACHE_BALANCE_HISTORY,
+    BROWSER_CACHE_RECENT_TRANSACTIONS,
+    BROWSER_CACHE_TTL_SECONDS,
+    DEFAULT_AUTH_CACHE_TTL_SECONDS,
+    DEFAULT_CACHE_TTL_SECONDS,
+    DEFAULT_RECURRING_THROTTLE_SECONDS,
+    DEFAULT_WAKE_REFRESH_IDLE_SECONDS,
+    SYNC_STATUS_POLL_SECONDS,
+)
 import os
 import io
 import csv
@@ -111,9 +121,10 @@ SETTINGS_COL = "settings"
 VIEW_ONLY_SETTINGS_DOC = "view_only_access"
 CATEGORIES_SETTINGS_DOC = "categories"
 CLIENT_ACTIONS_COL = "client_actions"
-CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', 300)
-AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', 7 * 24 * 60 * 60)
-WAKE_REFRESH_IDLE_SECONDS = env_int('WAKE_REFRESH_IDLE_SECONDS', 5 * 60)
+CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', DEFAULT_CACHE_TTL_SECONDS)
+AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', DEFAULT_AUTH_CACHE_TTL_SECONDS)
+WAKE_REFRESH_IDLE_SECONDS = env_int('WAKE_REFRESH_IDLE_SECONDS', DEFAULT_WAKE_REFRESH_IDLE_SECONDS)
+RECURRING_THROTTLE_SECONDS = env_int('RECURRING_THROTTLE_SECONDS', DEFAULT_RECURRING_THROTTLE_SECONDS)
 FIRESTORE_TIMEOUT_SECONDS = env_int('FIRESTORE_TIMEOUT_SECONDS', 8)
 ENABLE_DEBUG_ROUTES = env_bool('ENABLE_DEBUG_ROUTES', False)
 MAX_MONEY_AMOUNT = 999999999
@@ -152,6 +163,15 @@ app.logger.debug("VIEW_PASS present? %s", bool(HW_PASSWORD))
 @app.template_filter('ist_datetime')
 def ist_datetime_filter(value, fmt='%Y-%m-%d %H:%M'):
     return format_ist(value, fmt) or '-'
+
+@app.context_processor
+def client_constants_context():
+    return {
+        'client_constants': {
+            'browser_cache_ttl_seconds': BROWSER_CACHE_TTL_SECONDS,
+            'sync_status_poll_seconds': SYNC_STATUS_POLL_SECONDS,
+        }
+    }
 
 # ---------------------------------------------------------------------
 # Utilities: timestamp parsing & document conversion
@@ -382,6 +402,23 @@ def get_user_auth_entry(username):
         return freeze_user_auth_entry(cached_entry)
 
     return load_user_auth_from_store(normalized_username)
+
+def get_user_auth_for_login(username):
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        return {'exists': False, 'data': {}}, 'none'
+
+    try:
+        return load_user_auth_from_store(normalized_username), 'firestore'
+    except Exception:
+        cached_entry = cache_get(auth_cache_key(normalized_username))
+        if cached_entry is not None:
+            app.logger.warning(
+                "Using cached auth hash for login because Firestore is unavailable user=%s",
+                normalized_username,
+            )
+            return freeze_user_auth_entry(cached_entry), 'cache'
+        raise
 
 def get_view_only_password_hash():
     cached_hash = cache_get('view_only_password_hash')
@@ -817,7 +854,6 @@ def ensure_recurring_applied():
         return
 
     # Throttle: run at most once per user every N seconds
-    THROTTLE_SECONDS = 5 * 60  # 5 minutes (adjust if you want)
     last_run_iso = session.get('last_recurring_run')  # stored as ISO string
     try:
         if last_run_iso:
@@ -826,21 +862,19 @@ def ensure_recurring_applied():
             if last_run.tzinfo is None:
                 last_run = last_run.replace(tzinfo=UTC)
             elapsed = (datetime.now(UTC) - last_run).total_seconds()
-            if elapsed < THROTTLE_SECONDS:
-                app.logger.debug("Skipping recurring runner: last run %.1fs ago (throttle %ds).", elapsed, THROTTLE_SECONDS)
+            if elapsed < RECURRING_THROTTLE_SECONDS:
+                app.logger.debug("Skipping recurring runner: last run %.1fs ago (throttle %ds).", elapsed, RECURRING_THROTTLE_SECONDS)
                 return
     except Exception:
         # if parsing fails, continue and run once (but log)
         app.logger.debug("Couldn't parse last_recurring_run (%s); will attempt runner.", last_run_iso)
 
     # Finally attempt to apply recurring rules, guarded by try/except
+    session['last_recurring_run'] = datetime.now(UTC).isoformat()
     try:
         # Use UTC now (don't add a manual +5:30 offset)
         # apply_recurring_up_to_today already computes next occurrences relative to now
         apply_recurring_up_to_today()
-
-        # record last run timestamp (ISO, timezone-aware)
-        session['last_recurring_run'] = datetime.now(UTC).isoformat()
     except Exception:
         app.logger.exception("Error applying recurring rules (throttled runner)")
 
@@ -949,6 +983,88 @@ def api_render_status():
         'cache_refresh': cache_refresh,
     })
 
+@app.route('/api/login_wake_status')
+def api_login_wake_status():
+    cache_refresh = _LAST_CACHE_REFRESH_RESULT
+    if request.args.get('refresh_cache') == '1':
+        cache_refresh = refresh_cache_job(reason='login_wake')
+
+    return jsonify({
+        'ok': True,
+        'awake': True,
+        'checked_at': datetime.now(UTC).isoformat(),
+        'cache_refresh': cache_refresh,
+    })
+
+@app.route('/api/login_password_cache_status')
+def api_login_password_cache_status():
+    username = normalize_username(request.args.get('username'))
+    cache_available = bool(username and cache_get(auth_cache_key(username)) is not None)
+    return jsonify({
+        'ok': True,
+        'cache_available': cache_available,
+        'checked_at': datetime.now(UTC).isoformat(),
+    })
+
+def serialize_transaction_for_cache(txn):
+    return {
+        'id': txn.get('_id') or txn.get('id'),
+        'timestamp': format_ist(txn.get('timestamp')) if txn.get('timestamp') else None,
+        'description': txn.get('description') or '',
+        'category': txn.get('category') or 'Uncategorized',
+        'amount': round(float(txn.get('amount', 0.0)), 2),
+    }
+
+def serialize_balance_for_cache(entry):
+    return {
+        'id': entry.get('_id') or entry.get('id'),
+        'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
+        'balance': round(float(entry.get('balance', 0.0)), 2),
+        'type': entry.get('type'),
+        'delta': round(float(entry.get('delta', 0.0)), 2),
+        'note': entry.get('note', ''),
+    }
+
+@app.route('/api/cache_snapshot')
+@login_required
+def api_cache_snapshot():
+    username = require_user()
+    latest_balance = get_latest_balance(username=username)
+    balance_docs = [
+        doc_to_txn(doc)
+        for doc in stream_with_timeout(
+            bal_collection(username)
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .limit(BROWSER_CACHE_BALANCE_HISTORY)
+        )
+    ]
+    txn_docs = [
+        doc_to_txn(doc)
+        for doc in stream_with_timeout(
+            tx_collection(username)
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .limit(BROWSER_CACHE_RECENT_TRANSACTIONS)
+        )
+    ]
+
+    return jsonify({
+        'ok': True,
+        'cached_at': datetime.now(UTC).isoformat(),
+        'limits': {
+            'recent_transactions': BROWSER_CACHE_RECENT_TRANSACTIONS,
+            'balance_history': BROWSER_CACHE_BALANCE_HISTORY,
+        },
+        'categories': get_categories(),
+        'balance': {
+            'current': {
+                'balance': round(float(latest_balance.get('balance', 0.0)), 2) if latest_balance else 0.0,
+                'timestamp': format_ist(latest_balance.get('timestamp')) if latest_balance and latest_balance.get('timestamp') else None,
+            },
+            'history': [serialize_balance_for_cache(entry) for entry in balance_docs],
+        },
+        'transactions': [serialize_transaction_for_cache(txn) for txn in txn_docs],
+    })
+
 def build_transaction_doc(form):
     txn_datetime = local_datetime_to_utc(
         form.date.data or now_ist().date(),
@@ -996,6 +1112,24 @@ def balance_note_exists(username, note):
         return False
     docs = stream_with_timeout(bal_collection(username).where('note', '==', note).limit(1))
     return any(True for _ in docs)
+
+def get_completed_client_action(username, client_action_id):
+    action_id = clean_client_action_id(client_action_id)
+    if not action_id:
+        return None, ''
+    action_doc = client_actions_collection(username).document(action_id).get()
+    if not action_doc.exists:
+        return None, action_id
+    return action_doc.to_dict() or {}, action_id
+
+def save_completed_client_action(username, action_id, action_type, result):
+    if not action_id:
+        return
+    client_actions_collection(username).document(action_id).set({
+        'type': action_type,
+        'result': result,
+        'created_at': datetime.now(UTC),
+    }, merge=True)
 
 def create_transaction(username, txn_doc, client_action_id=None):
     action_id = clean_client_action_id(client_action_id)
@@ -1529,7 +1663,7 @@ def get_user_auth_doc(username):
 
 
 def verify_current_user_password(username, password):
-    user_entry = get_user_auth_entry(username)
+    user_entry = load_user_auth_from_store(username)
     if not user_entry['exists']:
         return False, None
 
@@ -1762,12 +1896,8 @@ def login():
             flash('Please provide a username.', 'danger')
             return render_template('login.html', form=form)
 
-        if not is_valid_user(username):
-            flash('Invalid credentials', 'danger')
-            return render_template('login.html', form=form)
-
         try:
-            user_entry = get_user_auth_entry(username)
+            user_entry, auth_source = get_user_auth_for_login(username)
             if not user_entry['exists']:
                 app.logger.warning("Login failed: user document not found for %s", username)
                 flash('Invalid credentials', 'danger')
@@ -1786,7 +1916,7 @@ def login():
                 session['logged_in'] = True
                 session.permanent = True
                 session['username'] = username
-                app.logger.info("User %s logged in (full session)", username)
+                app.logger.info("User %s logged in (full session, auth_source=%s)", username, auth_source)
                 flash('Logged in successfully.', 'success')
 
                 next_url = request.args.get('next') or url_for('index')
@@ -1918,7 +2048,7 @@ def view_only_login():
 
     # Otherwise try full login with Firestore password
     try:
-        user_entry = get_user_auth_entry(username)
+        user_entry, auth_source = get_user_auth_for_login(username)
         if not user_entry['exists']:
             app.logger.warning("Login failed: user document not found for %s", username)
             flash('Invalid credentials', 'danger')
@@ -1936,7 +2066,7 @@ def view_only_login():
             session['logged_in'] = True
             session.permanent = True
             session['username'] = username
-            app.logger.info("User %s logged in (full session) via /view", username)
+            app.logger.info("User %s logged in (full session) via /view auth_source=%s", username, auth_source)
             flash('Logged in successfully.', 'success')
             return redirect(url_for('index'))
         else:
@@ -2384,6 +2514,12 @@ def api_balance_series():
 def api_balance_add():
     username = require_user()
     data = request.get_json() or {}
+    completed, action_id = get_completed_client_action(username, data.get('client_action_id'))
+    if completed:
+        result = completed.get('result') or {}
+        result['duplicate'] = True
+        return jsonify(result)
+
     try:
         delta = parse_money(data.get('amount'), field_name='Amount', allow_negative=True)
         note = validate_optional_note(data.get('note'))
@@ -2401,13 +2537,21 @@ def api_balance_add():
         'timestamp': now
     }
     bal_collection(username).add(doc)
-    return jsonify({"balance": new_bal, "timestamp": format_ist(now), "type": "add"})
+    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add", "duplicate": False}
+    save_completed_client_action(username, action_id, 'balance_add', result)
+    return jsonify(result)
 
 @app.route('/api/balance/sync', methods=['POST'])
 @login_required
 def api_balance_sync():
     username = require_user()
     data = request.get_json() or {}
+    completed, action_id = get_completed_client_action(username, data.get('client_action_id'))
+    if completed:
+        result = completed.get('result') or {}
+        result['duplicate'] = True
+        return jsonify(result)
+
     try:
         new_balance = parse_money(
             data.get('balance'),
@@ -2430,7 +2574,15 @@ def api_balance_sync():
         'timestamp': now
     }
     bal_collection(username).add(doc)
-    return jsonify({"balance": round(new_balance, 2), "timestamp": format_ist(now), "type": "sync", "delta": delta})
+    result = {
+        "balance": round(new_balance, 2),
+        "timestamp": format_ist(now),
+        "type": "sync",
+        "delta": delta,
+        "duplicate": False,
+    }
+    save_completed_client_action(username, action_id, 'balance_sync', result)
+    return jsonify(result)
 
 @app.route('/api/balance/<string:entry_id>/update', methods=['POST'])
 @login_required

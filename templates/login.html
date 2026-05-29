@@ -29,6 +29,24 @@
                     {% endif %}
                     {% endwith %}
 
+                    <div class="auth-status-grid" aria-live="polite">
+                        <div class="auth-status-item">
+                            <span class="kicker">Service</span>
+                            <strong id="authRenderState">Waking</strong>
+                            <p id="authRenderMessage">Waiting for the service to respond.</p>
+                        </div>
+                        <div class="auth-status-item">
+                            <span class="kicker">Cache Check</span>
+                            <strong id="authCacheState">Waiting</strong>
+                            <p id="authCacheMessage">Cache check will run when the service responds.</p>
+                        </div>
+                        <div class="auth-status-item">
+                            <span class="kicker">Password Cache</span>
+                            <strong id="authPasswordCacheState">Enter username</strong>
+                            <p id="authPasswordCacheMessage">Password hash cache status appears after username entry.</p>
+                        </div>
+                    </div>
+
                     <form method="post" action="{{ url_for('login') }}" novalidate>
                         {{ form.hidden_tag() }}
                         <div class="stack">
@@ -52,8 +70,13 @@
         </div>
     </div>
 
+    <script>
+        window.FinTrakConstants = {{ client_constants | tojson }};
+    </script>
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/browser_cache.js') }}"></script>
     <script src="{{ url_for('static', filename='js/flash.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/auth_status.js') }}"></script>
 </body>
 
 </html>
