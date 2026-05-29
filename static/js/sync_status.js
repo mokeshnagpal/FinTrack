@@ -49,7 +49,11 @@
   function describeAction(action) {
     const payload = action.payload || {};
     if (payload.description) return payload.description;
-    if (payload.note) return payload.note;
+    if (payload.note) {
+      return window.FinTrak?.formatBalanceNote
+        ? window.FinTrak.formatBalanceNote(payload.note)
+        : payload.note;
+    }
     if (payload.balance !== undefined) return `Balance ${payload.balance}`;
     if (payload.amount !== undefined) return `Amount ${payload.amount}`;
     return action.endpoint || 'Pending action';

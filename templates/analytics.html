@@ -12,45 +12,7 @@
     </div>
 </section>
 
-<div class="card p-3 mb-3 shadow-sm analytics-controls">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-        <div class="analytics-presets" aria-label="Quick ranges">
-            <button class="btn btn-sm btn-outline-primary" type="button" data-range="30d">30 Days</button>
-            <button class="btn btn-sm btn-outline-primary" type="button" data-range="90d">90 Days</button>
-            <button class="btn btn-sm btn-outline-primary" type="button" data-range="12m">12 Months</button>
-            <button class="btn btn-sm btn-outline-primary" type="button" data-range="ytd">This Year</button>
-        </div>
-
-        <div class="d-flex align-items-center gap-2">
-            <label class="form-label small mb-0 text-nowrap" for="periodSelect">Group by:</label>
-            <select id="periodSelect" class="form-select form-select-sm" style="min-width: 120px;">
-                <option value="daily" selected>Daily</option>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-            </select>
-        </div>
-    </div>
-
-    <div class="analytics-or-divider mb-3">
-        <span>(or) Custom Dates</span>
-    </div>
-
-    <div class="analytics-filter-grid">
-        <div>
-            <label class="form-label small mb-1 d-block" for="fromDate">From</label>
-            <input id="fromDate" class="form-control form-control-sm" type="date">
-        </div>
-
-        <div>
-            <label class="form-label small mb-1 d-block" for="toDate">To</label>
-            <input id="toDate" class="form-control form-control-sm" type="date">
-        </div>
-
-        <div class="analytics-filter-action">
-            <button id="applyBtn" class="btn btn-primary w-100">Apply</button>
-        </div>
-    </div>
-</div>
+{% include 'partials/analytics_controls.html' %}
 
 <div id="analyticsStatus" class="analytics-status mb-3" role="status" aria-live="polite"></div>
 
@@ -115,10 +77,10 @@
     <div class="col-lg-8 col-md-12">
         <div class="card p-3 shadow-sm h-100">
             <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
-                <h6 class="mb-0">Insights</h6>
+                <h6 class="mb-0" id="panelHeading">Insight</h6>
                 <ul class="nav nav-tabs analytics-tabs" id="analyticsTabs" role="tablist">
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link active" id="graphs-tab" data-view="graphs" type="button">Graphs</button>
+                        <button class="nav-link active" id="graphs-tab" data-view="graphs" type="button">Insights</button>
                     </li>
                     <li class="nav-item" role="presentation">
                         <button class="nav-link" id="raw-tab" data-view="raw" type="button">Transactions</button>
@@ -137,10 +99,10 @@
                             data-can-edit="{{ 'true' if not session.get('view_only') else 'false' }}">
                             <thead>
                                 <tr>
-                                    <th>When</th>
-                                    <th>Description</th>
-                                    <th>Category</th>
-                                    <th class="text-end">Amount</th>
+                                    <th class="sortable-header">When</th>
+                                    <th class="sortable-header">Description</th>
+                                    <th class="sortable-header">Category</th>
+                                    <th class="sortable-header text-end">Amount</th>
                                     {% if not session.get('view_only') %}
                                     <th class="text-end">Actions</th>
                                     {% endif %}
@@ -157,5 +119,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/analytics_controls.js') }}"></script>
 <script src="{{ url_for('static', filename='js/analytics.js') }}"></script>
 {% endblock %}

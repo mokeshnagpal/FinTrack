@@ -27,9 +27,23 @@ function rupee(value) {
 }
 
 function formatDisplayDate(value) {
-  return window.FinTrak && window.FinTrak.formatFriendlyDate
-    ? window.FinTrak.formatFriendlyDate(value)
-    : value;
+  if (window.FinTrak?.formatFriendlyDateHtml) {
+    return window.FinTrak.formatFriendlyDateHtml(value);
+  }
+  return escapeHtml(value || '');
+}
+
+function formatDisplayNote(note) {
+  return window.FinTrak && window.FinTrak.formatBalanceNote
+    ? window.FinTrak.formatBalanceNote(note)
+    : note;
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el && window.FinTrak?.hideModal) {
+    window.FinTrak.hideModal(el);
+  }
 }
 
 function escapeHtml(unsafe) {
@@ -93,67 +107,6 @@ function showToast(title, type = 'info', message = '') {
   }
 }
 
-let balanceChart = null;
-
-function destroyChart(canvas) {
-  if (balanceChart && typeof balanceChart.destroy === 'function') {
-    balanceChart.destroy();
-    balanceChart = null;
-  }
-
-  if (!canvas || !canvas.getContext) return;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  canvas.width = canvas.clientWidth || canvas.width;
-  canvas.height = canvas.clientHeight || canvas.height;
-}
-
-async function renderChart(period = 'daily', canvasEl) {
-  if (!canvasEl) return;
-  destroyChart(canvasEl);
-
-  let response;
-  try {
-    response = await fetchJSON('/api/balance_series', { period, count: 30 });
-  } catch (error) {
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    if (snapshot?.balance?.history?.length) {
-      const cachedHistory = [...snapshot.balance.history].reverse();
-      response = {
-        labels: cachedHistory.map((entry) => entry.timestamp || ''),
-        values: cachedHistory.map((entry) => Number(entry.balance || 0)),
-      };
-    } else {
-    console.error('chart fetch failed', error);
-    showToast('Failed to load chart', 'warning', error.message);
-    return;
-    }
-  }
-
-  if (typeof Chart === 'undefined') {
-    return;
-  }
-
-  balanceChart = new Chart(canvasEl.getContext('2d'), {
-    type: 'line',
-    data: {
-      labels: response.labels || [],
-      datasets: [{
-        label: 'Balance',
-        data: response.values || [],
-        fill: true,
-        tension: 0.2,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { tooltip: { mode: 'index', intersect: false } },
-      scales: { x: { ticks: { maxRotation: 0 } } },
-    },
-  });
-}
-
 async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   let data;
   let offline = false;
@@ -173,13 +126,13 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   if (currentBalanceEl) currentBalanceEl.innerText = formatNumber(current.balance);
   if (balanceTimestampEl) {
     const label = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
-    balanceTimestampEl.innerText = offline ? `${label} (cached)` : label;
+    balanceTimestampEl.innerHTML = offline ? `${label} (cached)` : label;
   }
 
   if (!historyBody) return;
   historyBody.innerHTML = '';
 
-  (data.history || []).slice(0, HISTORY_DISPLAY_LIMIT).forEach((entry, index) => {
+  (data.history || []).forEach((entry, index) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
     const isLatest = index === 0;
@@ -198,14 +151,19 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
             Locked
           </button>`;
 
-    tr.innerHTML = `<td data-label="When">${escapeHtml(formatDisplayDate(entry.timestamp || ''))}</td>
+    tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
                     <td data-label="Type">${escapeHtml(entry.type || '')}</td>
                     <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
                     <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
-                    <td data-label="Note">${escapeHtml(entry.note || '')}</td>
+                    <td data-label="Note">${escapeHtml(formatDisplayNote(entry.note || ''))}</td>
                     <td data-label="Actions" class="text-end"><div class="table-actions">${editButton}</div></td>`;
     historyBody.appendChild(tr);
   });
+
+  const parentTable = historyBody.closest('table');
+  if (parentTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
+    window.FinTrak.initUnifiedTable(parentTable);
+  }
 }
 
 function ensureEditModal() {
@@ -306,7 +264,7 @@ function openEditModal(button) {
   modal.classList.add('show');
 }
 
-async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas) {
+async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) {
   const modal = ensureEditModal();
   const id = modal.querySelector('#editBalanceId').value;
   const type = modal.querySelector('#editBalanceType').value;
@@ -332,22 +290,20 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, 
     });
     modal.classList.remove('show');
     showToast('Balance entry updated', 'success');
-    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
   } catch (error) {
     console.error('balance edit failed', error);
     showToast('Edit failed', 'danger', error.message);
   }
 }
 
-async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas) {
+async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody) {
   await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody);
-  await renderChart(periodSelect ? periodSelect.value : 'daily', balanceCanvas);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
   const currentBalanceEl = document.getElementById('currentBalance');
   const balanceTimestampEl = document.getElementById('balanceTimestamp');
-  const periodSelect = document.getElementById('periodSelect');
   const refreshBtn = document.getElementById('refreshBtn');
   const addAmount = document.getElementById('addAmount');
   const addNote = document.getElementById('addNote');
@@ -356,7 +312,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const syncNote = document.getElementById('syncNote');
   const syncBtn = document.getElementById('syncBtn');
   const historyBody = document.getElementById('historyBody');
-  const balanceCanvas = document.getElementById('balanceChart');
 
   if (addBtn && addAmount) {
     addBtn.addEventListener('click', async () => {
@@ -385,7 +340,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         showToast(`Added ${rupee(amount)}`, 'success', `New balance ${rupee(result.balance)}`);
         addAmount.value = '';
         if (addNote) addNote.value = '';
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+        closeModal('addBalanceModal');
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
       } catch (error) {
         console.error('add failed', error);
         if (window.FinTrak?.enqueueOfflineAction) {
@@ -393,6 +349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           showToast('Add saved locally', 'success', 'It will sync when the service wakes.');
           addAmount.value = '';
           if (addNote) addNote.value = '';
+          closeModal('addBalanceModal');
         } else {
           showToast('Add failed', 'danger', error.message);
         }
@@ -427,7 +384,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         showToast(`Balance synced to ${rupee(result.balance)}`, 'success', `Delta ${formatNumber(result.delta)}`);
         syncAmount.value = '';
         if (syncNote) syncNote.value = '';
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+        closeModal('syncBalanceModal');
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
       } catch (error) {
         console.error('sync failed', error);
         if (window.FinTrak?.enqueueOfflineAction) {
@@ -435,6 +393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           showToast('Sync saved locally', 'success', 'It will sync when the service wakes.');
           syncAmount.value = '';
           if (syncNote) syncNote.value = '';
+          closeModal('syncBalanceModal');
         } else {
           showToast('Sync failed', 'danger', error.message);
         }
@@ -444,7 +403,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => (
-      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas)
+      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody)
         .catch((error) => showToast('Refresh failed', 'danger', error.message))
     ));
   }
@@ -459,15 +418,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.addEventListener('click', (event) => {
     if (!event.target.closest('[data-balance-edit-save]')) return;
-    saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+    saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody);
   });
 
-  if (periodSelect) {
-    periodSelect.addEventListener('change', () => renderChart(periodSelect.value, balanceCanvas));
-  }
-
   try {
-    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, periodSelect, balanceCanvas);
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
   } catch (error) {
     console.error('Balance script initialization error', error);
     showToast('Balance script error', 'danger', error.message);

@@ -55,6 +55,18 @@
     return `action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
+  function closeFormModal(form) {
+    if (window.FinTrak?.hideModal) {
+      window.FinTrak.hideModal(form);
+      return;
+    }
+    if (typeof bootstrap === 'undefined') return;
+    const modal = form?.closest?.('.modal');
+    if (modal) {
+      bootstrap.Modal.getOrCreateInstance(modal).hide();
+    }
+  }
+
   function notify(message, type = 'info') {
     if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
       window.FinTrak.showFlash(message, type);
@@ -287,22 +299,23 @@
         if (submitButton) submitButton.blur();
         if (queueType === 'transaction-create') {
           form.reset();
+          closeFormModal(form);
           notify('Transaction saved locally. Syncing in background.', 'success');
         } else if (queueType === 'transaction-edit') {
+          closeFormModal(form);
           notify('Update saved locally. Syncing in background.', 'success');
           window.location.href = '/transactions';
         } else if (queueType === 'split-entry-create') {
           form.reset();
+          closeFormModal(form);
           notify('Split entry saved locally. Syncing in background.', 'success');
         } else if (queueType === 'split-entry-edit') {
+          closeFormModal(form);
           notify('Split entry update saved locally. Syncing in background.', 'success');
           window.location.href = form.dataset.returnUrl || window.location.pathname.replace(/\/entries\/.+\/edit$/, '');
         } else {
           const row = form.closest('tr');
-          const modal = form.querySelector('.modal.show');
-          if (modal && window.bootstrap) {
-            window.bootstrap.Modal.getOrCreateInstance(modal).hide();
-          }
+          closeFormModal(form);
           if (row) row.remove();
           notify('Delete saved locally. Syncing in background.', 'success');
         }

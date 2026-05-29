@@ -200,11 +200,13 @@ ADMIN_USERS = set(u.strip().lower() for u in ADMIN_USER_RAW.split(',') if u.stri
 
 VIEW_ONLY_ALLOWED_PREFIXES = (
     '/balance',
+    '/balance/analytics',
     '/analytics',
     '/transactions',
     '/splits',
     '/api/balance_current',
     '/api/balance_series',
+    '/api/balance_analytics',
     '/api/splits',
     '/api/cache_snapshot',
     '/api/totals',
@@ -3589,6 +3591,11 @@ def append_balance(delta, type_, note='', username=None, extra_fields=None):
 def balance():
     return render_template('balance.html')
 
+@app.route('/balance/analytics')
+@login_required
+def balance_analytics():
+    return render_template('balance_analytics.html')
+
 @app.route('/api/balance_current')
 @login_required
 def api_balance_current():
@@ -3617,32 +3624,13 @@ def api_balance_current():
     }
     return jsonify(out)
 
-@app.route('/api/balance_series')
-@login_required
-def api_balance_series():
-    start_dt, end_dt, period = _parse_period_args(request.args)
-    bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False)
-
-    labels, values = [], []
-
+def _generate_period_labels(start_dt, end_dt, period):
     if period == 'daily':
         cur_date = utc_to_ist(start_dt).date()
         endd = utc_to_ist(end_dt).date()
-        days = [(cur_date + relativedelta(days=i)) for i in range((endd - cur_date).days + 1)]
-        labels = [d.isoformat() for d in days]
-        date_last = {}
-        for b in bal_docs:
-            if not b.get('timestamp'):
-                continue
-            d = utc_to_ist(b['timestamp']).date().isoformat()
-            date_last[d] = float(b.get('balance', 0.0))
-        last_known = None
-        for lab in labels:
-            if lab in date_last:
-                last_known = date_last[lab]
-            values.append(round(float(last_known or 0.0), 2))
+        return [(cur_date + relativedelta(days=i)).isoformat() for i in range((endd - cur_date).days + 1)]
 
-    elif period == 'monthly':
+    if period == 'monthly':
         start_local = utc_to_ist(start_dt)
         end_local = utc_to_ist(end_dt)
         cur = date(start_local.year, start_local.month, 1)
@@ -3651,38 +3639,183 @@ def api_balance_series():
         while cur <= endm:
             months.append(cur)
             cur += relativedelta(months=1)
-        labels = [m.strftime('%Y-%m') for m in months]
-        month_last = {}
-        for b in bal_docs:
-            if not b.get('timestamp'):
-                continue
-            key = utc_to_ist(b['timestamp']).strftime('%Y-%m')
-            month_last[key] = float(b.get('balance', 0.0))
-        last_known = None
-        for lab in labels:
-            if lab in month_last:
-                last_known = month_last[lab]
-            values.append(round(float(last_known or 0.0), 2))
+        return [m.strftime('%Y-%m') for m in months]
 
-    elif period == 'yearly':
-        years = list(range(utc_to_ist(start_dt).year, utc_to_ist(end_dt).year + 1))
-        labels = [str(y) for y in years]
-        year_last = {}
-        for b in bal_docs:
-            if not b.get('timestamp'):
-                continue
-            key = str(utc_to_ist(b['timestamp']).year)
-            year_last[key] = float(b.get('balance', 0.0))
-        last_known = None
-        for lab in labels:
-            if lab in year_last:
-                last_known = year_last[lab]
-            values.append(round(float(last_known or 0.0), 2))
+    if period == 'yearly':
+        return [str(y) for y in range(utc_to_ist(start_dt).year, utc_to_ist(end_dt).year + 1)]
 
-    else:
-        return jsonify({"labels": [], "values": []})
+    return []
 
-    return jsonify({"labels": labels, "values": values})
+
+def _balance_bucket_key(timestamp, period):
+    if not timestamp:
+        return None
+    local = utc_to_ist(timestamp)
+    if period == 'daily':
+        return local.date().isoformat()
+    if period == 'monthly':
+        return local.strftime('%Y-%m')
+    if period == 'yearly':
+        return str(local.year)
+    return None
+
+
+def _build_balance_series_values(bal_docs, labels, period):
+    bucket_last = {}
+    for entry in bal_docs:
+        key = _balance_bucket_key(entry.get('timestamp'), period)
+        if key:
+            bucket_last[key] = float(entry.get('balance', 0.0))
+
+    last_known = None
+    values = []
+    for label in labels:
+        if label in bucket_last:
+            last_known = bucket_last[label]
+        values.append(round(float(last_known or 0.0), 2))
+    return values
+
+
+def _build_delta_series_values(bal_docs, labels, period):
+    bucket_sums = {label: 0.0 for label in labels}
+    for entry in bal_docs:
+        key = _balance_bucket_key(entry.get('timestamp'), period)
+        if key in bucket_sums:
+            bucket_sums[key] += float(entry.get('delta', 0.0))
+    return [round(bucket_sums[label], 2) for label in labels]
+
+
+def _balance_type_label(type_key):
+    labels = {
+        'add': 'Manual add',
+        'sync': 'Sync',
+        'txn': 'Transaction',
+        'txn_edit': 'Edit transaction',
+        'txn_delete': 'Delete transaction',
+        'recurring': 'Recurring expense',
+        'recurring_balance': 'Recurring balance',
+    }
+    key = str(type_key or '').strip()
+    return labels.get(key, key.replace('_', ' ').title() or 'Other')
+
+
+def _serialize_balance_entry(entry):
+    return {
+        'id': entry.get('_id'),
+        'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
+        'balance': round(float(entry.get('balance', 0.0)), 2),
+        'type': entry.get('type'),
+        'type_label': _balance_type_label(entry.get('type')),
+        'delta': round(float(entry.get('delta', 0.0)), 2),
+        'note': entry.get('note', ''),
+    }
+
+
+@app.route('/api/balance_series')
+@login_required
+def api_balance_series():
+    start_dt, end_dt, period = _parse_period_args(request.args)
+    bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False)
+    labels = _generate_period_labels(start_dt, end_dt, period)
+    if not labels:
+        return jsonify({'labels': [], 'values': []})
+    values = _build_balance_series_values(bal_docs, labels, period)
+    return jsonify({'labels': labels, 'values': values})
+
+
+@app.route('/api/balance_analytics')
+@login_required
+def api_balance_analytics():
+    username = require_user()
+    start_dt, end_dt, period = _parse_period_args(request.args)
+    bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False, username=username)
+    labels = _generate_period_labels(start_dt, end_dt, period)
+
+    balance_values = _build_balance_series_values(bal_docs, labels, period) if labels else []
+    delta_values = _build_delta_series_values(bal_docs, labels, period) if labels else []
+
+    deltas = [float(entry.get('delta', 0.0)) for entry in bal_docs]
+    net_change = round(sum(deltas), 2)
+    count = len(deltas)
+    avg_delta = round((sum(deltas) / count), 2) if count else 0.0
+    min_delta = round(min(deltas), 2) if count else 0.0
+    max_delta = round(max(deltas), 2) if count else 0.0
+    median_delta = round(statistics.median(deltas), 2) if count else 0.0
+
+    opening_balance = round(float(balance_values[0]), 2) if balance_values else 0.0
+    closing_balance = round(float(balance_values[-1]), 2) if balance_values else 0.0
+
+    latest = get_latest_balance(username=username)
+    current_balance = round(float(latest.get('balance', 0.0)), 2) if latest else closing_balance
+
+    period_duration = end_dt - start_dt
+    prev_end = start_dt - relativedelta(seconds=1)
+    prev_start = prev_end - period_duration
+    prev_docs = get_balances_in_range(prev_start, prev_end, order_desc=False, username=username)
+    prev_net = round(sum(float(entry.get('delta', 0.0)) for entry in prev_docs), 2)
+    pct_change = None
+    if prev_net != 0:
+        pct_change = round(((net_change - prev_net) / abs(prev_net)) * 100.0, 2)
+
+    type_stats = {}
+    for entry in bal_docs:
+        key = str(entry.get('type') or 'other')
+        if key not in type_stats:
+            type_stats[key] = {'type': key, 'label': _balance_type_label(key), 'count': 0, 'total_delta': 0.0}
+        type_stats[key]['count'] += 1
+        type_stats[key]['total_delta'] += float(entry.get('delta', 0.0))
+
+    by_type = sorted(
+        [
+            {
+                'type': item['type'],
+                'label': item['label'],
+                'count': item['count'],
+                'total_delta': round(item['total_delta'], 2),
+            }
+            for item in type_stats.values()
+        ],
+        key=lambda row: abs(row['total_delta']),
+        reverse=True,
+    )
+
+    largest_entry = None
+    if bal_docs:
+        largest = max(bal_docs, key=lambda row: abs(float(row.get('delta', 0.0))))
+        largest_entry = {
+            'delta': round(float(largest.get('delta', 0.0)), 2),
+            'type_label': _balance_type_label(largest.get('type')),
+            'timestamp': format_ist(largest.get('timestamp')) if largest.get('timestamp') else None,
+        }
+
+    top_type = by_type[0] if by_type else None
+
+    entries = [_serialize_balance_entry(entry) for entry in reversed(bal_docs)]
+
+    summary = {
+        'current_balance': current_balance,
+        'opening_balance': opening_balance,
+        'closing_balance': closing_balance,
+        'net_change': net_change,
+        'count': count,
+        'avg_delta': avg_delta,
+        'min_delta': min_delta,
+        'max_delta': max_delta,
+        'median_delta': median_delta,
+        'prev_net_change': prev_net,
+        'pct_change': pct_change,
+        'top_type': top_type,
+        'largest_entry': largest_entry,
+    }
+
+    return jsonify({
+        'labels': labels,
+        'balance_values': balance_values,
+        'delta_values': delta_values,
+        'summary': summary,
+        'by_type': by_type,
+        'entries': entries,
+    })
 
 @app.route('/api/balance/add', methods=['POST'])
 @login_required

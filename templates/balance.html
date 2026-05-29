@@ -4,16 +4,16 @@
     <div>
         <span class="kicker">Overview</span>
         <h1>Balance</h1>
-        <p>Track current cashflow balance, adjustments, history, and analytics.</p>
+        <p>Track current cashflow balance, adjustments, and recent history.</p>
     </div>
     <div class="page-actions">
-        <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">View Transactions</a>
-        <a class="btn btn-outline-secondary" href="{{ url_for('analytics') }}">Analytics</a>
+        <a class="btn btn-outline-primary" href="{{ url_for('balance_analytics') }}">Balance Analytics</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">View Transactions</a>
     </div>
 </section>
 
 <div class="row g-3">
-    <div class="col-lg-4 col-md-6 col-sm-12">
+    <div class="col-lg-4 col-md-5 col-sm-12">
         <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
@@ -22,45 +22,18 @@
                 </div>
                 <small class="text-muted" id="balanceTimestamp">-</small>
                 <hr>
-                <div class="mb-3">
-                    <label class="form-label small" for="periodSelect">Select Period</label>
-                    <select id="periodSelect" class="form-select form-select-sm">
-                        <option value="daily" selected>Daily</option>
-                        <option value="monthly">Monthly</option>
-                        <option value="yearly">Yearly</option>
-                    </select>
-                </div>
                 <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
             </div>
         </div>
 
         {% if not session.get('view_only') %}
-        <div class="card shadow-sm">
+        <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
-
-                <div class="mb-3">
-                    <label class="form-label small" for="addAmount">Add Amount</label>
-                    <div class="input-group">
-                        <input id="addAmount" type="number" step="0.01" class="form-control form-control-sm"
-                            placeholder="Enter amount">
-                        <button id="addBtn" class="btn btn-outline-success btn-sm">Add</button>
-                    </div>
-                    <input id="addNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)"
-                        maxlength="120">
+                <div class="d-flex flex-column gap-2">
+                    <button class="btn btn-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#addBalanceModal">Add Manual Entry</button>
+                    <button class="btn btn-outline-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#syncBalanceModal">Sync Absolute Balance</button>
                 </div>
-
-                <div class="mb-3">
-                    <label class="form-label small" for="syncAmount">Sync Balance</label>
-                    <div class="input-group">
-                        <input id="syncAmount" type="number" step="0.01" class="form-control form-control-sm"
-                            placeholder="Set absolute balance">
-                        <button id="syncBtn" class="btn btn-outline-warning btn-sm">Sync</button>
-                    </div>
-                    <input id="syncNote" class="form-control form-control-sm mt-2" placeholder="Note (optional)"
-                        maxlength="120">
-                </div>
-
             </div>
         </div>
         {% else %}
@@ -76,16 +49,7 @@
         {% endif %}
     </div>
 
-    <div class="col-lg-8 col-md-6 col-sm-12">
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Balance Chart</h6>
-                <div class="chart-wrapper">
-                    <canvas id="balanceChart" height="380" role="img" aria-label="Balance over time"></canvas>
-                </div>
-            </div>
-        </div>
-
+    <div class="col-lg-8 col-md-7 col-sm-12">
         <div class="card shadow-sm">
             <div class="card-body">
                 <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
@@ -93,11 +57,11 @@
                     <table class="table table-sm mb-0 align-middle">
                         <thead>
                             <tr>
-                                <th>When</th>
-                                <th>Type</th>
-                                <th class="text-end">Delta</th>
-                                <th class="text-end">Balance</th>
-                                <th>Note</th>
+                                <th class="sortable-header">When</th>
+                                <th class="sortable-header">Type</th>
+                                <th class="sortable-header text-end">Delta</th>
+                                <th class="sortable-header text-end">Balance</th>
+                                <th class="sortable-header">Note</th>
                                 <th class="text-end">Actions</th>
                             </tr>
                         </thead>
@@ -108,6 +72,60 @@
         </div>
     </div>
 </div>
+
+<!-- Add Manual Entry Modal -->
+{% if not session.get('view_only') %}
+<div class="modal fade text-start" id="addBalanceModal" tabindex="-1" aria-labelledby="addBalanceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addBalanceModalLabel">Add Manual Entry</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="addAmount">Amount (Rs.)</label>
+                    <input id="addAmount" type="number" step="0.01" class="form-control" placeholder="e.g. 500 or -250">
+                    <div class="form-text small text-muted">Use positive values to add, negative values to subtract.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="addNote">Note (optional)</label>
+                    <input id="addNote" class="form-control" placeholder="Note description" maxlength="120">
+                </div>
+                <div class="mt-4">
+                    <button id="addBtn" type="button" class="btn btn-primary w-100">Save Entry</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sync Absolute Balance Modal -->
+<div class="modal fade text-start" id="syncBalanceModal" tabindex="-1" aria-labelledby="syncBalanceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="syncBalanceModalLabel">Sync Absolute Balance</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="syncAmount">Absolute Balance (Rs.)</label>
+                    <input id="syncAmount" type="number" step="0.01" class="form-control" placeholder="Set absolute balance">
+                    <div class="form-text small text-muted">Set the exact current balance amount.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="syncNote">Note (optional)</label>
+                    <input id="syncNote" class="form-control" placeholder="Note description" maxlength="120">
+                </div>
+                <div class="mt-4">
+                    <button id="syncBtn" type="button" class="btn btn-primary w-100">Sync Balance</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
 {% endblock %}

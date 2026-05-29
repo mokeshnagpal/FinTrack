@@ -22,12 +22,15 @@
 
     const saved = readStorage(storageKey);
 
+    const sunIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon" style="vertical-align: middle;"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
+    const moonIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon" style="vertical-align: middle;"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`;
+
     function setTheme(theme) {
         root.setAttribute('data-theme', theme);
         writeStorage(storageKey, theme);
 
         if (icon) {
-            icon.textContent = theme === 'dark' ? 'Light' : 'Dark';
+            icon.innerHTML = theme === 'dark' ? sunIcon : moonIcon;
         }
         if (toggle) {
             toggle.setAttribute('aria-pressed', String(theme === 'dark'));
@@ -73,26 +76,86 @@
         };
     }
 
-    function formatFriendlyDate(value) {
+    const MONTH_NAMES = [
+        'january', 'february', 'march', 'april', 'may', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december',
+    ];
+
+    function formatFriendlyDateParts(value) {
         const parts = parseDateParts(value);
-        if (!parts) return value || '';
+        if (!parts) return null;
 
-        const months = [
-            'january', 'february', 'march', 'april', 'may', 'june',
-            'july', 'august', 'september', 'october', 'november', 'december',
-        ];
-        const dateText = `${ordinal(parts.day)} ${months[parts.month - 1]} ${parts.year}`;
-
-        if (parts.hour === null) return dateText;
+        const dateText = `${ordinal(parts.day)} ${MONTH_NAMES[parts.month - 1]} ${parts.year}`;
+        if (parts.hour === null) {
+            return { date: dateText, time: '' };
+        }
 
         const suffix = parts.hour >= 12 ? 'pm' : 'am';
         const hour12 = parts.hour % 12 || 12;
         const minute = String(parts.minute).padStart(2, '0');
-        return `${dateText} ${hour12}:${minute}${suffix}`;
+        return { date: dateText, time: `${hour12}:${minute}${suffix}` };
+    }
+
+    function formatFriendlyDate(value) {
+        const formatted = formatFriendlyDateParts(value);
+        if (!formatted) return value || '';
+        return formatted.time ? `${formatted.date} ${formatted.time}` : formatted.date;
+    }
+
+    function escapeHtmlText(value) {
+        if (value === null || value === undefined) return '';
+        return String(value).replace(/[&<>"'`=/]/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+            '`': '&#x60;',
+            '=': '&#x3D;',
+            '/': '&#x2F;',
+        })[char]);
+    }
+
+    function formatFriendlyDateHtml(value) {
+        const formatted = formatFriendlyDateParts(value);
+        if (!formatted) return escapeHtmlText(value || '');
+        if (!formatted.time) return escapeHtmlText(formatted.date);
+        return `${escapeHtmlText(formatted.date)}<br><span class="table-date-time">${escapeHtmlText(formatted.time)}</span>`;
+    }
+
+    const BALANCE_NOTE_LABELS = {
+        del_txn: 'Deleted transaction',
+        edit_txn: 'Edited transaction',
+        txn: 'Transaction',
+        recurring: 'Recurring',
+    };
+
+  /** Strip UUID tails from system balance notes (e.g. del_txn:uuid:uuid → label only). */
+    function formatBalanceNote(note) {
+        const raw = String(note || '').trim();
+        if (!raw) return '';
+
+        const txnMarker = raw.search(/_txn:/i);
+        if (txnMarker >= 0) {
+            const key = raw.slice(0, txnMarker + 4).toLowerCase();
+            return BALANCE_NOTE_LABELS[key] || key.replace(/_/g, ' ');
+        }
+
+        if (/^txn:/i.test(raw)) {
+            return BALANCE_NOTE_LABELS.txn;
+        }
+
+        if (/^recurring:/i.test(raw)) {
+            return BALANCE_NOTE_LABELS.recurring;
+        }
+
+        return raw;
     }
 
     window.FinTrak = window.FinTrak || {};
     window.FinTrak.formatFriendlyDate = formatFriendlyDate;
+    window.FinTrak.formatFriendlyDateHtml = formatFriendlyDateHtml;
+    window.FinTrak.formatBalanceNote = formatBalanceNote;
 
     function flashStack() {
         let stack = document.getElementById('flashStack');
@@ -118,6 +181,25 @@
     }
 
     window.FinTrak.showFlash = showFlash;
+
+    function hideModal(fromElement) {
+        if (typeof bootstrap === 'undefined') return;
+        const modalEl = fromElement?.closest?.('.modal') || document.querySelector('.modal.show');
+        if (!modalEl) return;
+        const instance = bootstrap.Modal.getInstance(modalEl) || bootstrap.Modal.getOrCreateInstance(modalEl);
+        instance.hide();
+    }
+
+    window.FinTrak.hideModal = hideModal;
+
+    function initModalFormDismiss() {
+        document.querySelectorAll('.modal form').forEach((form) => {
+            if (form.dataset.offlineQueue) return;
+            form.addEventListener('submit', () => {
+                hideModal(form);
+            });
+        });
+    }
 
     function confirmDialog(message, confirmLabel = 'Confirm') {
         return new Promise((resolve) => {
@@ -168,7 +250,13 @@
     function formatDateElements() {
         document.querySelectorAll('[data-format-date]').forEach((el) => {
             const raw = el.getAttribute('datetime') || el.dataset.rawDate || el.textContent;
-            el.textContent = formatFriendlyDate(raw);
+            const formatted = formatFriendlyDateParts(raw);
+            el.classList.add('table-date-cell');
+            if (!formatted) {
+                el.textContent = raw;
+                return;
+            }
+            el.innerHTML = formatFriendlyDateHtml(raw);
         });
     }
 
@@ -206,17 +294,61 @@
         });
     }
 
+    function showBootstrapConfirmModal(message, onConfirm) {
+        let modalEl = document.getElementById('globalConfirmModal');
+        if (!modalEl) {
+            modalEl = document.createElement('div');
+            modalEl.id = 'globalConfirmModal';
+            modalEl.className = 'modal fade';
+            modalEl.setAttribute('tabindex', '-1');
+            modalEl.setAttribute('aria-hidden', 'true');
+            modalEl.innerHTML = `
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content shadow-lg border-0">
+                        <div class="modal-header bg-danger text-white">
+                            <h5 class="modal-title">Confirm Action</h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body text-center py-4">
+                            <p class="fw-semibold mb-2 modal-message-text fs-5"></p>
+                            <p class="text-muted small mb-0">This action cannot be undone.</p>
+                        </div>
+                        <div class="modal-footer d-flex justify-content-center gap-2 pb-3">
+                            <button type="button" class="btn btn-outline-secondary px-4" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-danger px-4 confirm-btn">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modalEl);
+        }
+
+        modalEl.querySelector('.modal-message-text').textContent = message;
+
+        const confirmBtn = modalEl.querySelector('.confirm-btn');
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+
+        const bsModal = new bootstrap.Modal(modalEl);
+
+        newConfirmBtn.addEventListener('click', () => {
+            bsModal.hide();
+            onConfirm();
+        });
+
+        bsModal.show();
+    }
+
     function initConfirmForms() {
         document.querySelectorAll('form[data-confirm]').forEach((form) => {
-            form.addEventListener('submit', async (event) => {
+            form.addEventListener('submit', (event) => {
                 if (form.dataset.confirmed === 'true') return;
 
                 event.preventDefault();
-                const confirmed = await confirmDialog(form.dataset.confirm || 'Are you sure?', 'Delete');
-                if (!confirmed) return;
-
-                form.dataset.confirmed = 'true';
-                form.requestSubmit();
+                showBootstrapConfirmModal(form.dataset.confirm || 'Are you sure?', () => {
+                    form.dataset.confirmed = 'true';
+                    form.requestSubmit();
+                });
             });
         });
     }
@@ -281,7 +413,8 @@
             buttonText.className = 'category-select-current';
             const chevron = document.createElement('span');
             chevron.className = 'category-select-chevron';
-            chevron.textContent = 'v';
+            chevron.setAttribute('aria-hidden', 'true');
+            chevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
             button.append(buttonText, chevron);
 
             const panel = document.createElement('div');
@@ -311,11 +444,13 @@
             function closePanel() {
                 panel.hidden = true;
                 button.setAttribute('aria-expanded', 'false');
+                chevron.classList.remove('is-open');
             }
 
             function openPanel() {
                 panel.hidden = false;
                 button.setAttribute('aria-expanded', 'true');
+                chevron.classList.add('is-open');
                 search.value = '';
                 renderOptions('');
                 search.focus();
@@ -378,6 +513,11 @@
 
             panel.append(search, list);
             wrapper.append(button, panel);
+
+            const hostModal = select.closest('.modal');
+            if (hostModal) {
+                hostModal.addEventListener('hidden.bs.modal', closePanel);
+            }
         });
     }
 
@@ -419,40 +559,164 @@
         });
     }
 
-    function initClientTableSorting() {
-        document.querySelectorAll('table:not(.server-sorted)').forEach(table => {
-            const headers = table.querySelectorAll('th.sortable-header');
-            if (headers.length === 0) return;
+    // Premium SVG icons for sorting
+    const doubleArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="ms-1" style="vertical-align: middle; opacity: 0.5;"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>`;
+    const upArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary" style="vertical-align: middle;"><path d="m18 15-6-6-6 6"/></svg>`;
+    const downArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary" style="vertical-align: middle;"><path d="m6 9 6 6 6-6"/></svg>`;
 
-            headers.forEach((header, index) => {
-                header.style.cursor = 'pointer';
-                
-                let iconSpan = header.querySelector('.sort-icon');
-                if (!iconSpan) {
-                    iconSpan = document.createElement('span');
-                    iconSpan.className = 'sort-icon';
-                    iconSpan.innerHTML = ' &#8597;';
-                    header.appendChild(iconSpan);
+    function initUnifiedTable(table, options = {}) {
+        if (!table) return;
+
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        // Mark as initialized
+        table.dataset.unifiedInitialized = 'true';
+
+        // 1. Client-Side Sorting Setup
+        const headers = table.querySelectorAll('th.sortable-header');
+        headers.forEach((header, index) => {
+            header.style.cursor = 'pointer';
+            header.style.userSelect = 'none';
+
+            let iconSpan = header.querySelector('.sort-icon');
+            if (!iconSpan) {
+                iconSpan = document.createElement('span');
+                iconSpan.className = 'sort-icon';
+                header.appendChild(iconSpan);
+            }
+            // Start with unsorted icon unless already set
+            if (!header.classList.contains('active')) {
+                iconSpan.innerHTML = doubleArrowSvg;
+            }
+
+            // Remove old listeners to avoid multiple triggers on re-init
+            const newHeader = header.cloneNode(true);
+            header.parentNode.replaceChild(newHeader, header);
+
+            newHeader.addEventListener('click', () => {
+                const currentDir = newHeader.getAttribute('data-dir') || 'none';
+                const nextDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+                // Reset all headers
+                const freshHeaders = table.querySelectorAll('th.sortable-header');
+                freshHeaders.forEach(h => {
+                    h.removeAttribute('data-dir');
+                    h.classList.remove('active');
+                    const hIcon = h.querySelector('.sort-icon');
+                    if (hIcon) hIcon.innerHTML = doubleArrowSvg;
+                });
+
+                newHeader.setAttribute('data-dir', nextDir);
+                newHeader.classList.add('active');
+                const freshIconSpan = newHeader.querySelector('.sort-icon');
+                if (freshIconSpan) {
+                    freshIconSpan.innerHTML = nextDir === 'asc' ? upArrowSvg : downArrowSvg;
                 }
 
-                header.addEventListener('click', () => {
-                    const currentDir = header.getAttribute('data-dir') || 'none';
-                    const nextDir = currentDir === 'asc' ? 'desc' : 'asc';
-                    
-                    headers.forEach(h => {
-                        h.removeAttribute('data-dir');
-                        const hIcon = h.querySelector('.sort-icon');
-                        if (hIcon) hIcon.innerHTML = ' &#8597;';
-                        h.classList.remove('active');
-                    });
+                sortRows(table, index, nextDir);
+                // Reset page to 1 after sorting
+                currentPage = 1;
+                renderPage(1);
+            });
+        });
 
-                    header.setAttribute('data-dir', nextDir);
-                    header.classList.add('active');
-                    iconSpan.innerHTML = nextDir === 'asc' ? ' &uarr;' : ' &darr;';
+        // 2. Client-Side Pagination Setup
+        const itemsPerPage = options.pageSize || 10;
+        let currentPage = 1;
 
-                    sortRows(table, index, nextDir);
+        // Dynamic pagination container
+        let pagContainer = table.nextElementSibling;
+        if (pagContainer && pagContainer.classList.contains('table-pagination-controls')) {
+            pagContainer.innerHTML = '';
+        } else {
+            pagContainer = document.createElement('div');
+            pagContainer.className = 'd-flex justify-content-between align-items-center mt-3 flex-wrap gap-2 table-pagination-controls';
+            
+            // Insert after table-shell if inside one, else after table itself
+            const shell = table.closest('.table-shell') || table;
+            shell.parentNode.insertBefore(pagContainer, shell.nextSibling);
+        }
+
+        function renderPage(page) {
+            const allRows = Array.from(tbody.querySelectorAll('tr'));
+            // Filter out empty state row
+            const dataRows = allRows.filter(row => !row.querySelector('td[colspan]'));
+
+            if (dataRows.length === 0) {
+                pagContainer.style.display = 'none';
+                return;
+            }
+
+            const totalRows = dataRows.length;
+            const totalPages = Math.ceil(totalRows / itemsPerPage);
+
+            if (totalPages <= 1) {
+                pagContainer.style.display = 'none';
+                // Show all rows
+                allRows.forEach(r => r.style.display = '');
+                return;
+            }
+
+            pagContainer.style.display = 'flex';
+            currentPage = Math.max(1, Math.min(page, totalPages));
+
+            const startIdx = (currentPage - 1) * itemsPerPage;
+            const endIdx = startIdx + itemsPerPage;
+
+            // Hide/Show appropriate rows
+            dataRows.forEach((row, idx) => {
+                row.style.display = (idx >= startIdx && idx < endIdx) ? '' : 'none';
+            });
+
+            // Rebuild controls content
+            const showingStart = startIdx + 1;
+            const showingEnd = Math.min(endIdx, totalRows);
+            
+            pagContainer.innerHTML = `
+                <div class="text-muted small">Showing <strong>${showingStart}</strong> to <strong>${showingEnd}</strong> of <strong>${totalRows}</strong> entries</div>
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                        <a class="page-link" href="#" data-page="${currentPage - 1}">Previous</a>
+                    </li>
+                    ${Array.from({ length: totalPages }, (_, i) => i + 1).map(p => `
+                        <li class="page-item ${currentPage === p ? 'active' : ''}">
+                            <a class="page-link" href="#" data-page="${p}">${p}</a>
+                        </li>
+                    `).join('')}
+                    <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                        <a class="page-link" href="#" data-page="${currentPage + 1}">Next</a>
+                    </li>
+                </ul>
+            `;
+
+            // Bind click handlers to pagination links
+            pagContainer.querySelectorAll('.page-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const targetPage = parseInt(link.getAttribute('data-page'));
+                    if (!isNaN(targetPage) && targetPage !== currentPage) {
+                        renderPage(targetPage);
+                    }
                 });
             });
+        }
+
+        // Expose a quick trigger to re-paginate dynamically
+        table.refreshPagination = () => {
+            renderPage(currentPage);
+        };
+
+        // Initial render
+        renderPage(1);
+    }
+
+    window.FinTrak = window.FinTrak || {};
+    window.FinTrak.initUnifiedTable = initUnifiedTable;
+
+    function initClientTableSorting() {
+        document.querySelectorAll('table:not(.server-sorted)').forEach(table => {
+            initUnifiedTable(table);
         });
     }
 
@@ -460,12 +724,14 @@
         const tbody = table.querySelector('tbody');
         if (!tbody) return;
         const rows = Array.from(tbody.querySelectorAll('tr'));
-        if (rows.length <= 1 && (rows[0] && rows[0].querySelector('td[colspan]'))) return;
+        // Exclude empty state rows
+        const dataRows = rows.filter(row => !row.querySelector('td[colspan]'));
+        if (dataRows.length <= 1) return;
 
         let isDate = true;
         let isNum = true;
         
-        const samples = rows.map(row => {
+        const samples = dataRows.map(row => {
             const td = row.children[colIndex];
             if (!td) return '';
             const dateEl = td.querySelector('[data-format-date], [datetime]');
@@ -488,7 +754,7 @@
             }
         });
 
-        rows.sort((a, b) => {
+        dataRows.sort((a, b) => {
             let valA = getCellValue(a.children[colIndex]);
             let valB = getCellValue(b.children[colIndex]);
 
@@ -507,7 +773,7 @@
             }
         });
 
-        rows.forEach(row => tbody.appendChild(row));
+        dataRows.forEach(row => tbody.appendChild(row));
     }
 
     function getCellValue(td) {
@@ -596,6 +862,7 @@
         initConfirmForms();
         initPasswordToggles();
         initCategorySelects();
+        initModalFormDismiss();
         initMobileNavbarDrawer();
         initClientTableSorting();
         initQueryParamModals();

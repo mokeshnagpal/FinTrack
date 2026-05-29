@@ -7,7 +7,10 @@
   }
 
   function formatDate(value) {
-    return window.FinTrak?.formatFriendlyDate ? window.FinTrak.formatFriendlyDate(value) : value;
+    if (window.FinTrak?.formatFriendlyDateHtml) {
+      return window.FinTrak.formatFriendlyDateHtml(value);
+    }
+    return escapeHtml(value || '');
   }
 
   function escapeHtml(value) {
@@ -57,7 +60,7 @@
     }
     body.innerHTML = rows.map((entry) => `
       <tr>
-        <td data-label="When"><small>${escapeHtml(formatDate(entry.timestamp || ''))}</small></td>
+        <td data-label="When"><small>${formatDate(entry.timestamp || '')}</small></td>
         <td data-label="Person"><small>${escapeHtml(entry.person || '')}</small></td>
         <td data-label="For"><small>${escapeHtml(entry.description || '')}</small></td>
         <td data-label="Category"><small>${escapeHtml(entry.category || 'Uncategorized')}</small></td>

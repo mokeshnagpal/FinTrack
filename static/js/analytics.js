@@ -23,6 +23,7 @@ const elements = {
   rawTable: document.getElementById('rawTable'),
   rawTableBody: document.querySelector('#rawTable tbody'),
   insightsArea: document.getElementById('insightsArea'),
+  panelHeading: document.getElementById('panelHeading'),
   tabs: Array.from(document.querySelectorAll('#analyticsTabs [data-view]')),
   presets: Array.from(document.querySelectorAll('[data-range]')),
   summary: {
@@ -56,20 +57,21 @@ function escapeHtml(unsafe) {
   })[char]);
 }
 
-function formatDateInput(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+const controls = window.FinTrak?.analyticsControls;
+let controlApi = null;
 
 function formatDisplayDate(value) {
-  return window.FinTrak && window.FinTrak.formatFriendlyDate
-    ? window.FinTrak.formatFriendlyDate(value)
-    : value;
+  if (window.FinTrak?.formatFriendlyDateHtml) {
+    return window.FinTrak.formatFriendlyDateHtml(value);
+  }
+  return escapeHtml(value || '');
 }
 
 function setStatus(message = '', type = 'info') {
+  if (controls?.setStatus) {
+    controls.setStatus(elements.status, message, type);
+    return;
+  }
   if (!elements.status) return;
   elements.status.textContent = message;
   elements.status.className = message ? `analytics-status analytics-status-${type} mb-3` : 'analytics-status mb-3';
@@ -80,7 +82,7 @@ function setText(node, value) {
 }
 
 function buildParams() {
-  return {
+  return controlApi ? controlApi.buildParams() : {
     period: elements.periodSelect.value,
     count: 30,
     from: elements.fromDate.value || '',
@@ -242,12 +244,12 @@ function renderTransactions(transactions) {
   transactions.forEach((transaction) => {
     const tr = document.createElement('tr');
     const editCell = canEdit
-      ? `<td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/edit/${encodeURIComponent(transaction.id)}">Edit</a></td>`
-      : '';
-    tr.innerHTML = `<td>${escapeHtml(formatDisplayDate(transaction.timestamp))}</td>
-                    <td>${escapeHtml(transaction.description)}</td>
-                    <td>${escapeHtml(transaction.category)}</td>
-                    <td class="text-end">${Number(transaction.amount).toFixed(2)}</td>
+      ? `<td data-label="Actions" class="text-end"><div class="table-actions"><a class="btn btn-sm btn-outline-primary" href="/edit/${encodeURIComponent(transaction.id)}">Edit</a></div></td>`
+      : `<td data-label="Actions" class="text-end"><span class="badge">Read only</span></td>`;
+    tr.innerHTML = `<td data-label="When">${formatDisplayDate(transaction.timestamp)}</td>
+                    <td data-label="Description">${escapeHtml(transaction.description)}</td>
+                    <td data-label="Category">${escapeHtml(transaction.category)}</td>
+                    <td data-label="Amount" class="text-end">${Number(transaction.amount).toFixed(2)}</td>
                     ${editCell}`;
     elements.rawTableBody.appendChild(tr);
   });
@@ -269,6 +271,9 @@ async function refreshAnalytics() {
     renderInsights(totals, categories || []);
     const chartsRendered = renderCharts(totals, categories || []);
     renderTransactions(tx.transactions || []);
+    if (elements.rawTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
+      window.FinTrak.initUnifiedTable(elements.rawTable);
+    }
     if (chartsRendered) {
       setStatus(`Showing ${params.from} to ${params.to}, grouped ${params.period}.`, 'success');
     }
@@ -279,6 +284,9 @@ async function refreshAnalytics() {
       destroyCharts();
       updateSummary({});
       renderTransactions(snapshot.transactions || []);
+      if (elements.rawTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
+        window.FinTrak.initUnifiedTable(elements.rawTable);
+      }
       setStatus('Showing cached recent transactions. Full analytics will load when the service wakes.', 'warning');
       elements.insightsArea.innerHTML = '<p>Full analytics and graphs need fresh server data.</p>';
     } else {
@@ -301,66 +309,35 @@ function setActiveView(view) {
   elements.graphsPane.classList.toggle('active', view === 'graphs');
   elements.rawPane.classList.toggle('show', view === 'raw');
   elements.rawPane.classList.toggle('active', view === 'raw');
-}
 
-function setRange(range) {
-  const today = new Date();
-  const from = new Date(today);
-
-  if (range === '90d') {
-    from.setDate(today.getDate() - 89);
-    elements.periodSelect.value = 'daily';
-  } else if (range === '12m') {
-    from.setMonth(today.getMonth() - 11);
-    from.setDate(1);
-    elements.periodSelect.value = 'monthly';
-  } else if (range === 'ytd') {
-    from.setMonth(0, 1);
-    elements.periodSelect.value = 'monthly';
-  } else {
-    from.setDate(today.getDate() - 29);
-    elements.periodSelect.value = 'daily';
+  if (elements.panelHeading) {
+    elements.panelHeading.textContent = view === 'raw' ? 'Transaction' : 'Insight';
   }
-
-  elements.fromDate.value = formatDateInput(from);
-  elements.toDate.value = formatDateInput(today);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  setRange('30d');
   setActiveView('graphs');
 
-  elements.presets.forEach((button) => {
-    button.addEventListener('click', async () => {
-      elements.presets.forEach((item) => item.classList.remove('active'));
-      button.classList.add('active');
-      setRange(button.dataset.range);
-      await refreshAnalytics();
-    });
-  });
-
-  if (elements.presets[0]) {
-    elements.presets[0].classList.add('active');
+  if (controls?.init) {
+    controlApi = controls.init(
+      {
+        applyBtn: elements.applyBtn,
+        fromDate: elements.fromDate,
+        toDate: elements.toDate,
+        periodSelect: elements.periodSelect,
+        presets: elements.presets,
+      },
+      { onRefresh: refreshAnalytics, defaultRange: '30d' },
+    );
   }
 
   elements.tabs.forEach((tab) => {
     tab.addEventListener('click', () => setActiveView(tab.dataset.view));
   });
 
-  elements.periodSelect.addEventListener('change', refreshAnalytics);
-  elements.fromDate.addEventListener('change', () => {
-    elements.presets.forEach((item) => item.classList.remove('active'));
-    refreshAnalytics();
-  });
-  elements.toDate.addEventListener('change', () => {
-    elements.presets.forEach((item) => item.classList.remove('active'));
-    refreshAnalytics();
-  });
-
   elements.exportCsvBtn.addEventListener('click', () => {
     window.open(`/export/transactions_csv?${new URLSearchParams(buildParams()).toString()}`, '_blank');
   });
 
-  elements.applyBtn.addEventListener('click', refreshAnalytics);
   refreshAnalytics();
 });

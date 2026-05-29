@@ -1,0 +1,39 @@
+<div class="card p-3 mb-3 shadow-sm analytics-controls">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <div class="analytics-presets" aria-label="Quick ranges">
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="30d">30 Days</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="90d">90 Days</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="12m">12 Months</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="ytd">This Year</button>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+            <label class="form-label small mb-0 text-nowrap" for="periodSelect">Group by:</label>
+            <select id="periodSelect" class="form-select form-select-sm" style="min-width: 120px;">
+                <option value="daily" selected>Daily</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="analytics-or-divider mb-3">
+        <span>(or) Custom Dates</span>
+    </div>
+
+    <div class="analytics-filter-grid">
+        <div>
+            <label class="form-label small mb-1 d-block" for="fromDate">From</label>
+            <input id="fromDate" class="form-control form-control-sm" type="date">
+        </div>
+
+        <div>
+            <label class="form-label small mb-1 d-block" for="toDate">To</label>
+            <input id="toDate" class="form-control form-control-sm" type="date">
+        </div>
+
+        <div class="analytics-filter-action">
+            <button id="applyBtn" class="btn btn-primary w-100">Apply</button>
+        </div>
+    </div>
+</div>

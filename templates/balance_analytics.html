@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}FinTrak - Balance Analytics{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Insights</span>
+        <h1>Balance Analytics</h1>
+        <p>Track balance level, net changes, and entry types over time in IST.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-outline-primary" href="{{ url_for('balance') }}">Balance</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('analytics') }}">Spend Analytics</a>
+    </div>
+</section>
+
+{% include 'partials/analytics_controls.html' %}
+
+<div id="analyticsStatus" class="analytics-status mb-3" role="status" aria-live="polite"></div>
+
+<div class="analytics-metrics mb-3" aria-label="Balance summary metrics">
+    <div class="metric-card">
+        <span>Current balance</span>
+        <strong id="sumCurrent">0.00</strong>
+    </div>
+    <div class="metric-card">
+        <span>Net change</span>
+        <strong id="sumNet">0.00</strong>
+    </div>
+    <div class="metric-card">
+        <span>Entries</span>
+        <strong id="sumCount">0</strong>
+    </div>
+    <div class="metric-card">
+        <span>Avg change</span>
+        <strong id="sumAvg">0.00</strong>
+    </div>
+    <div class="metric-card">
+        <span>Period change</span>
+        <strong id="sumPct">N/A</strong>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-lg-8 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+                <h5 class="card-title mb-0">Balance trend</h5>
+                <span class="badge">Close: <span id="sumClosing">0.00</span></span>
+            </div>
+            <div class="chart-wrapper chart-wrapper-lg">
+                <canvas id="balanceTrendChart" role="img" aria-label="Balance trend chart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <h6 class="card-title mb-2">Change by type</h6>
+            <div class="side-chart-wrapper chart-wrapper-lg">
+                <canvas id="typeChart" role="img" aria-label="Balance change by type"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-lg-6 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <h6 class="card-title mb-2">Net change per period</h6>
+            <div class="chart-wrapper">
+                <canvas id="deltaChart" role="img" aria-label="Net balance change per period"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <h6 class="card-title mb-2">Cumulative net change</h6>
+            <div class="chart-wrapper">
+                <canvas id="cumulativeChart" role="img" aria-label="Cumulative net change chart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-4 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <h6 class="mb-2">Details</h6>
+            <ul class="list-unstyled mb-0 analytics-detail-list">
+                <li>Opening <strong id="sumOpening">0.00</strong></li>
+                <li>Min change <strong id="sumMin">0.00</strong></li>
+                <li>Max change <strong id="sumMax">0.00</strong></li>
+                <li>Median change <strong id="sumMedian">0.00</strong></li>
+                <li>Top type <strong id="sumTopType">-</strong></li>
+                <li>Largest change <strong id="sumLargest">-</strong></li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="col-lg-8 col-md-12">
+        <div class="card p-3 shadow-sm h-100">
+            <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+                <h6 class="mb-0">Insights</h6>
+                <ul class="nav nav-tabs analytics-tabs" id="balanceAnalyticsTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="graphs-tab" data-view="graphs" type="button">Summary</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="raw-tab" data-view="raw" type="button">Entries</button>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="graphsPane">
+                    <div id="insightsArea">Loading balance analytics...</div>
+                </div>
+
+                <div class="tab-pane fade" id="rawPane">
+                    <div class="table-shell table-responsive analytics-table-wrap">
+                        <table class="table table-sm align-middle mb-0" id="entriesTable">
+                            <thead>
+                                <tr>
+                                    <th class="sortable-header">When</th>
+                                    <th class="sortable-header">Type</th>
+                                    <th class="sortable-header text-end">Delta</th>
+                                    <th class="sortable-header text-end">Balance</th>
+                                    <th class="sortable-header">Note</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/analytics_controls.js') }}"></script>
+<script src="{{ url_for('static', filename='js/balance_analytics.js') }}"></script>
+{% endblock %}
