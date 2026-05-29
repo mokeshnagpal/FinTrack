@@ -15,8 +15,15 @@
   function setWaiting() {
     renderState.textContent = 'Waking';
     renderMessage.textContent = 'Waiting for the service to respond.';
-    cacheState.textContent = 'Waiting';
-    cacheMessage.textContent = 'Cache check will run when the service responds.';
+    setBrowserCacheStatus();
+  }
+
+  function setBrowserCacheStatus() {
+    const hasCache = Boolean(window.FinTrak?.cache?.hasUsableSnapshot?.());
+    cacheState.textContent = hasCache ? 'Available' : 'Not available';
+    cacheMessage.textContent = hasCache
+      ? 'Usable local cache is available.'
+      : 'No usable local cache is available.';
   }
 
   function setInitialStatusFromBrowserCache() {
@@ -28,32 +35,14 @@
 
     renderState.textContent = 'Cached';
     renderMessage.textContent = 'Cached app data is available while service status is checked.';
-    cacheState.textContent = 'Available';
-    cacheMessage.textContent = 'Local cache is available; fresh check runs when service responds.';
-  }
-
-  function setCache(cacheRefresh) {
-    if (!cacheRefresh) {
-      cacheState.textContent = 'Waiting';
-      cacheMessage.textContent = 'Cache check will run when the service responds.';
-      return;
-    }
-
-    const updated = Array.isArray(cacheRefresh.updated) ? cacheRefresh.updated : [];
-    cacheState.textContent = cacheRefresh.ok ? 'Updated' : 'Needs retry';
-    cacheMessage.textContent = cacheRefresh.ok
-      ? `Checked ${updated.length || 0} cache area${updated.length === 1 ? '' : 's'} before login.`
-      : 'Cache check could not finish. It will retry.';
+    setBrowserCacheStatus();
   }
 
   async function checkWake() {
     const shouldRefreshCache = !cacheRefreshRequested;
     renderState.textContent = 'Checking';
     renderMessage.textContent = 'Checking whether the service is awake.';
-    if (shouldRefreshCache) {
-      cacheState.textContent = 'Checking';
-      cacheMessage.textContent = 'Checking updates before login.';
-    }
+    setBrowserCacheStatus();
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
@@ -71,7 +60,7 @@
       renderMessage.textContent = awake
         ? 'The service responded. Login is ready.'
         : 'The service did not return a ready response yet.';
-      setCache(data.cache_refresh);
+      setBrowserCacheStatus();
     } catch (error) {
       cacheRefreshRequested = false;
       setWaiting();

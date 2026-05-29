@@ -9,6 +9,8 @@
     renderMessage: document.getElementById('renderMessage'),
     cacheState: document.getElementById('cacheState'),
     cacheMessage: document.getElementById('cacheMessage'),
+    cacheDetailBadge: document.getElementById('cacheDetailBadge'),
+    cacheDetailList: document.getElementById('cacheDetailList'),
     lastCheck: document.getElementById('lastCheck'),
     queueBadge: document.getElementById('queueBadge'),
     pendingList: document.getElementById('pendingList'),
@@ -19,6 +21,16 @@
   let syncRequestedForCurrentWake = false;
   let cacheRefreshRequestedForCurrentWake = false;
   const pollMs = Number(window.FinTrakConstants?.sync_status_poll_seconds || 12) * 1000;
+  const cacheItems = [
+    { id: 'view_only_password', group: 'Server', label: 'View-only password hash', detail: 'Waiting for Render.' },
+    { id: 'categories', group: 'Server', label: 'Categories', detail: 'Waiting for Render.' },
+    { id: 'user_auth', group: 'Server', label: 'Current user auth hash', detail: 'Waiting for Render.' },
+    { id: 'browser_categories', group: 'Browser', label: 'Cached categories', detail: 'No local snapshot checked yet.' },
+    { id: 'browser_balance', group: 'Browser', label: 'Cached balance', detail: 'No local snapshot checked yet.' },
+    { id: 'browser_balance_history', group: 'Browser', label: 'Cached balance history', detail: 'No local snapshot checked yet.' },
+    { id: 'browser_transactions', group: 'Browser', label: 'Cached recent transactions', detail: 'No local snapshot checked yet.' },
+  ];
+  const cacheItemState = new Map(cacheItems.map((item) => [item.id, { status: 'Waiting', detail: item.detail }]));
 
   function readQueue() {
     try {
@@ -41,6 +53,98 @@
   function setBadge(text, tone) {
     elements.queueBadge.textContent = text;
     elements.queueBadge.className = tone ? `badge ${tone}` : 'badge';
+  }
+
+  function setCacheDetailBadge(text, tone) {
+    if (!elements.cacheDetailBadge) return;
+    elements.cacheDetailBadge.textContent = text;
+    elements.cacheDetailBadge.className = tone ? `badge ${tone}` : 'badge';
+  }
+
+  function renderCacheDetails() {
+    if (!elements.cacheDetailList) return;
+    elements.cacheDetailList.textContent = '';
+    cacheItems.forEach((item) => {
+      const state = cacheItemState.get(item.id) || {};
+      const node = document.createElement('div');
+      node.className = 'sync-cache-item';
+
+      const group = document.createElement('span');
+      group.textContent = item.group;
+      const label = document.createElement('strong');
+      label.textContent = item.label;
+      const detail = document.createElement('small');
+      detail.textContent = `${state.status || 'Waiting'} - ${state.detail || item.detail}`;
+
+      node.append(group, label, detail);
+      elements.cacheDetailList.appendChild(node);
+    });
+  }
+
+  function setCacheItem(id, status, detail) {
+    cacheItemState.set(id, { status, detail });
+    renderCacheDetails();
+  }
+
+  function setServerCacheUpdating() {
+    ['view_only_password', 'categories', 'user_auth'].forEach((id) => {
+      setCacheItem(id, 'Updating', 'Checking Firestore.');
+    });
+    setCacheDetailBadge('Updating', '');
+  }
+
+  function setBrowserCacheUpdating(reason) {
+    ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions'].forEach((id) => {
+      setCacheItem(id, 'Updating', reason);
+    });
+    setCacheDetailBadge('Updating', '');
+  }
+
+  function applyServerCacheResult(cacheRefresh) {
+    if (!cacheRefresh) return;
+    const updated = new Set(Array.isArray(cacheRefresh.updated) ? cacheRefresh.updated : []);
+    const errors = new Set(Array.isArray(cacheRefresh.errors) ? cacheRefresh.errors : []);
+
+    ['view_only_password', 'categories', 'user_auth'].forEach((id) => {
+      if (updated.has(id)) {
+        setCacheItem(id, 'Updated', 'Server cache refreshed.');
+      } else if (errors.has(id)) {
+        setCacheItem(id, 'Failed', 'Server cache refresh failed.');
+      } else {
+        setCacheItem(id, 'Skipped', 'No update returned.');
+      }
+    });
+  }
+
+  function applyBrowserSnapshot(snapshot) {
+    if (!snapshot) return;
+    const categories = Array.isArray(snapshot.categories) ? snapshot.categories.length : 0;
+    const history = Array.isArray(snapshot.balance?.history) ? snapshot.balance.history.length : 0;
+    const transactions = Array.isArray(snapshot.transactions) ? snapshot.transactions.length : 0;
+    const currentBalance = snapshot.balance?.current?.balance;
+
+    setCacheItem('browser_categories', 'Updated', `${categories} categor${categories === 1 ? 'y' : 'ies'} cached.`);
+    setCacheItem('browser_balance', 'Updated', `Current balance cached: ${currentBalance ?? '0.00'}.`);
+    setCacheItem('browser_balance_history', 'Updated', `${history} balance histor${history === 1 ? 'y item' : 'y items'} cached.`);
+    setCacheItem('browser_transactions', 'Updated', `${transactions} recent transaction${transactions === 1 ? '' : 's'} cached.`);
+    setCacheDetailBadge('Updated', 'success');
+  }
+
+  async function refreshBrowserSnapshot(reason) {
+    if (!window.FinTrak?.cache?.refreshSnapshot) return null;
+    setBrowserCacheUpdating(reason);
+    try {
+      const snapshot = await window.FinTrak.cache.refreshSnapshot();
+      applyBrowserSnapshot(snapshot);
+      return snapshot;
+    } catch (error) {
+      console.warn('browser cache snapshot refresh failed', error);
+      ['browser_categories', 'browser_balance', 'browser_balance_history', 'browser_transactions'].forEach((id) => {
+        setCacheItem(id, 'Failed', 'Browser cache snapshot could not update.');
+      });
+      setCacheDetailBadge('Needs retry', 'danger');
+      return null;
+    }
   }
 
   function renderEmptyPendingList() {
@@ -119,6 +223,7 @@
     elements.cacheMessage.textContent = cacheRefresh.ok
       ? `Checked ${updated.length || 0} cache area${updated.length === 1 ? '' : 's'} before sync.`
       : 'Cache check could not finish. It will retry on the next status check.';
+    applyServerCacheResult(cacheRefresh);
   }
 
   async function checkRender(allowCacheRefresh) {
@@ -127,6 +232,7 @@
     if (allowCacheRefresh && !cacheRefreshRequestedForCurrentWake && elements.cacheState && elements.cacheMessage) {
       elements.cacheState.textContent = 'Checking';
       elements.cacheMessage.textContent = 'Checking Firestore updates before sync.';
+      setServerCacheUpdating();
     }
 
     const controller = new AbortController();
@@ -147,10 +253,8 @@
         ? 'The server responded. Cache check ran before pending actions.'
         : 'The server did not return a ready response yet.';
       renderCacheRefreshStatus(data.cache_refresh);
-      if (renderAwake && window.FinTrak?.cache?.refreshSnapshot) {
-        await window.FinTrak.cache.refreshSnapshot().catch((error) => {
-          console.warn('browser cache snapshot refresh failed', error);
-        });
+      if (renderAwake) {
+        await refreshBrowserSnapshot('Updating local cache after Render wake.');
       }
     } catch (error) {
       renderAwake = false;
@@ -172,11 +276,9 @@
 
     if (allowSync && renderAwake && queue.length > 0 && !syncRequestedForCurrentWake && window.FinTrak?.syncPendingActions) {
       syncRequestedForCurrentWake = true;
-      await window.FinTrak.syncPendingActions({ quiet: true });
-      if (window.FinTrak?.cache?.refreshSnapshot) {
-        await window.FinTrak.cache.refreshSnapshot().catch((error) => {
-          console.warn('browser cache snapshot refresh failed after sync', error);
-        });
+      const result = await window.FinTrak.syncPendingActions({ quiet: true });
+      if (result && result.synced > 0) {
+        await refreshBrowserSnapshot('Updating local cache after queued jobs finished.');
       }
       renderQueue();
     }
@@ -199,6 +301,7 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+    renderCacheDetails();
     renderQueue();
     refresh(true);
     setInterval(() => refresh(true), pollMs);

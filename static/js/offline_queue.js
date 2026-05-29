@@ -186,7 +186,7 @@
   }
 
   async function syncQueue(options = {}) {
-    if (syncing) return;
+    if (syncing) return { synced: 0, failed: 0, remaining: readQueue().length, skipped: true };
     syncing = true;
 
     const queue = readQueue();
@@ -222,6 +222,8 @@
     } else if (!options.quiet && failed > 0 && remaining.length > 0) {
       notify('Saved locally. Will sync when the server responds.', 'info');
     }
+
+    return { synced, failed, remaining: remaining.length, skipped: false };
   }
 
   function initQueuedForms() {
