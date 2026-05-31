@@ -821,13 +821,18 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
 }
 .btn-primary:hover{transform:translateY(-3px);box-shadow:0 20px 44px rgba(32,139,122,0.16)}
 
-/* Outline primary */
 .btn-outline-primary{
   color:var(--primary)!important;
   border:1px solid rgba(32,139,122,0.18);
   background:transparent;
 }
 .btn-outline-primary:hover{background:rgba(32,139,122,0.08);color:var(--primary-600)!important}
+.btn-outline-primary.active,.btn-outline-primary:active,.analytics-presets .btn.active{
+  background:var(--primary)!important;
+  color:#ffffff!important;
+  border-color:var(--primary)!important;
+  font-weight:600!important;
+}
 
 /* Outline secondary */
 .btn-outline-secondary{
