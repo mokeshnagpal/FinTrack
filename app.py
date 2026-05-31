@@ -1293,14 +1293,15 @@ def serialize_split_doc_for_cache(doc):
 def api_cache_snapshot():
     username = require_user()
     latest_balance = get_latest_balance(username=username)
-    balance_docs = [
+    balance_docs_raw = [
         doc_to_txn(doc)
         for doc in stream_with_timeout(
             bal_collection(username)
             .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(BROWSER_CACHE_BALANCE_HISTORY)
+            .limit(100)
         )
     ]
+    balance_docs = [d for d in balance_docs_raw if d.get('type') not in ('txn', 'transaction')][:BROWSER_CACHE_BALANCE_HISTORY]
     txn_docs = [
         doc_to_txn(doc)
         for doc in stream_with_timeout(
@@ -4255,9 +4256,10 @@ def api_balance_current():
     q = (
         bal_collection(username)
         .order_by('timestamp', direction=firestore.Query.DESCENDING)
-        .limit(BALANCE_HISTORY_TABLE_LIMIT)
+        .limit(100)
     )
-    docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
+    raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
+    docs = [d for d in raw_docs if d.get('type') not in ('txn', 'transaction')][:BALANCE_HISTORY_TABLE_LIMIT]
     history = [{
         'id': d.get('_id'),
         'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
@@ -4530,7 +4532,7 @@ def api_balance_sync():
     delta = round(new_balance - base, 2)
     doc = {
         'balance': float(round(new_balance, 2)),
-        'type': 'sync',
+        'type': 'add',
         'delta': float(delta),
         'note': note,
         'timestamp': now
@@ -4539,7 +4541,7 @@ def api_balance_sync():
     result = {
         "balance": round(new_balance, 2),
         "timestamp": format_ist(now),
-        "type": "sync",
+        "type": "add",
         "delta": delta,
         "duplicate": False,
     }
@@ -4666,8 +4668,9 @@ def api_balance_undo():
 def api_balance_history():
     username = require_user()
     limit = parse_positive_int(request.args.get('limit'), default=50, max_value=200)
-    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
-    docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200)
+    raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
+    docs = [d for d in raw_docs if d.get('type') not in ('txn', 'transaction')][:limit]
     out = [{
         "id": d.get('_id'),
         "timestamp": format_ist(d.get('timestamp')) if d.get('timestamp') else None,
