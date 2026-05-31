@@ -152,6 +152,22 @@
                                                     <label class="form-label" for="title{{ sid }}">Split name</label>
                                                     <input class="form-control" id="title{{ sid }}" name="title" type="text" maxlength="80" placeholder="Chennai trip" value="{{ split.title }}" required>
                                                 </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label d-block text-white-50">Members Included</label>
+                                                    <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
+                                                        {% for person in all_people %}
+                                                        {% set is_checked = (split.get('people') is none) or (person in split.get('people', [])) %}
+                                                        <div class="col-6">
+                                                            <div class="form-check">
+                                                                <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="editSplitPerson{{ sid }}_{{ loop.index }}" {% if is_checked %}checked{% endif %}>
+                                                                <label class="form-check-label text-light small" for="editSplitPerson{{ sid }}_{{ loop.index }}">
+                                                                    {{ person }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        {% endfor %}
+                                                    </div>
+                                                </div>
                                                 <button type="submit" class="btn btn-primary w-100">Update Split</button>
                                             </form>
                                         </div>
@@ -187,6 +203,21 @@
                     <div class="mb-3">
                         {{ form.title.label(class="form-label") }}
                         {{ form.title(class="form-control", maxlength="80", placeholder="Chennai trip") }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label d-block text-white-50">Members Included</label>
+                        <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
+                            {% for person in all_people %}
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="newSplitPerson{{ loop.index }}" checked>
+                                    <label class="form-check-label text-light small" for="newSplitPerson{{ loop.index }}">
+                                        {{ person }}
+                                    </label>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
                     </div>
                     <div class="form-text small text-muted mb-3">
                         ✓ New split will be set as live by default

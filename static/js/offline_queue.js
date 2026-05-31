@@ -259,7 +259,8 @@
         description: data.get('description'),
         photo_link: data.get('photo_link'),
         cost_type: data.get('cost_type'),
-        approx_cost: data.get('approx_cost')
+        approx_cost: data.get('approx_cost'),
+        people: data.getAll('people')
       };
     }
 
@@ -272,7 +273,8 @@
     if (queueType === 'split-create' || queueType === 'split-edit') {
       return {
         title: data.get('title'),
-        is_live: data.has('is_live') && (data.get('is_live') === 'on' || data.get('is_live') === 'true')
+        is_live: data.has('is_live') && (data.get('is_live') === 'on' || data.get('is_live') === 'true'),
+        people: data.getAll('people')
       };
     }
 

@@ -153,6 +153,33 @@
                                 </div>
                             </div>
 
+                            {% set ns = namespace(split_people=none) %}
+                            {% if trip.split_id %}
+                                {% for s in splits %}
+                                    {% if s._id == trip.split_id %}
+                                        {% set ns.split_people = s.get('people') %}
+                                    {% endif %}
+                                {% endfor %}
+                            {% endif %}
+
+                            <!-- People Checklist for Split Option -->
+                            <div class="mb-3 edit-trip-people-container" id="editTripPeopleContainer{{ tid }}" style="{% if trip.cost_type == 'fixed' %}display: none;{% endif %}">
+                                <label class="form-label d-block text-white-50">Members Included</label>
+                                <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
+                                    {% for person in all_people %}
+                                    {% set is_checked = (ns.split_people is none) or (person in ns.split_people) %}
+                                    <div class="col-6">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="editTripPerson{{ tid }}_{{ loop.index }}" {% if is_checked %}checked{% endif %}>
+                                            <label class="form-check-label text-light small" for="editTripPerson{{ tid }}_{{ loop.index }}">
+                                                {{ person }}
+                                            </label>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+
                             <div class="form-text small text-muted mb-3 edit-split-notice-container" id="splitNoticeEdit{{ tid }}" style="{% if trip.cost_type == 'fixed' %}display: none;{% endif %}">
                                 ✓ Cost is automatically calculated from split entries per participant
                             </div>
@@ -265,6 +292,23 @@
                         </div>
                     </div>
 
+                    <!-- People Checklist for Split Option -->
+                    <div class="mb-3" id="newTripPeopleContainer" style="display: none;">
+                        <label class="form-label d-block text-white-50">Members Included</label>
+                        <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
+                            {% for person in all_people %}
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="newTripPerson{{ loop.index }}" checked>
+                                    <label class="form-check-label text-light small" for="newTripPerson{{ loop.index }}">
+                                        {{ person }}
+                                    </label>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
                     <div class="form-text small text-muted mb-3 d-none" id="newSplitNotice">
                         ✓ Cost is automatically calculated from split entries per participant, and a split account will be created automatically.
                     </div>
@@ -286,15 +330,18 @@
         const newCostType = document.getElementById('newCostTypeSelect');
         const approxCostNew = document.getElementById('approxCostContainerNew');
         const splitNoticeNew = document.getElementById('newSplitNotice');
+        const newPeopleContainer = document.getElementById('newTripPeopleContainer');
 
         if (newCostType && approxCostNew && splitNoticeNew) {
             newCostType.addEventListener('change', (e) => {
                 if (e.target.value === 'split') {
                     approxCostNew.style.display = 'none';
                     splitNoticeNew.classList.remove('d-none');
+                    if (newPeopleContainer) newPeopleContainer.style.display = 'block';
                 } else {
                     approxCostNew.style.display = 'block';
                     splitNoticeNew.classList.add('d-none');
+                    if (newPeopleContainer) newPeopleContainer.style.display = 'none';
                 }
             });
         }
@@ -305,13 +352,16 @@
                 const tid = select.dataset.tripId;
                 const costContainer = document.getElementById(`approxCostContainerEdit${tid}`);
                 const splitNotice = document.getElementById(`splitNoticeEdit${tid}`);
+                const peopleContainer = document.getElementById(`editTripPeopleContainer${tid}`);
                 
                 if (e.target.value === 'split') {
                     if (costContainer) costContainer.style.display = 'none';
                     if (splitNotice) splitNotice.style.display = 'block';
+                    if (peopleContainer) peopleContainer.style.display = 'block';
                 } else {
                     if (costContainer) costContainer.style.display = 'block';
                     if (splitNotice) splitNotice.style.display = 'none';
+                    if (peopleContainer) peopleContainer.style.display = 'none';
                 }
             });
         });

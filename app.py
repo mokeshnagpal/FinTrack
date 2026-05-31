@@ -587,9 +587,9 @@ def apply_category_choices(form, include=None):
         categories.append(include_name)
     form.category.choices = [(item, item) for item in categories]
 
-def apply_split_entry_choices(form, person_include=None, category_include=None):
+def apply_split_entry_choices(form, person_include=None, category_include=None, split_people_override=None):
     apply_category_choices(form, include=category_include)
-    people = get_split_people()
+    people = list(split_people_override) if split_people_override else get_split_people()
     include_name = normalize_person_name(person_include)
     if include_name and not person_exists(people, include_name):
         people.append(include_name)
@@ -2256,8 +2256,12 @@ def get_trip_documents(username=None):
         t = doc_to_txn(doc)
         if t.get('cost_type') == 'split' and t.get('split_id'):
             try:
+                split_doc = splits_collection(username).document(t['split_id']).get()
+                split_people = []
+                if split_doc.exists:
+                    split_people = split_doc.to_dict().get('people', [])
                 totals = get_split_totals(t['split_id'], username=username)
-                num_people = len(totals)
+                num_people = len(split_people) or len(totals)
                 t['approx_cost'] = round(sum(totals.values()) / num_people, 2) if num_people > 0 else 0.0
             except Exception as e:
                 app.logger.error("Error calculating dynamic split cost for trip %s: %s", t.get('_id'), str(e))
@@ -2395,9 +2399,11 @@ def splits():
             payload = request.get_json(silent=True) or {}
             title = validate_short_text(payload.get('title'), 'Title')
             is_live = bool(payload.get('is_live'))
+            people = payload.get('people', [])
             split_doc = {
                 'title': title,
                 'is_live': is_live,
+                'people': people,
                 'created_at': datetime.now(UTC),
                 'updated_at': datetime.now(UTC),
             }
@@ -2410,6 +2416,7 @@ def splits():
 
         if form.validate_on_submit():
             split_doc = build_split_document_doc(form)
+            split_doc['people'] = request.form.getlist('people')
             split_doc['created_at'] = datetime.now(UTC)
             doc_ref = splits_collection(username).document()
             doc_ref.set(split_doc)
@@ -2431,6 +2438,7 @@ def splits():
         splits=get_split_documents(username=username),
         live_split=get_live_split(username=username),
         trip_map=get_trip_split_map(username=username),
+        all_people=get_split_people(),
         editing=False,
         edit_id=None,
     )
@@ -2449,7 +2457,7 @@ def split_detail(split_id):
 
     split_data = doc_to_txn(split_doc)
     entry_form = SplitEntryForm()
-    apply_split_entry_choices(entry_form)
+    apply_split_entry_choices(entry_form, split_people_override=split_data.get('people'))
     return render_template(
         'split_detail.html',
         split_doc=split_data,
@@ -2482,6 +2490,7 @@ def split_edit(split_id):
         title = validate_short_text(payload.get('title'), 'Title')
         update_doc = {
             'title': title,
+            'people': payload.get('people', []),
             'updated_at': datetime.now(UTC),
         }
         doc_ref.set(update_doc, merge=True)
@@ -2490,6 +2499,7 @@ def split_edit(split_id):
 
     if form.validate_on_submit():
         update_doc = build_split_document_doc(form)
+        update_doc['people'] = request.form.getlist('people')
         update_doc['is_live'] = bool(split_doc.get('is_live'))
         update_doc['created_at'] = split_doc.get('created_at') or datetime.now(UTC)
         doc_ref.set(update_doc, merge=True)
@@ -2589,13 +2599,16 @@ def split_entry_add(split_id):
     if session.get('view_only'):
         abort(401, description="View-only sessions cannot add split entries")
     username = require_user()
-    if not splits_collection(username).document(split_id).get().exists:
+    split_ref = splits_collection(username).document(split_id)
+    split_doc = split_ref.get()
+    if not split_doc.exists:
         app.logger.warning("Split entry add requested for missing split id=%s user=%s", split_id, username)
         flash('Split not found.', 'warning')
         return redirect(url_for('splits'))
 
+    split_data = doc_to_txn(split_doc)
     form = SplitEntryForm()
-    apply_split_entry_choices(form)
+    apply_split_entry_choices(form, split_people_override=split_data.get('people'))
     if form.validate_on_submit():
         try:
             entry_doc = build_split_entry_doc(form)
@@ -2636,7 +2649,7 @@ def split_entry_edit(split_id, entry_id):
     entry = doc_to_txn(entry_doc)
     form = SplitEntryForm()
     form.submit.label.text = 'Update Entry'
-    apply_split_entry_choices(form, person_include=entry.get('person'), category_include=entry.get('category'))
+    apply_split_entry_choices(form, person_include=entry.get('person'), category_include=entry.get('category'), split_people_override=split_doc.to_dict().get('people'))
     if form.validate_on_submit():
         try:
             update_doc = build_split_entry_doc(form)
@@ -2912,6 +2925,7 @@ def trips():
                 split_doc = {
                     'title': name,
                     'is_live': False,
+                    'people': payload.get('people', []),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
                 }
@@ -2951,6 +2965,7 @@ def trips():
                 split_doc = {
                     'title': name,
                     'is_live': False,
+                    'people': request.form.getlist('people'),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
                 }
@@ -2991,6 +3006,7 @@ def trips():
         form=form,
         trips=trips_list,
         splits=splits_list,
+        all_people=get_split_people(),
     )
 
 
@@ -3025,17 +3041,25 @@ def trip_edit(trip_id):
             return jsonify({'ok': False, 'error': 'Invalid date format (use YYYY-MM-DD)'}), 400
 
         split_id = existing.get('split_id')
-        if cost_type == 'split' and not split_id:
-            split_doc = {
-                'title': name,
-                'is_live': False,
-                'created_at': datetime.now(UTC),
-                'updated_at': datetime.now(UTC),
-            }
-            split_ref = splits_collection(username).document()
-            split_ref.set(split_doc)
-            split_id = split_ref.id
-            approx_cost_val = 0.0
+        if cost_type == 'split':
+            if not split_id:
+                split_doc = {
+                    'title': name,
+                    'is_live': False,
+                    'people': payload.get('people', []),
+                    'created_at': datetime.now(UTC),
+                    'updated_at': datetime.now(UTC),
+                }
+                split_ref = splits_collection(username).document()
+                split_ref.set(split_doc)
+                split_id = split_ref.id
+                approx_cost_val = 0.0
+            else:
+                splits_collection(username).document(split_id).set({
+                    'title': name,
+                    'people': payload.get('people', []),
+                    'updated_at': datetime.now(UTC)
+                }, merge=True)
         elif cost_type == 'fixed' and split_id:
             split_id = None
 
@@ -3065,17 +3089,25 @@ def trip_edit(trip_id):
         approx_cost_val = float(form.approx_cost.data or 0.0)
 
         split_id = existing.get('split_id')
-        if cost_type == 'split' and not split_id:
-            split_doc = {
-                'title': name,
-                'is_live': False,
-                'created_at': datetime.now(UTC),
-                'updated_at': datetime.now(UTC),
-            }
-            split_ref = splits_collection(username).document()
-            split_ref.set(split_doc)
-            split_id = split_ref.id
-            approx_cost_val = 0.0
+        if cost_type == 'split':
+            if not split_id:
+                split_doc = {
+                    'title': name,
+                    'is_live': False,
+                    'people': request.form.getlist('people'),
+                    'created_at': datetime.now(UTC),
+                    'updated_at': datetime.now(UTC),
+                }
+                split_ref = splits_collection(username).document()
+                split_ref.set(split_doc)
+                split_id = split_ref.id
+                approx_cost_val = 0.0
+            else:
+                splits_collection(username).document(split_id).set({
+                    'title': name,
+                    'people': request.form.getlist('people'),
+                    'updated_at': datetime.now(UTC)
+                }, merge=True)
         elif cost_type == 'fixed' and split_id:
             split_id = None
 
