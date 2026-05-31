@@ -86,7 +86,8 @@
         if (!parts) return null;
 
         const year2 = String(parts.year).slice(-2);
-        const dateText = `${ordinal(parts.day)} ${MONTH_NAMES[parts.month - 1]} '${year2}`;
+        const SHORT_MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        const dateText = `${parts.day} ${SHORT_MONTH_NAMES[parts.month - 1]} '${year2}`;
         if (parts.hour === null) {
             return { date: dateText, time: '' };
         }

@@ -169,7 +169,7 @@ a:hover{text-decoration:none}
   text-decoration:none;
 }
 .brand-text{font-weight:700;font-family:var(--font-heading);letter-spacing:-0.02em;font-size:1.05rem;color:#fff}
-.navbar .nav-link{color:rgba(255,255,255,0.92)}
+.navbar .nav-link{color:rgba(255,255,255,0.92);border-radius:8px;transition:all 0.2s ease-in-out}
 .navbar .nav-link:hover,.navbar .nav-link.active{
   color:#fff;
   background:rgba(255,255,255,0.14);
