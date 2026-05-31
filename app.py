@@ -493,13 +493,25 @@ def category_exists(categories, name):
 def get_categories():
     cached_categories = cache_get('categories')
     if cached_categories is not None:
-        return list(cached_categories)
+        categories = list(cached_categories)
+        if not category_exists(categories, 'Trip'):
+            categories.append('Trip')
+            cache_set('categories', categories)
+        return categories
 
     try:
-        return load_categories_from_store()
+        categories = load_categories_from_store()
+        if not category_exists(categories, 'Trip'):
+            categories.append('Trip')
+            save_categories(categories)
+        return categories
     except Exception:
         app.logger.exception("Failed to load category settings")
-    return list(cache_set('categories', default_categories()))
+    
+    categories = default_categories()
+    if not category_exists(categories, 'Trip'):
+        categories.append('Trip')
+    return list(cache_set('categories', categories))
 
 def save_categories(categories, updated_by=None):
     clean_categories = []
@@ -2432,10 +2444,18 @@ def splits():
                     flash(f"{form[fieldName].label.text}: {err}", "danger")
             return redirect(url_for('splits', add='true'))
 
+    splits_list = get_split_documents(username=username)
+    for s in splits_list:
+        sid = s.get('_id') or s.get('id')
+        totals = get_split_totals(sid, username=username)
+        total_spent = sum(totals.values())
+        num_people = len(s.get('people', [])) or len(totals)
+        s['share_amount'] = round(total_spent / num_people, 2) if num_people > 0 else 0.0
+
     return render_template(
         'splits.html',
         form=form,
-        splits=get_split_documents(username=username),
+        splits=splits_list,
         live_split=get_live_split(username=username),
         trip_map=get_trip_split_map(username=username),
         all_people=get_split_people(),
@@ -2886,6 +2906,87 @@ def api_split_summary(split_id):
     if not split_doc.exists:
         return jsonify({'ok': False, 'error': 'Split not found'}), 404
     return jsonify({'ok': True, 'split': build_split_summary(doc_to_txn(split_doc), username=username)})
+
+
+@app.route('/splits/<string:split_id>/record_txn', methods=['POST'])
+@login_required
+def split_record_txn(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot record transactions")
+
+    username = require_user()
+    split_ref = splits_collection(username).document(split_id)
+    split_doc = split_ref.get()
+    if not split_doc.exists:
+        flash('Split not found.', 'warning')
+        return redirect(url_for('splits'))
+
+    split_data = doc_to_txn(split_doc)
+    totals = get_split_totals(split_id, username=username)
+    total_spent = sum(totals.values())
+    num_people = len(split_data.get('people', [])) or len(totals)
+
+    if num_people <= 0:
+        flash('No participants found to calculate share.', 'warning')
+        return redirect(url_for('splits'))
+
+    share_amount = round(total_spent / num_people, 2)
+    txn_amount = -share_amount
+
+    overwrite = request.form.get('overwrite') == 'true'
+    existing_txn_id = split_data.get('transaction_id')
+
+    txns_col = tx_collection(username)
+    txn_id = existing_txn_id
+
+    if txn_id and overwrite:
+        txn_ref = txns_col.document(txn_id)
+        if txn_ref.get().exists:
+            existing_txn = doc_to_txn(txn_ref.get())
+            old_amount = float(existing_txn.get('amount', 0.0))
+            new_amount = float(txn_amount)
+            balance_delta = round(old_amount - new_amount, 2)
+            balance_note = f"edit_txn:{txn_id}"
+
+            if balance_delta and not balance_note_exists(username, balance_note):
+                append_balance(balance_delta, 'txn_edit', note=balance_note, username=username)
+
+            txn_ref.update({
+                'amount': float(txn_amount),
+                'description': f"Split share: {split_data.get('title')}",
+                'category': 'Trip',
+                'updated_at': datetime.now(UTC)
+            })
+            split_ref.update({
+                'recorded_amount': float(share_amount),
+                'updated_at': datetime.now(UTC)
+            })
+            flash(f"Successfully re-synced split share of Rs. {share_amount} in transactions!", 'success')
+            return redirect(url_for('splits'))
+        else:
+            txn_id = None
+
+    if not txn_id or not overwrite:
+        # Create a new transaction
+        txn_doc = {
+            'amount': float(txn_amount),
+            'description': f"Split share: {split_data.get('title')}",
+            'category': 'Trip',
+            'timestamp': datetime.now(UTC),
+            'created_at': datetime.now(UTC),
+            'updated_at': datetime.now(UTC)
+        }
+
+        # We call create_transaction helper to add and adjust balance
+        txn_id, _ = create_transaction(username, txn_doc)
+        split_ref.update({
+            'transaction_id': txn_id,
+            'recorded_amount': float(share_amount),
+            'updated_at': datetime.now(UTC)
+        })
+        flash(f"Successfully recorded split share of Rs. {share_amount} as a Trip Expense!", 'success')
+
+    return redirect(url_for('splits'))
 
 
 # ---------------------------------------------------------------------
@@ -3568,6 +3669,12 @@ def management_category_edit(category_name):
         flash('Category not found.', 'warning')
         return redirect(url_for('management'))
 
+    if category_key(original) in {'uncategorized', 'trip'}:
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'This system category is protected and cannot be edited or deleted.'}), 400
+        flash('This system category is protected and cannot be edited or deleted.', 'warning')
+        return redirect(url_for('management'))
+
     if request.is_json:
         payload = request.get_json(silent=True) or {}
         updated = normalize_category_name(payload.get('name'))
@@ -3607,6 +3714,12 @@ def management_category_edit(category_name):
 def management_category_delete(category_name):
     username = require_user()
     category = normalize_category_name(category_name)
+    if category_key(category) in {'uncategorized', 'trip'}:
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'This system category is protected and cannot be edited or deleted.'}), 400
+        flash('This system category is protected and cannot be edited or deleted.', 'warning')
+        return redirect(url_for('management'))
+
     categories = get_categories()
     remaining = [item for item in categories if category_key(item) != category_key(category)]
 
