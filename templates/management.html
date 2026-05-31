@@ -199,7 +199,7 @@
                                         <form method="post"
                                             action="{{ url_for('management_category_delete', category_name=category) }}"
                                             data-confirm="Delete this category from future dropdowns?"
-                                            class="d-inline">
+                                            class="d-inline" data-offline-queue="category-delete" data-category-name="{{ category }}">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button class="btn btn-sm btn-danger"
                                                 {% if categories|length <= 1 %}disabled{% endif %}>
@@ -217,7 +217,7 @@
                                                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                                                 </div>
                                                 <div class="modal-body">
-                                                    <form method="post" action="{{ url_for('management_category_edit', category_name=category) }}" novalidate>
+                                                    <form method="post" action="{{ url_for('management_category_edit', category_name=category) }}" novalidate data-offline-queue="category-edit" data-category-name="{{ category }}">
                                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                                         <div class="mb-3">
                                                             <label class="form-label" for="cat_name{{ cat_slug }}">Category name</label>
@@ -271,7 +271,7 @@
                                     <div class="table-actions">
                                         <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editPersonModal{{ pers_slug }}">Edit</button>
                                         <form method="post"
-                                            action="{{ url_for('management_split_person_delete', person_name=person) }}"
+                                            action="{{ url_for('management_split_person_delete', person_name=person) }}" data-offline-queue="person-delete" data-person-name="{{ person }}"
                                             data-confirm="Delete this person from future split dropdowns?"
                                             class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -291,7 +291,7 @@
                                                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                                                 </div>
                                                 <div class="modal-body">
-                                                    <form method="post" action="{{ url_for('management_split_person_edit', person_name=person) }}" novalidate>
+                                                    <form method="post" action="{{ url_for('management_split_person_edit', person_name=person) }}" novalidate data-offline-queue="person-edit" data-person-name="{{ person }}">
                                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                                         <div class="mb-3">
                                                             <label class="form-label" for="pers_name{{ pers_slug }}">Person name</label>
@@ -327,7 +327,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form method="post" action="{{ url_for('management') }}" novalidate>
+                <form method="post" action="{{ url_for('management') }}" novalidate data-offline-queue="category-create">
                     {{ category_form.hidden_tag() }}
                     <input type="hidden" name="action" value="add_category">
                     <div class="mb-3">
@@ -350,7 +350,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form method="post" action="{{ url_for('management') }}" novalidate>
+                <form method="post" action="{{ url_for('management') }}" novalidate data-offline-queue="person-create">
                     {{ split_person_form.hidden_tag() }}
                     <input type="hidden" name="action" value="add_split_person">
                     <div class="mb-3">

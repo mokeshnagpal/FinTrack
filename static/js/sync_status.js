@@ -307,25 +307,56 @@
     }
   }
 
-  async function refresh(allowSync) {
-    const queue = renderQueue();
-    await checkRender(allowSync);
-    renderQueue();
+  let activePollInterval = null;
 
-    if (allowSync && renderAwake && queue.length > 0 && !syncRequestedForCurrentWake && window.FinTrak?.syncPendingActions) {
-      syncRequestedForCurrentWake = true;
-      const result = await window.FinTrak.syncPendingActions({ quiet: true });
-      if (result && result.synced > 0) {
-        await refreshBrowserSnapshot('Updating local cache after queued jobs finished.');
+  function startAsleepPolling() {
+    if (activePollInterval) return;
+    activePollInterval = setInterval(async () => {
+      await checkRender(true);
+      if (renderAwake) {
+        stopAsleepPolling();
+        triggerSequencedSync();
       }
-      renderQueue();
+    }, 5000); // Check every 5 seconds when asleep
+  }
+
+  function stopAsleepPolling() {
+    if (activePollInterval) {
+      clearInterval(activePollInterval);
+      activePollInterval = null;
+    }
+  }
+
+  async function triggerSequencedSync() {
+    const queue = readQueue();
+    if (queue.length === 0) return;
+
+    // Pre-flight status check immediately before running a job
+    await checkRender(true);
+
+    if (!renderAwake) {
+      startAsleepPolling();
+      return;
+    }
+
+    stopAsleepPolling();
+
+    if (window.FinTrak?.syncPendingActions) {
+      // 1. First, update the change when service wakes
+      // This has already been run inside checkRender(true) which triggers refreshBrowserSnapshot!
+
+      // 2. Then, run each queued job
+      await window.FinTrak.syncPendingActions({ quiet: true });
+
+      // 3. Then, update cached again when all jobs finished and queue reaches 0
+      if (readQueue().length === 0) {
+        await refreshBrowserSnapshot('Updating local cache after all jobs synced.');
+      }
     }
   }
 
   elements.syncNowBtn?.addEventListener('click', async () => {
-    syncRequestedForCurrentWake = false;
-    cacheRefreshRequestedForCurrentWake = false;
-    await refresh(true);
+    await triggerSequencedSync();
   });
 
   window.addEventListener('storage', (event) => {
@@ -333,22 +364,21 @@
   });
 
   window.addEventListener('fintrak:queuechange', () => {
-    syncRequestedForCurrentWake = false;
-    cacheRefreshRequestedForCurrentWake = false;
     renderQueue();
-    refresh(true);
+    triggerSequencedSync();
   });
 
   document.addEventListener('DOMContentLoaded', () => {
     renderCacheDetails();
     renderQueue();
-    refresh(true);
-    setInterval(() => {
+
+    checkRender(true).then(() => {
       const queue = readQueue();
-      if (renderAwake && cacheRefreshRequestedForCurrentWake && queue.length === 0) {
-        return;
+      if (!renderAwake) {
+        startAsleepPolling();
+      } else if (queue.length > 0) {
+        triggerSequencedSync();
       }
-      refresh(true);
-    }, pollMs);
+    });
   });
 }());

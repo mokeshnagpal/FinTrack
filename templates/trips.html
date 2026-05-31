@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <span class="kicker">Travel Planning</span>
+        <h1>My Trips</h1>
+        {% if session.get('view_only') %}
+        <p>Review travel itineraries, photos, and live cost distributions in read-only mode.</p>
+        {% else %}
+        <p>Plan your trips, manage photo albums, and track approximate fixed budgets or split-spend bills.</p>
+        {% endif %}
+    </div>
+    {% if not session.get('view_only') %}
+    <div class="page-actions">
+        <button class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#newTripModal">
+            <svg width="18" height="18" viewBox="0 0 24 24" class="me-1" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            New Trip
+        </button>
+    </div>
+    {% endif %}
+</section>
+
+<!-- Offline/Sync Alert Notice -->
+<div id="tripOfflineNotice" class="alert alert-warning d-none" role="alert"></div>
+
+<div class="row g-3" id="tripsContainer">
+    {% for trip in trips %}
+    {% set tid = trip.id or trip._id %}
+    <div class="col-12 col-md-6 col-lg-4 trip-card-wrapper" data-trip-id="{{ tid }}">
+        <div class="card trip-card h-100 shadow-sm border-0 position-relative overflow-hidden" style="background: var(--card-bg, rgba(255,255,255,0.7)); backdrop-filter: blur(10px); border-radius: 12px; transition: transform 0.2s, box-shadow 0.2s;">
+            <div class="card-body d-flex flex-column p-4">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <h3 class="h5 card-title text-primary fw-bold mb-0">{{ trip.name }}</h3>
+                    {% if trip.cost_type == 'split' %}
+                    <span class="badge bg-info text-dark shadow-sm" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">Split Bill</span>
+                    {% else %}
+                    <span class="badge bg-secondary shadow-sm text-light" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">Fixed Budget</span>
+                    {% endif %}
+                </div>
+
+                <div class="trip-dates mb-3 text-muted small">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="me-1">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>{{ trip.start_date|ist_datetime('%Y-%m-%d') }}</span> to <span>{{ trip.end_date|ist_datetime('%Y-%m-%d') }}</span>
+                </div>
+
+                <p class="card-text description-text text-muted flex-grow-1 mb-3" style="font-size: 0.88rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5;">
+                    {{ trip.description or "No description provided." }}
+                </p>
+
+                <div class="trip-cost-panel mb-3 p-3 bg-light bg-opacity-50 border rounded d-flex justify-content-between align-items-center" style="background: rgba(var(--primary-rgb), 0.04) !important;">
+                    <span class="small text-muted fw-semibold">
+                        {{ "Approx Cost (Per Person):" if trip.cost_type == 'split' else "Approx Cost (Fixed):" }}
+                    </span>
+                    <strong class="text-primary" style="font-size: 1.1rem;">
+                        Rs. {{ "%.2f"|format(trip.approx_cost) }}
+                    </strong>
+                </div>
+
+                {% if trip.photo_link %}
+                <div class="mb-3">
+                    <a href="{{ trip.photo_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                            <circle cx="12" cy="13" r="4"></circle>
+                        </svg>
+                        Photos Album
+                    </a>
+                </div>
+                {% endif %}
+
+                {% if trip.cost_type == 'split' and trip.split_id %}
+                <div class="mb-4 small d-flex justify-content-between align-items-center border-top pt-3 border-opacity-10">
+                    <span class="text-muted">Connected Split:</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="{{ url_for('split_detail', split_id=trip.split_id) }}" class="btn btn-sm btn-link p-0 text-decoration-none fw-semibold">View Split</a>
+                        {% if not session.get('view_only') %}
+                        <button type="button" class="btn btn-sm btn-outline-warning" style="font-size: 0.72rem; padding: 0.15rem 0.4rem;" data-bs-toggle="modal" data-bs-target="#disconnectModal{{ tid }}">Disconnect</button>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if not session.get('view_only') %}
+                <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
+                    <button class="btn btn-sm btn-outline-primary flex-grow-1" data-bs-toggle="modal" data-bs-target="#editTripModal{{ tid }}">Edit</button>
+                    <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-offline-queue="trip-delete" data-trip-id="{{ tid }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger w-100" onclick="return confirm('Delete this trip?')">Delete</button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if not session.get('view_only') %}
+        <!-- Edit Trip Modal -->
+        <div class="modal fade" id="editTripModal{{ tid }}" tabindex="-1" aria-labelledby="editTripModalLabel{{ tid }}" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="editTripModalLabel{{ tid }}">Edit Trip</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form method="post" action="{{ url_for('trip_edit', trip_id=tid) }}" novalidate data-offline-queue="trip-edit" data-trip-id="{{ tid }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            
+                            <div class="mb-3">
+                                <label class="form-label" for="name{{ tid }}">Trip Name</label>
+                                <input class="form-control" id="name{{ tid }}" name="name" type="text" maxlength="80" placeholder="Goa trip" value="{{ trip.name }}" required>
+                            </div>
+
+                            <div class="row g-2 mb-3">
+                                <div class="col-6">
+                                    <label class="form-label" for="start_date{{ tid }}">Start Date</label>
+                                    <input class="form-control" id="start_date{{ tid }}" name="start_date" type="date" value="{{ trip.start_date|ist_datetime('%Y-%m-%d') }}" required>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label" for="end_date{{ tid }}">End Date</label>
+                                    <input class="form-control" id="end_date{{ tid }}" name="end_date" type="date" value="{{ trip.end_date|ist_datetime('%Y-%m-%d') }}" required>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label" for="description{{ tid }}">Description</label>
+                                <textarea class="form-control" id="description{{ tid }}" name="description" rows="3" maxlength="500" placeholder="Brief details about the trip...">{{ trip.description or "" }}</textarea>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label" for="photo_link{{ tid }}">Photos Link (URL)</label>
+                                <input class="form-control" id="photo_link{{ tid }}" name="photo_link" type="url" placeholder="https://photos.app.goo.gl/..." value="{{ trip.photo_link or "" }}">
+                            </div>
+
+                            <div class="row g-2 mb-3">
+                                <div class="col-6">
+                                    <label class="form-label" for="cost_type{{ tid }}">Cost Option</label>
+                                    <select class="form-select edit-cost-type-select" id="cost_type{{ tid }}" name="cost_type" data-trip-id="{{ tid }}">
+                                        <option value="fixed" {% if trip.cost_type == 'fixed' %}selected{% endif %}>Approx Cost (Fixed)</option>
+                                        <option value="split" {% if trip.cost_type == 'split' %}selected{% endif %}>Split Account (Variable)</option>
+                                    </select>
+                                </div>
+                                <div class="col-6 edit-approx-cost-container" id="approxCostContainerEdit{{ tid }}" style="{% if trip.cost_type == 'split' %}display: none;{% endif %}">
+                                    <label class="form-label" for="approx_cost{{ tid }}">Approx Cost (Rs.)</label>
+                                    <input class="form-control" id="approx_cost{{ tid }}" name="approx_cost" type="number" step="0.01" min="0.00" value="{{ trip.approx_cost or 0.00 }}">
+                                </div>
+                            </div>
+
+                            <div class="form-text small text-muted mb-3 edit-split-notice-container" id="splitNoticeEdit{{ tid }}" style="{% if trip.cost_type == 'fixed' %}display: none;{% endif %}">
+                                ✓ Cost is automatically calculated from split entries per participant
+                            </div>
+
+                            <button type="submit" class="btn btn-primary w-100">Update Trip</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if trip.cost_type == 'split' and trip.split_id %}
+        <!-- Disconnect Split Confirmation Modal -->
+        <div class="modal fade" id="disconnectModal{{ tid }}" tabindex="-1" aria-labelledby="disconnectModalLabel{{ tid }}" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="disconnectModalLabel{{ tid }}">Disconnect Split Account</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body text-start">
+                        <p>You are about to disconnect the Split Bill account from this Trip. What would you like to do with the connected split account?</p>
+                        <form method="post" action="{{ url_for('trip_disconnect', trip_id=tid) }}" data-offline-queue="trip-disconnect" data-trip-id="{{ tid }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            
+                            <div class="form-check mb-3 p-3 border rounded" style="background: rgba(var(--primary-rgb), 0.02);">
+                                <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectKeep{{ tid }}" value="keep" checked>
+                                <label class="form-check-label fw-semibold" for="disconnectKeep{{ tid }}">
+                                    Just Disconnect
+                                </label>
+                                <div class="form-text text-muted small ms-4">Keep the Split Bill account as a standalone split so its transaction ledger is preserved.</div>
+                            </div>
+
+                            <div class="form-check mb-4 p-3 border border-danger rounded" style="background: rgba(220, 53, 69, 0.02);">
+                                <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectDelete{{ tid }}" value="delete">
+                                <label class="form-check-label text-danger fw-semibold" for="disconnectDelete{{ tid }}">
+                                    Delete the connected Split Account
+                                </label>
+                                <div class="form-text text-muted small ms-4">Permanently delete the Split Bill account and all of its expense ledger entries from Firestore.</div>
+                            </div>
+
+                            <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="col-12 text-center text-muted py-5" id="tripsEmptyState">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="mb-3 text-muted opacity-50">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+        <p>No trips planned yet. Click "New Trip" to plan your next adventure!</p>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- New Trip Modal -->
+{% if not session.get('view_only') %}
+<div class="modal fade" id="newTripModal" tabindex="-1" aria-labelledby="newTripModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="newTripModalLabel">New Trip</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form method="post" action="{{ url_for('trips') }}" novalidate data-offline-queue="trip-create">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-3">
+                        {{ form.name.label(class="form-label") }}
+                        {{ form.name(class="form-control", placeholder="Goa trip", maxlength="80") }}
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            {{ form.start_date.label(class="form-label") }}
+                            {{ form.start_date(class="form-control", type="date") }}
+                        </div>
+                        <div class="col-6">
+                            {{ form.end_date.label(class="form-label") }}
+                            {{ form.end_date(class="form-control", type="date") }}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control", rows="3", placeholder="Brief details about the trip...", maxlength="500") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.photo_link.label(class="form-label") }}
+                        {{ form.photo_link(class="form-control", placeholder="https://photos.app.goo.gl/...") }}
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            {{ form.cost_type.label(class="form-label") }}
+                            {{ form.cost_type(class="form-select", id="newCostTypeSelect") }}
+                        </div>
+                        <div class="col-6" id="approxCostContainerNew">
+                            {{ form.approx_cost.label(class="form-label") }}
+                            {{ form.approx_cost(class="form-control", step="0.01") }}
+                        </div>
+                    </div>
+
+                    <div class="form-text small text-muted mb-3 d-none" id="newSplitNotice">
+                        ✓ Cost is automatically calculated from split entries per participant, and a split account will be created automatically.
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">Save Trip</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Form toggle logic
+    document.addEventListener('DOMContentLoaded', () => {
+        const newCostType = document.getElementById('newCostTypeSelect');
+        const approxCostNew = document.getElementById('approxCostContainerNew');
+        const splitNoticeNew = document.getElementById('newSplitNotice');
+
+        if (newCostType && approxCostNew && splitNoticeNew) {
+            newCostType.addEventListener('change', (e) => {
+                if (e.target.value === 'split') {
+                    approxCostNew.style.display = 'none';
+                    splitNoticeNew.classList.remove('d-none');
+                } else {
+                    approxCostNew.style.display = 'block';
+                    splitNoticeNew.classList.add('d-none');
+                }
+            });
+        }
+
+        // Edit modals toggle logic
+        document.querySelectorAll('.edit-cost-type-select').forEach((select) => {
+            select.addEventListener('change', (e) => {
+                const tid = select.dataset.tripId;
+                const costContainer = document.getElementById(`approxCostContainerEdit${tid}`);
+                const splitNotice = document.getElementById(`splitNoticeEdit${tid}`);
+                
+                if (e.target.value === 'split') {
+                    if (costContainer) costContainer.style.display = 'none';
+                    if (splitNotice) splitNotice.style.display = 'block';
+                } else {
+                    if (costContainer) costContainer.style.display = 'block';
+                    if (splitNotice) splitNotice.style.display = 'none';
+                }
+            });
+        });
+
+        // Trigger cache refresh
+        if (window.FinTrak?.cache?.refreshSnapshot) {
+            window.FinTrak.cache.refreshSnapshot().catch(() => {});
+        }
+
+        // Offline Fallback Rendering logic
+        function runOfflineFallback() {
+            const snapshot = window.FinTrak?.cache?.readSnapshot?.();
+            const trips = snapshot?.trips || [];
+            
+            if (!trips.length) return;
+
+            const notice = document.getElementById('tripOfflineNotice');
+            if (notice) {
+                notice.textContent = "Render is not awake. Showing cached trip data snapshot only.";
+                notice.classList.remove('d-none');
+            }
+
+            const container = document.getElementById('tripsContainer');
+            if (!container) return;
+
+            const viewOnly = document.body.dataset.viewOnly === 'true';
+
+            container.innerHTML = trips.map((trip) => {
+                const isSplit = trip.cost_type === 'split';
+                const photosLink = trip.photo_link ? `
+                    <div class="mb-3">
+                        <a href="${escapeHtml(trip.photo_link)}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1">
+                            Photos Album
+                        </a>
+                    </div>` : '';
+
+                const connectedSplit = (isSplit && trip.split_id) ? `
+                    <div class="mb-4 small d-flex justify-content-between align-items-center border-top pt-3 border-opacity-10">
+                        <span class="text-muted">Connected Split:</span>
+                        <a href="/splits/${encodeURIComponent(trip.split_id)}" class="btn btn-sm btn-link p-0 text-decoration-none fw-semibold">View Split</a>
+                    </div>` : '';
+
+                const actionButtons = viewOnly ? '' : `
+                    <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
+                        <button class="btn btn-sm btn-outline-primary flex-grow-1" disabled title="Offline mode">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger flex-grow-1" disabled title="Offline mode">Delete</button>
+                    </div>`;
+
+                return `
+                <div class="col-12 col-md-6 col-lg-4 trip-card-wrapper" data-trip-id="${escapeHtml(trip.id)}">
+                    <div class="card trip-card h-100 shadow-sm border-0 position-relative overflow-hidden" style="background: var(--card-bg, rgba(255,255,255,0.7)); backdrop-filter: blur(10px); border-radius: 12px;">
+                        <div class="card-body d-flex flex-column p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <h3 class="h5 card-title text-primary fw-bold mb-0">${escapeHtml(trip.name)}</h3>
+                                <span class="badge ${isSplit ? 'bg-info text-dark' : 'bg-secondary text-light'} shadow-sm" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">
+                                    ${isSplit ? 'Split Bill' : 'Fixed Budget'}
+                                </span>
+                            </div>
+
+                            <div class="trip-dates mb-3 text-muted small">
+                                <span>${escapeHtml(trip.start_date || '')}</span> to <span>${escapeHtml(trip.end_date || '')}</span>
+                            </div>
+
+                            <p class="card-text description-text text-muted flex-grow-1 mb-3" style="font-size: 0.88rem;">
+                                ${escapeHtml(trip.description || 'No description.')}
+                            </p>
+
+                            <div class="trip-cost-panel mb-3 p-3 bg-light bg-opacity-50 border rounded d-flex justify-content-between align-items-center" style="background: rgba(var(--primary-rgb), 0.04) !important;">
+                                <span class="small text-muted fw-semibold">
+                                    ${isSplit ? "Approx Cost (Per Person):" : "Approx Cost (Fixed):"}
+                                </span>
+                                <strong class="text-primary" style="font-size: 1.1rem;">
+                                    Rs. ${Number(trip.approx_cost || 0).toFixed(2)}
+                                </strong>
+                            </div>
+
+                            ${photosLink}
+                            ${connectedSplit}
+                            ${actionButtons}
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/[&<>"']/g, m => {
+                switch(m) {
+                    case '&': return '&amp;';
+                    case '<': return '&lt;';
+                    case '>': return '&gt;';
+                    case '"': return '&quot;';
+                    case "'": return '&#039;';
+                    default: return m;
+                }
+            });
+        }
+
+        // Run offline fallback rendering if backend takes too long (service asleep / offline)
+        setTimeout(() => {
+            const syncStatusIcon = document.getElementById('syncStatusIndicator');
+            if (syncStatusIcon && (syncStatusIcon.classList.contains('status-sleeping') || syncStatusIcon.classList.contains('status-waking'))) {
+                runOfflineFallback();
+            }
+        }, 1200);
+
+        window.addEventListener('fintrak:render-fallback', runOfflineFallback);
+    });
+</script>
+{% endblock %}

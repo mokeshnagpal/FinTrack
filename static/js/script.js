@@ -857,6 +857,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        window.FinTrak?.cache?.commitCredentials?.();
         formatDateElements();
         initCopyButtons();
         initConfirmForms();

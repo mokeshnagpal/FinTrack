@@ -63,11 +63,45 @@
     }
   }
 
+  async function sha256(text) {
+    if (!text) return '';
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const buffer = await crypto.subtle.digest('SHA-256', data);
+    const array = Array.from(new Uint8Array(buffer));
+    return array.map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function commitCredentials() {
+    try {
+      const tempRaw = localStorage.getItem('fintrak_temp_auth');
+      if (!tempRaw) return;
+      const temp = JSON.parse(tempRaw);
+      if (!temp || !temp.username || !temp.hash) return;
+
+      const cachedRaw = localStorage.getItem('fintrak_cached_auth');
+      let cached = cachedRaw ? JSON.parse(cachedRaw) : {};
+      if (temp.type === 'view') {
+        cached.view_username = temp.username;
+        cached.view_password_hash = temp.hash;
+      } else {
+        cached.username = temp.username;
+        cached.password_hash = temp.hash;
+      }
+      localStorage.setItem('fintrak_cached_auth', JSON.stringify(cached));
+      localStorage.removeItem('fintrak_temp_auth');
+    } catch (e) {
+      console.warn('commitCredentials failed', e);
+    }
+  }
+
   window.FinTrak = window.FinTrak || {};
   window.FinTrak.cache = {
     hasUsableSnapshot,
     readSnapshot,
     refreshSnapshot,
     writeSnapshot,
+    sha256,
+    commitCredentials,
   };
 }());

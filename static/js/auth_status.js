@@ -94,7 +94,85 @@
       clearTimeout(authCacheTimer);
       authCacheTimer = setTimeout(checkAuthCache, 350);
     });
+
+    const form = document.querySelector('form');
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        const usernameVal = String(usernameInput?.value || '').trim().toLowerCase();
+        const passwordInput = document.getElementById('password');
+        const passwordVal = String(passwordInput?.value || '').trim();
+
+        if (!usernameVal || !passwordVal) return;
+
+        if (!window.FinTrak?.cache?.sha256) return;
+
+        // Save credentials temporarily
+        const hash = await window.FinTrak.cache.sha256(passwordVal);
+        const isViewMode = window.location.pathname.includes('/view') || window.location.pathname.includes('/view-login');
+        const type = isViewMode ? 'view' : 'full';
+
+        localStorage.setItem('fintrak_temp_auth', JSON.stringify({ username: usernameVal, hash, type }));
+
+        const renderStateText = document.getElementById('authRenderState')?.textContent || '';
+        const renderAwake = renderStateText === 'Awake';
+
+        if (!renderAwake) {
+          event.preventDefault();
+
+          const cachedRaw = localStorage.getItem('fintrak_cached_auth');
+          const cached = cachedRaw ? JSON.parse(cachedRaw) : null;
+
+          let authenticated = false;
+          if (cached) {
+            if (type === 'view') {
+              authenticated = (usernameVal === String(cached.view_username || '').trim().toLowerCase()) &&
+                              (hash === cached.view_password_hash);
+            } else {
+              authenticated = (usernameVal === String(cached.username || '').trim().toLowerCase()) &&
+                              (hash === cached.password_hash);
+            }
+          }
+
+          if (authenticated) {
+            localStorage.setItem('fintrak_offline_session', JSON.stringify({
+              logged_in: true,
+              username: usernameVal,
+              type: type,
+              created_at: new Date().toISOString()
+            }));
+
+            // Attempt session sync on local server
+            try {
+              const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+              await fetch('/api/login_offline', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-CSRFToken': csrfToken,
+                },
+                body: JSON.stringify({ username: usernameVal, type }),
+              });
+            } catch (err) {
+              console.warn('Flask session offline sync skipped/failed', err);
+            }
+
+            const targetUrl = type === 'view' ? '/balance' : '/';
+            window.location.href = targetUrl;
+          } else {
+            alert('Offline login is only available for the last successfully logged-in user with correct credentials.');
+          }
+        }
+      });
+    }
+
     checkWake();
-    setInterval(checkWake, pollMs);
+    let wakeInterval = setInterval(async () => {
+      await checkWake();
+      const renderStateText = document.getElementById('authRenderState')?.textContent || '';
+      if (renderStateText === 'Awake') {
+        clearInterval(wakeInterval);
+        wakeInterval = null;
+      }
+    }, 5000); // Poll every 5s when asleep
   });
 }());

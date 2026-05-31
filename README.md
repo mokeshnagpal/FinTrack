@@ -50,6 +50,13 @@ The app is built as a server-rendered Flask application with Jinja templates, Bo
 - ✓ **Data Validation**: All amounts, persons, and descriptions validated.
 - ✓ **Logging**: Split and entry operations logged at INFO/WARNING level.
 
+### Trips Management (CRUD Complete & Unlocked) [NEW]
+- ✓ **Create** trip documents with Name, Start/End Dates, Description, and Photos Album URL.
+- ✓ **Fixed Budget Mode**: Set a fixed, manually entered approximate cost.
+- ✓ **Split spend Mode**: Dynamically link the trip to a Split account where the approximate cost of the trip displays the net cost per participant (Sum of entries / Number of unique participants). Creating a split-spend trip automatically creates a new Split document of the same name.
+- ✓ **Bidirectional Disconnection**: Disconnect the split/trip connection from either the Trips page or the Splits table. Prompts the user to decide whether to delete the connected document or preserve it disconnected.
+- ✓ **Offline & Queue Caching**: Caches the last 12 trip documents inside `localStorage` for immediate fallback rendering when Render is offline or sleeping, with background queue sync.
+
 ### Analytics & Reporting (All Verified)
 - ✓ **Summary Metrics**: Total spend, transaction count, average per transaction
 - ✓ **Trends**: Month-over-month spending comparison

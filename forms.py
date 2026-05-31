@@ -9,6 +9,7 @@ from wtforms import (
     SelectField,
     StringField,
     SubmitField,
+    TextAreaField,
     TimeField,
 )
 from wtforms.validators import DataRequired, EqualTo, InputRequired, Length, NumberRange
@@ -306,3 +307,52 @@ class RecurringBalanceForm(FlaskForm):
         default='monthly',
     )
     submit = SubmitField('Save Recurring Balance')
+
+
+class TripForm(FlaskForm):
+    name = StringField(
+        'Trip Name',
+        validators=[
+            InputRequired(message='Trip name is required'),
+            Length(min=2, max=80, message='Use 2 to 80 characters'),
+        ],
+    )
+    start_date = DateField(
+        'Start Date (IST)',
+        default=today_ist,
+        format='%Y-%m-%d',
+        validators=[DataRequired(message='Start date is required')],
+    )
+    end_date = DateField(
+        'End Date (IST)',
+        default=today_ist,
+        format='%Y-%m-%d',
+        validators=[DataRequired(message='End date is required')],
+    )
+    description = TextAreaField(
+        'Description',
+        validators=[
+            Length(max=500, message='Use 500 characters or fewer'),
+        ],
+    )
+    photo_link = StringField(
+        'Photos Link',
+        validators=[
+            Length(max=255, message='Use 255 characters or fewer'),
+        ],
+    )
+    cost_type = SelectField(
+        'Cost Option',
+        choices=[('fixed', 'Approx Cost (Fixed)'), ('split', 'Split Account (Variable)')],
+        default='fixed',
+    )
+    approx_cost = DecimalField(
+        'Approx Cost (Rs.)',
+        places=2,
+        default=0.00,
+        validators=[
+            InputRequired(message='Approx cost is required'),
+            NumberRange(min=0.00, max=999999999, message='Amount must be between 0.00 and 999999999'),
+        ],
+    )
+    submit = SubmitField('Save Trip')

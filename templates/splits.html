@@ -35,6 +35,7 @@
                 <thead>
                     <tr>
                         <th class="sortable-header">Name <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header">Connected Trip</th>
                         <th class="sortable-header">Updated <span class="sort-icon">&#8597;</span></th>
                         <th class="text-end">Actions</th>
                     </tr>
@@ -47,6 +48,59 @@
                             <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
                             {% if split.is_live %}
                             <span class="badge bg-success ms-2 shadow-sm" style="font-size: 0.72rem; padding: 0.18rem 0.45rem;">Live</span>
+                            {% endif %}
+                        </td>
+                        <td data-label="Connected Trip">
+                            {% set connected_trip = trip_map.get(sid) %}
+                            {% if connected_trip %}
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-info text-dark" style="font-size: 0.72rem; padding: 0.18rem 0.45rem;">{{ connected_trip.name }}</span>
+                                {% if not session.get('view_only') %}
+                                <button type="button" class="btn btn-sm btn-link p-0 text-warning text-decoration-none" style="font-size: 0.75rem;" data-bs-toggle="modal" data-bs-target="#disconnectTripModal{{ sid }}">
+                                    Disconnect
+                                </button>
+                                {% endif %}
+                            </div>
+
+                            {% if not session.get('view_only') %}
+                            <!-- Disconnect Trip Modal -->
+                            <div class="modal fade" id="disconnectTripModal{{ sid }}" tabindex="-1" aria-labelledby="disconnectTripModalLabel{{ sid }}" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="disconnectTripModalLabel{{ sid }}">Disconnect Trip Connection</h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body text-start">
+                                            <p>This split account is currently connected to the Trip <strong>{{ connected_trip.name }}</strong>. What would you like to do with the connected Trip?</p>
+                                            <form method="post" action="{{ url_for('split_disconnect_trip', split_id=sid) }}" data-offline-queue="split-disconnect-trip" data-split-id="{{ sid }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                
+                                                <div class="form-check mb-3 p-3 border rounded" style="background: rgba(var(--primary-rgb), 0.02);">
+                                                    <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectTripKeep{{ sid }}" value="keep" checked>
+                                                    <label class="form-check-label fw-semibold" for="disconnectTripKeep{{ sid }}">
+                                                        Just Disconnect
+                                                    </label>
+                                                    <div class="form-text text-muted small ms-4">Keep the Trip as a regular fixed-budget trip so its itinerary is preserved.</div>
+                                                </div>
+
+                                                <div class="form-check mb-4 p-3 border border-danger rounded" style="background: rgba(220, 53, 69, 0.02);">
+                                                    <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectTripDelete{{ sid }}" value="delete">
+                                                    <label class="form-check-label text-danger fw-semibold" for="disconnectTripDelete{{ sid }}">
+                                                        Delete the connected Trip
+                                                    </label>
+                                                    <div class="form-text text-muted small ms-4">Permanently delete the Trip itinerary entirely from Firestore.</div>
+                                                </div>
+
+                                                <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-muted small">None</span>
                             {% endif %}
                         </td>
                         <td data-label="Updated">
@@ -63,19 +117,19 @@
                                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=sid) }}">Open</a>
                                 {% if not session.get('view_only') %}
                                 {% if not split.is_live %}
-                                <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline">
+                                <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-live" data-split-id="{{ sid }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-outline-success">Make Live</button>
                                 </form>
                                 {% else %}
-                                <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline">
+                                <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-unlive" data-split-id="{{ sid }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-outline-warning">Remove Live</button>
                                 </form>
                                 {% endif %}
                                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSplitModal{{ sid }}">Edit</button>
                                 <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
-                                    data-confirm="Delete this split and its entries?" class="d-inline">
+                                    data-confirm="Delete this split and its entries?" class="d-inline" data-offline-queue="split-delete" data-split-id="{{ sid }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
@@ -92,7 +146,7 @@
                                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                                         </div>
                                         <div class="modal-body">
-                                            <form method="post" action="{{ url_for('split_edit', split_id=sid) }}" novalidate>
+                                            <form method="post" action="{{ url_for('split_edit', split_id=sid) }}" novalidate data-offline-queue="split-edit" data-split-id="{{ sid }}">
                                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                                 <div class="mb-3">
                                                     <label class="form-label" for="title{{ sid }}">Split name</label>
@@ -109,7 +163,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="3" class="text-center text-muted py-4">No split documents found.</td>
+                        <td colspan="4" class="text-center text-muted py-4">No split documents found.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -128,7 +182,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form method="post" action="{{ url_for('splits') }}" novalidate>
+                <form method="post" action="{{ url_for('splits') }}" novalidate data-offline-queue="split-create">
                     {{ form.hidden_tag() }}
                     <div class="mb-3">
                         {{ form.title.label(class="form-label") }}

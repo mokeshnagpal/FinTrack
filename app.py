@@ -18,6 +18,7 @@ from forms import (
     SplitEntryForm,
     SplitPersonForm,
     TransactionForm,
+    TripForm,
     ViewPasswordForm,
     ViewPasswordRevealForm,
 )
@@ -36,6 +37,7 @@ from constants import (
     SPLIT_ENTRY_TABLE_LIMIT,
     SYNC_STATUS_POLL_SECONDS,
     TRANSACTION_PAGE_SIZE,
+    TRIP_TABLE_LIMIT,
 )
 import os
 import io
@@ -274,6 +276,9 @@ def bal_collection(username=None):
 
 def splits_collection(username=None):
     return user_doc_ref(username).collection('splits')
+
+def trips_collection(username=None):
+    return user_doc_ref(username).collection('trips')
 
 def split_entries_collection(split_id, username=None):
     return splits_collection(username).document(str(split_id)).collection('entries')
@@ -1253,6 +1258,34 @@ def serialize_balance_for_cache(entry):
         'note': entry.get('note', ''),
     }
 
+def serialize_recurring_for_cache(rule):
+    return {
+        'id': rule.get('_id') or rule.get('id'),
+        'amount': round(float(rule.get('amount', 0.0)), 2),
+        'description': rule.get('description') or '',
+        'frequency': rule.get('frequency') or 'monthly',
+        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
+        'category': rule.get('category') or 'Uncategorized',
+    }
+
+def serialize_recurring_balance_for_cache(rule):
+    return {
+        'id': rule.get('_id') or rule.get('id'),
+        'balance': round(float(rule.get('balance', 0.0)), 2),
+        'frequency': rule.get('frequency') or 'monthly',
+        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
+        'note': rule.get('note') or '',
+    }
+
+def serialize_split_doc_for_cache(doc):
+    return {
+        'id': doc.get('_id') or doc.get('id'),
+        'title': doc.get('title') or '',
+        'created_at': format_ist(doc.get('created_at')) if doc.get('created_at') else None,
+        'updated_at': format_ist(doc.get('updated_at')) if doc.get('updated_at') else None,
+        'is_live': bool(doc.get('is_live')),
+    }
+
 @app.route('/api/cache_snapshot')
 @login_required
 def api_cache_snapshot():
@@ -1275,6 +1308,10 @@ def api_cache_snapshot():
         )
     ]
     live_split = get_live_split(username=username)
+    recurring_docs = get_recurring_rules_for_page(username)
+    recurring_balance_docs = get_recurring_balance_rules_for_page(username)
+    splits_docs = get_split_documents(username)
+    trips_docs = get_trip_documents(username)
 
     return jsonify({
         'ok': True,
@@ -1283,6 +1320,9 @@ def api_cache_snapshot():
             'recent_transactions': BROWSER_CACHE_RECENT_TRANSACTIONS,
             'balance_history': BROWSER_CACHE_BALANCE_HISTORY,
             'split_entries': SPLIT_ENTRY_TABLE_LIMIT,
+            'recurring_rules': RECURRING_RULE_TABLE_LIMIT,
+            'splits': SPLIT_DOCUMENT_TABLE_LIMIT,
+            'trips': TRIP_TABLE_LIMIT,
         },
         'categories': get_categories(),
         'split_people': get_split_people(),
@@ -1295,6 +1335,10 @@ def api_cache_snapshot():
         },
         'transactions': [serialize_transaction_for_cache(txn) for txn in txn_docs],
         'live_split': build_split_summary(live_split, username=username),
+        'recurring_rules': [serialize_recurring_for_cache(r) for r in recurring_docs],
+        'recurring_balance_rules': [serialize_recurring_balance_for_cache(r) for r in recurring_balance_docs],
+        'splits': [serialize_split_doc_for_cache(d) for d in splits_docs],
+        'trips': [serialize_trip_for_cache(t) for t in trips_docs],
     })
 
 def build_transaction_doc(form):
@@ -1853,6 +1897,49 @@ def get_recurring_balance_rules_for_page(username):
     ]
 
 
+def build_recurring_doc_from_payload(payload, last_applied=None):
+    amount = parse_money(payload.get('amount'))
+    description = validate_short_text(payload.get('description'), 'Description')
+    category = payload.get('category') or 'Uncategorized'
+    start_date = parse_iso_date(payload.get('date') or payload.get('start_date'))
+    if start_date is None:
+        raise ValueError('Start Date must use YYYY-MM-DD format.')
+    try:
+        start_time = datetime.strptime(str(payload.get('time') or payload.get('start_time') or '00:00'), '%H:%M').time()
+    except (TypeError, ValueError):
+        raise ValueError('Start Time must use HH:MM format.')
+
+    return {
+        'amount': amount,
+        'description': description,
+        'category': category,
+        'start_datetime': local_datetime_to_utc(start_date, start_time),
+        'frequency': payload.get('frequency') or 'monthly',
+        'last_applied': last_applied,
+        'active': True
+    }
+
+def build_recurring_balance_doc_from_payload(payload, last_applied=None):
+    amount = parse_money(payload.get('amount') or payload.get('balance'))
+    description = validate_short_text(payload.get('description') or payload.get('note'), 'Note')
+    start_date = parse_iso_date(payload.get('date') or payload.get('start_date'))
+    if start_date is None:
+        raise ValueError('Start Date must use YYYY-MM-DD format.')
+    try:
+        start_time = datetime.strptime(str(payload.get('time') or payload.get('start_time') or '00:00'), '%H:%M').time()
+    except (TypeError, ValueError):
+        raise ValueError('Start Time must use HH:MM format.')
+
+    return {
+        'amount': amount,
+        'description': description,
+        'start_datetime': local_datetime_to_utc(start_date, start_time),
+        'frequency': payload.get('frequency') or 'monthly',
+        'last_applied': last_applied,
+        'active': True
+    }
+
+
 @app.route('/recurring', methods=['GET', 'POST'])
 @login_required
 def recurring():
@@ -1860,6 +1947,15 @@ def recurring():
     balance_form = RecurringBalanceForm()
     apply_category_choices(form)
     if request.method == 'POST':
+        if request.is_json:
+            username = require_user()
+            payload = request.get_json(silent=True) or {}
+            rule_doc = build_recurring_doc_from_payload(payload)
+            doc_ref = rec_collection(username).document()
+            doc_ref.set(rule_doc)
+            app.logger.info("Recurring rule created via JSON id=%s user=%s", doc_ref.id, username)
+            return jsonify({'ok': True, 'id': doc_ref.id})
+
         if form.validate_on_submit():
             username = require_user()
             rule_doc = build_recurring_doc(form)
@@ -1910,6 +2006,13 @@ def recurring_edit(r_id):
     apply_category_choices(form, include=recurring_rule.get('category'))
     form.submit.label.text = 'Update Recurring Rule'
 
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        update_doc = build_recurring_doc_from_payload(payload, last_applied=recurring_rule.get('last_applied'))
+        doc_ref.update(update_doc)
+        app.logger.info("Recurring rule updated via JSON id=%s user=%s", r_id, username)
+        return jsonify({'ok': True})
+
     if form.validate_on_submit():
         update_doc = build_recurring_doc(form, last_applied=recurring_rule.get('last_applied'))
         doc_ref.update(update_doc)
@@ -1946,6 +2049,11 @@ def recurring_delete(r_id):
         flash('Recurring rule not found.', 'warning')
         return redirect(url_for('recurring'))
 
+    if request.is_json:
+        doc_ref.delete()
+        app.logger.info("Recurring rule deleted via JSON id=%s user=%s", r_id, username)
+        return jsonify({'ok': True})
+
     doc_ref.delete()
     app.logger.info("Recurring rule deleted id=%s user=%s", r_id, username)
     flash('Recurring rule deleted.', 'info')
@@ -1955,6 +2063,15 @@ def recurring_delete(r_id):
 @login_required
 def recurring_balance():
     form = RecurringBalanceForm()
+    if request.is_json:
+        username = require_user()
+        payload = request.get_json(silent=True) or {}
+        rule_doc = build_recurring_balance_doc_from_payload(payload)
+        doc_ref = rec_balance_collection(username).document()
+        doc_ref.set(rule_doc)
+        app.logger.info("Recurring balance rule created via JSON id=%s user=%s", doc_ref.id, username)
+        return jsonify({'ok': True, 'id': doc_ref.id})
+
     if form.validate_on_submit():
         username = require_user()
         rule_doc = build_recurring_balance_doc(form)
@@ -1989,6 +2106,13 @@ def recurring_balance_edit(r_id):
     recurring_rule = doc_to_txn(doc)
     balance_form = RecurringBalanceForm()
     balance_form.submit.label.text = 'Update Recurring Balance'
+
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        update_doc = build_recurring_balance_doc_from_payload(payload, last_applied=recurring_rule.get('last_applied'))
+        doc_ref.update(update_doc)
+        app.logger.info("Recurring balance rule updated via JSON id=%s user=%s", r_id, username)
+        return jsonify({'ok': True})
 
     if balance_form.validate_on_submit():
         update_doc = build_recurring_balance_doc(balance_form, last_applied=recurring_rule.get('last_applied'))
@@ -2025,6 +2149,11 @@ def recurring_balance_delete(r_id):
         app.logger.warning("Recurring balance delete requested for missing rule id=%s user=%s", r_id, username)
         flash('Recurring balance rule not found.', 'warning')
         return redirect(url_for('recurring'))
+
+    if request.is_json:
+        doc_ref.delete()
+        app.logger.info("Recurring balance rule deleted via JSON id=%s user=%s", r_id, username)
+        return jsonify({'ok': True})
 
     doc_ref.delete()
     app.logger.info("Recurring balance rule deleted id=%s user=%s", r_id, username)
@@ -2097,6 +2226,55 @@ def populate_split_entry_form(form, entry):
     form.category.data = entry.get('category') or 'Other'
     form.date.data = entry_time.date()
     form.time.data = entry_time.time().replace(second=0, microsecond=0, tzinfo=None)
+
+def serialize_trip_for_cache(t):
+    return {
+        'id': t.get('_id') or t.get('id'),
+        'name': t.get('name') or '',
+        'start_date': format_ist(t.get('start_date'), '%Y-%m-%d') if t.get('start_date') else None,
+        'end_date': format_ist(t.get('end_date'), '%Y-%m-%d') if t.get('end_date') else None,
+        'description': t.get('description') or '',
+        'photo_link': t.get('photo_link') or '',
+        'cost_type': t.get('cost_type') or 'fixed',
+        'approx_cost': round(float(t.get('approx_cost') or 0.0), 2),
+        'split_id': t.get('split_id') or None,
+    }
+
+def get_trip_documents(username=None):
+    if username is None:
+        username = require_user()
+    docs = stream_with_timeout(
+        trips_collection(username)
+        .order_by('start_date', direction=firestore.Query.DESCENDING)
+        .limit(TRIP_TABLE_LIMIT)
+    )
+    trips = []
+    for doc in docs:
+        t = doc_to_txn(doc)
+        if t.get('cost_type') == 'split' and t.get('split_id'):
+            try:
+                totals = get_split_totals(t['split_id'], username=username)
+                num_people = len(totals)
+                t['approx_cost'] = round(sum(totals.values()) / num_people, 2) if num_people > 0 else 0.0
+            except Exception as e:
+                app.logger.error("Error calculating dynamic split cost for trip %s: %s", t.get('_id'), str(e))
+                t['approx_cost'] = float(t.get('approx_cost') or 0.0)
+        else:
+            t['approx_cost'] = float(t.get('approx_cost') or 0.0)
+        trips.append(t)
+    return trips
+
+def get_trip_split_map(username):
+    docs = stream_with_timeout(trips_collection(username))
+    split_map = {}
+    for doc in docs:
+        t = doc_to_txn(doc)
+        if t.get('split_id'):
+            split_map[t['split_id']] = {
+                'id': t.get('_id') or doc.id,
+                'name': t.get('name') or 'Untitled Trip'
+            }
+    return split_map
 
 def get_split_documents(username=None):
     if username is None:
@@ -2209,6 +2387,24 @@ def splits():
         form = SplitDocumentForm(formdata=None)
 
     if not session.get('view_only') and request.method == 'POST':
+        # JSON API payload check
+        if request.is_json:
+            payload = request.get_json(silent=True) or {}
+            title = validate_short_text(payload.get('title'), 'Title')
+            is_live = bool(payload.get('is_live'))
+            split_doc = {
+                'title': title,
+                'is_live': is_live,
+                'created_at': datetime.now(UTC),
+                'updated_at': datetime.now(UTC),
+            }
+            doc_ref = splits_collection(username).document()
+            doc_ref.set(split_doc)
+            if is_live:
+                set_live_split(doc_ref.id, username=username)
+            app.logger.info("Split created via JSON id=%s user=%s live=%s", doc_ref.id, username, is_live)
+            return jsonify({'ok': True, 'id': doc_ref.id})
+
         if form.validate_on_submit():
             split_doc = build_split_document_doc(form)
             split_doc['created_at'] = datetime.now(UTC)
@@ -2231,6 +2427,7 @@ def splits():
         form=form,
         splits=get_split_documents(username=username),
         live_split=get_live_split(username=username),
+        trip_map=get_trip_split_map(username=username),
         editing=False,
         edit_id=None,
     )
@@ -2277,6 +2474,17 @@ def split_edit(split_id):
     split_doc = doc_to_txn(doc)
     form = SplitDocumentForm()
     form.submit.label.text = 'Update Split'
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        title = validate_short_text(payload.get('title'), 'Title')
+        update_doc = {
+            'title': title,
+            'updated_at': datetime.now(UTC),
+        }
+        doc_ref.set(update_doc, merge=True)
+        app.logger.info("Split updated via JSON id=%s user=%s", split_id, username)
+        return jsonify({'ok': True})
+
     if form.validate_on_submit():
         update_doc = build_split_document_doc(form)
         update_doc['is_live'] = bool(split_doc.get('is_live'))
@@ -2311,6 +2519,13 @@ def split_delete(split_id):
         flash('Split not found.', 'warning')
         return redirect(url_for('splits'))
 
+    if request.is_json:
+        for entry in stream_with_timeout(split_entries_collection(split_id, username)):
+            split_entries_collection(split_id, username).document(entry.id).delete()
+        doc_ref.delete()
+        app.logger.info("Split deleted via JSON id=%s user=%s", split_id, username)
+        return jsonify({'ok': True})
+
     for entry in stream_with_timeout(split_entries_collection(split_id, username)):
         split_entries_collection(split_id, username).document(entry.id).delete()
     doc_ref.delete()
@@ -2330,6 +2545,11 @@ def split_make_live(split_id):
         app.logger.warning("Split live update requested for missing split id=%s user=%s", split_id, username)
         flash('Split not found.', 'warning')
         return redirect(url_for('splits'))
+    if request.is_json:
+        set_live_split(split_id, username=username)
+        app.logger.info("Split marked live via JSON id=%s user=%s", split_id, username)
+        return jsonify({'ok': True})
+
     set_live_split(split_id, username=username)
     app.logger.info("Split marked live id=%s user=%s", split_id, username)
     flash('Live split updated.', 'success')
@@ -2349,6 +2569,11 @@ def split_remove_live(split_id):
         flash('Split not found.', 'warning')
         return redirect(url_for('splits'))
     now = datetime.now(UTC)
+    if request.is_json:
+        doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
+        app.logger.info("Split live removed via JSON id=%s user=%s", split_id, username)
+        return jsonify({'ok': True})
+
     doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
     app.logger.info("Split live removed id=%s user=%s", split_id, username)
     flash('Live split status removed.', 'info')
@@ -2647,6 +2872,350 @@ def api_split_summary(split_id):
     return jsonify({'ok': True, 'split': build_split_summary(doc_to_txn(split_doc), username=username)})
 
 
+# ---------------------------------------------------------------------
+# Trips Routes (Create, Edit, Delete, Disconnect)
+# ---------------------------------------------------------------------
+
+@app.route('/trips', methods=['GET', 'POST'])
+@login_required
+def trips():
+    username = require_user()
+    form = TripForm()
+    if session.get('view_only'):
+        form = TripForm(formdata=None)
+
+    if not session.get('view_only') and request.method == 'POST':
+        # JSON API payload check (offline sync)
+        if request.is_json:
+            payload = request.get_json(silent=True) or {}
+            name = validate_short_text(payload.get('name'), 'Trip Name')
+            start_date_str = payload.get('start_date')
+            end_date_str = payload.get('end_date')
+            description = validate_short_text(payload.get('description'), 'Description', max_len=500) or ''
+            photo_link = validate_short_text(payload.get('photo_link'), 'Photos Link', max_len=255) or ''
+            cost_type = payload.get('cost_type', 'fixed')
+            approx_cost_val = float(payload.get('approx_cost') or 0.0)
+
+            # Date conversions
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            except Exception:
+                return jsonify({'ok': False, 'error': 'Invalid date format (use YYYY-MM-DD)'}), 400
+
+            split_id = None
+            if cost_type == 'split':
+                # Automatically create a new Split document
+                split_doc = {
+                    'title': name,
+                    'is_live': False,
+                    'created_at': datetime.now(UTC),
+                    'updated_at': datetime.now(UTC),
+                }
+                split_ref = splits_collection(username).document()
+                split_ref.set(split_doc)
+                split_id = split_ref.id
+                approx_cost_val = 0.0
+
+            trip_doc = {
+                'name': name,
+                'start_date': local_datetime_to_utc(start_date, datetime.min.time()),
+                'end_date': local_datetime_to_utc(end_date, datetime.max.time().replace(second=0, microsecond=0)),
+                'description': description,
+                'photo_link': photo_link,
+                'cost_type': cost_type,
+                'approx_cost': approx_cost_val,
+                'split_id': split_id,
+                'created_at': datetime.now(UTC),
+                'updated_at': datetime.now(UTC),
+            }
+            doc_ref = trips_collection(username).document()
+            doc_ref.set(trip_doc)
+            app.logger.info("Trip created via JSON id=%s user=%s cost_type=%s", doc_ref.id, username, cost_type)
+            return jsonify({'ok': True, 'id': doc_ref.id})
+
+        if form.validate_on_submit():
+            name = form.name.data
+            start_date = form.start_date.data
+            end_date = form.end_date.data
+            description = form.description.data or ''
+            photo_link = form.photo_link.data or ''
+            cost_type = form.cost_type.data
+            approx_cost_val = float(form.approx_cost.data or 0.0)
+
+            split_id = None
+            if cost_type == 'split':
+                split_doc = {
+                    'title': name,
+                    'is_live': False,
+                    'created_at': datetime.now(UTC),
+                    'updated_at': datetime.now(UTC),
+                }
+                split_ref = splits_collection(username).document()
+                split_ref.set(split_doc)
+                split_id = split_ref.id
+                approx_cost_val = 0.0
+
+            trip_doc = {
+                'name': name,
+                'start_date': local_datetime_to_utc(start_date, datetime.min.time()),
+                'end_date': local_datetime_to_utc(end_date, datetime.max.time().replace(second=0, microsecond=0)),
+                'description': description,
+                'photo_link': photo_link,
+                'cost_type': cost_type,
+                'approx_cost': approx_cost_val,
+                'split_id': split_id,
+                'created_at': datetime.now(UTC),
+                'updated_at': datetime.now(UTC),
+            }
+            doc_ref = trips_collection(username).document()
+            doc_ref.set(trip_doc)
+            app.logger.info("Trip created id=%s user=%s cost_type=%s", doc_ref.id, username, cost_type)
+            flash('Trip created successfully.', 'success')
+            return redirect(url_for('trips'))
+        else:
+            app.logger.warning("Trip validation failed user=%s errors=%s", username, form.errors)
+            for fieldName, errorMessages in form.errors.items():
+                for err in errorMessages:
+                    flash(f"{form[fieldName].label.text}: {err}", "danger")
+            return redirect(url_for('trips'))
+
+    # GET request
+    trips_list = get_trip_documents(username=username)
+    splits_list = get_split_documents(username=username)
+    return render_template(
+        'trips.html',
+        form=form,
+        trips=trips_list,
+        splits=splits_list,
+    )
+
+
+@app.route('/trips/edit/<string:trip_id>', methods=['POST'])
+@login_required
+def trip_edit(trip_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot edit trips")
+    username = require_user()
+    doc_ref = trips_collection(username).document(trip_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        flash('Trip not found.', 'warning')
+        return redirect(url_for('trips'))
+
+    existing = doc_to_txn(doc)
+
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        name = validate_short_text(payload.get('name'), 'Trip Name')
+        start_date_str = payload.get('start_date')
+        end_date_str = payload.get('end_date')
+        description = validate_short_text(payload.get('description'), 'Description', max_len=500) or ''
+        photo_link = validate_short_text(payload.get('photo_link'), 'Photos Link', max_len=255) or ''
+        cost_type = payload.get('cost_type', 'fixed')
+        approx_cost_val = float(payload.get('approx_cost') or 0.0)
+
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except Exception:
+            return jsonify({'ok': False, 'error': 'Invalid date format (use YYYY-MM-DD)'}), 400
+
+        split_id = existing.get('split_id')
+        if cost_type == 'split' and not split_id:
+            split_doc = {
+                'title': name,
+                'is_live': False,
+                'created_at': datetime.now(UTC),
+                'updated_at': datetime.now(UTC),
+            }
+            split_ref = splits_collection(username).document()
+            split_ref.set(split_doc)
+            split_id = split_ref.id
+            approx_cost_val = 0.0
+        elif cost_type == 'fixed' and split_id:
+            split_id = None
+
+        update_doc = {
+            'name': name,
+            'start_date': local_datetime_to_utc(start_date, datetime.min.time()),
+            'end_date': local_datetime_to_utc(end_date, datetime.max.time().replace(second=0, microsecond=0)),
+            'description': description,
+            'photo_link': photo_link,
+            'cost_type': cost_type,
+            'approx_cost': approx_cost_val,
+            'split_id': split_id,
+            'updated_at': datetime.now(UTC),
+        }
+        doc_ref.set(update_doc, merge=True)
+        app.logger.info("Trip edited via JSON id=%s user=%s", trip_id, username)
+        return jsonify({'ok': True})
+
+    form = TripForm()
+    if form.validate_on_submit():
+        name = form.name.data
+        start_date = form.start_date.data
+        end_date = form.end_date.data
+        description = form.description.data or ''
+        photo_link = form.photo_link.data or ''
+        cost_type = form.cost_type.data
+        approx_cost_val = float(form.approx_cost.data or 0.0)
+
+        split_id = existing.get('split_id')
+        if cost_type == 'split' and not split_id:
+            split_doc = {
+                'title': name,
+                'is_live': False,
+                'created_at': datetime.now(UTC),
+                'updated_at': datetime.now(UTC),
+            }
+            split_ref = splits_collection(username).document()
+            split_ref.set(split_doc)
+            split_id = split_ref.id
+            approx_cost_val = 0.0
+        elif cost_type == 'fixed' and split_id:
+            split_id = None
+
+        update_doc = {
+            'name': name,
+            'start_date': local_datetime_to_utc(start_date, datetime.min.time()),
+            'end_date': local_datetime_to_utc(end_date, datetime.max.time().replace(second=0, microsecond=0)),
+            'description': description,
+            'photo_link': photo_link,
+            'cost_type': cost_type,
+            'approx_cost': approx_cost_val,
+            'split_id': split_id,
+            'updated_at': datetime.now(UTC),
+        }
+        doc_ref.set(update_doc, merge=True)
+        app.logger.info("Trip edited id=%s user=%s", trip_id, username)
+        flash('Trip updated successfully.', 'success')
+    else:
+        app.logger.warning("Trip edit validation failed user=%s errors=%s", username, form.errors)
+        for fieldName, errorMessages in form.errors.items():
+            for err in errorMessages:
+                flash(f"{form[fieldName].label.text}: {err}", "danger")
+
+    return redirect(url_for('trips'))
+
+
+@app.route('/trips/delete/<string:trip_id>', methods=['POST'])
+@login_required
+def trip_delete(trip_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot delete trips")
+    username = require_user()
+    doc_ref = trips_collection(username).document(trip_id)
+    if not doc_ref.get().exists:
+        flash('Trip not found.', 'warning')
+        return redirect(url_for('trips'))
+
+    doc_ref.delete()
+    app.logger.info("Trip deleted id=%s user=%s", trip_id, username)
+
+    if request.is_json:
+        return jsonify({'ok': True})
+
+    flash('Trip deleted.', 'info')
+    return redirect(url_for('trips'))
+
+
+@app.route('/trips/disconnect/<string:trip_id>', methods=['POST'])
+@login_required
+def trip_disconnect(trip_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot disconnect split")
+    username = require_user()
+    doc_ref = trips_collection(username).document(trip_id)
+    trip = doc_ref.get()
+    if not trip.exists:
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'Trip not found'}), 404
+        flash('Trip not found.', 'warning')
+        return redirect(url_for('trips'))
+
+    t = doc_to_txn(trip)
+    split_id = t.get('split_id')
+
+    # Get action: 'delete' or 'keep'
+    action = 'keep'
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        action = payload.get('action', 'keep')
+    else:
+        action = request.form.get('action', 'keep')
+
+    if split_id:
+        if action == 'delete':
+            # Delete connected split entries and split itself
+            for entry in stream_with_timeout(split_entries_collection(split_id, username)):
+                split_entries_collection(split_id, username).document(entry.id).delete()
+            splits_collection(username).document(split_id).delete()
+            app.logger.info("Split deleted during disconnect split_id=%s user=%s", split_id, username)
+            flash('Connected split deleted successfully.', 'info')
+        else:
+            flash('Split disconnected successfully.', 'info')
+
+    # Update trip to be fixed cost and clear split_id
+    doc_ref.set({
+        'split_id': None,
+        'cost_type': 'fixed',
+        'updated_at': datetime.now(UTC)
+    }, merge=True)
+
+    app.logger.info("Trip disconnected split_id=%s trip_id=%s action=%s user=%s", split_id, trip_id, action, username)
+
+    if request.is_json:
+        return jsonify({'ok': True})
+
+    return redirect(url_for('trips'))
+
+
+@app.route('/splits/disconnect/<string:split_id>', methods=['POST'])
+@login_required
+def split_disconnect_trip(split_id):
+    if session.get('view_only'):
+        abort(401, description="View-only sessions cannot disconnect trip")
+    username = require_user()
+
+    # Get action: 'delete' or 'keep'
+    action = 'keep'
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        action = payload.get('action', 'keep')
+    else:
+        action = request.form.get('action', 'keep')
+
+    # Find the trip connected to this split
+    docs = stream_with_timeout(trips_collection(username).where('split_id', '==', split_id))
+    trips_found = [doc_to_txn(doc) for doc in docs]
+
+    for t in trips_found:
+        trip_id = t.get('_id') or t.get('id')
+        if action == 'delete':
+            # Delete the trip
+            trips_collection(username).document(trip_id).delete()
+            app.logger.info("Trip deleted during split disconnect trip_id=%s user=%s", trip_id, username)
+        else:
+            # Clear split_id and change cost_type to fixed
+            trips_collection(username).document(trip_id).set({
+                'split_id': None,
+                'cost_type': 'fixed',
+                'updated_at': datetime.now(UTC)
+            }, merge=True)
+            app.logger.info("Trip disconnected during split disconnect trip_id=%s user=%s", trip_id, username)
+
+    if action == 'delete':
+        flash('Connected trip deleted successfully.', 'info')
+    else:
+        flash('Trip disconnected successfully.', 'info')
+
+    if request.is_json:
+        return jsonify({'ok': True})
+
+    return redirect(url_for('splits'))
+
+
 @app.route('/analytics')
 @login_required
 def analytics():
@@ -2794,6 +3363,29 @@ def management():
     password_form = ChangePasswordForm(prefix='account_password')
     categories = get_categories()
     split_people = get_split_people()
+
+    if request.method == 'POST' and request.is_json:
+        payload = request.get_json(silent=True) or {}
+        json_action = payload.get('action')
+        if json_action == 'add_category':
+            new_category = normalize_category_name(payload.get('name'))
+            if not new_category:
+                return jsonify({'ok': False, 'error': 'Name is required'}), 400
+            if category_exists(categories, new_category):
+                return jsonify({'ok': False, 'error': 'Category already exists.'}), 400
+            save_categories([*categories, new_category], updated_by=username)
+            app.logger.info("Category added via JSON name=%s user=%s", new_category, username)
+            return jsonify({'ok': True})
+        if json_action == 'add_split_person':
+            new_person = normalize_person_name(payload.get('name'))
+            if not new_person:
+                return jsonify({'ok': False, 'error': 'Name is required'}), 400
+            if person_exists(split_people, new_person):
+                return jsonify({'ok': False, 'error': 'Person already exists.'}), 400
+            save_split_people([*split_people, new_person], updated_by=username)
+            app.logger.info("Split person added via JSON name=%s user=%s", new_person, username)
+            return jsonify({'ok': True})
+
     action = request.form.get('action')
 
     if action == 'update_view_password' and form.validate_on_submit():
@@ -2941,6 +3533,18 @@ def management_category_edit(category_name):
         flash('Category not found.', 'warning')
         return redirect(url_for('management'))
 
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        updated = normalize_category_name(payload.get('name'))
+        if not updated:
+            return jsonify({'ok': False, 'error': 'Name is required'}), 400
+        if category_key(updated) != category_key(original) and category_exists(categories, updated):
+            return jsonify({'ok': False, 'error': 'Category already exists.'}), 400
+        renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
+        save_categories(renamed, updated_by=username)
+        app.logger.info("Category renamed via JSON old=%s new=%s user=%s", original, updated, username)
+        return jsonify({'ok': True})
+
     if category_form.validate_on_submit():
         updated = normalize_category_name(category_form.name.data)
         if category_key(updated) != category_key(original) and category_exists(categories, updated):
@@ -2979,6 +3583,11 @@ def management_category_delete(category_name):
         flash('At least one category is required.', 'warning')
         return redirect(url_for('management'))
 
+    if request.is_json:
+        save_categories(remaining, updated_by=username)
+        app.logger.info("Category deleted via JSON name=%s user=%s", category, username)
+        return jsonify({'ok': True})
+
     save_categories(remaining, updated_by=username)
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
@@ -2997,6 +3606,18 @@ def management_split_person_edit(person_name):
     if not person_exists(split_people, original):
         flash('Person not found.', 'warning')
         return redirect(url_for('management'))
+
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        updated = normalize_person_name(payload.get('name'))
+        if not updated:
+            return jsonify({'ok': False, 'error': 'Name is required'}), 400
+        if person_key(updated) != person_key(original) and person_exists(split_people, updated):
+            return jsonify({'ok': False, 'error': 'Person already exists.'}), 400
+        renamed = [updated if person_key(item) == person_key(original) else item for item in split_people]
+        save_split_people(renamed, updated_by=username)
+        app.logger.info("Split person renamed via JSON old=%s new=%s user=%s", original, updated, username)
+        return jsonify({'ok': True})
 
     if split_person_form.validate_on_submit():
         updated = normalize_person_name(split_person_form.name.data)
@@ -3035,6 +3656,11 @@ def management_split_person_delete(person_name):
     if not remaining:
         flash('At least one person is required.', 'warning')
         return redirect(url_for('management'))
+
+    if request.is_json:
+        save_split_people(remaining, updated_by=username)
+        app.logger.info("Split person deleted via JSON name=%s user=%s", person, username)
+        return jsonify({'ok': True})
 
     save_split_people(remaining, updated_by=username)
     app.logger.info("Split person deleted name=%s user=%s", person, username)
@@ -3248,6 +3874,29 @@ def view_only_login():
         app.logger.exception("Error in /view login for %s: %s", username, e)
         flash('Login error', 'danger')
         return redirect(url_for('login'))
+
+
+@app.route('/api/login_offline', methods=['POST'])
+def api_login_offline():
+    payload = request.get_json(silent=True) or {}
+    username = normalize_username(payload.get('username'))
+    login_type = payload.get('type')
+
+    if not username:
+        return jsonify({'ok': False, 'error': 'Username is required.'}), 400
+
+    session.permanent = True
+    session['username'] = username
+    if login_type == 'view':
+        session['view_only'] = True
+        session.pop('logged_in', None)
+        app.logger.info("Offline view-only session granted for user=%s", username)
+    else:
+        session['logged_in'] = True
+        session.pop('view_only', None)
+        app.logger.info("Offline full session granted for user=%s", username)
+
+    return jsonify({'ok': True})
 
 
 @app.route('/logout')

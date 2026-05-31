@@ -136,6 +136,11 @@
     const transactionId = form.dataset.transactionId || '';
     const splitId = form.dataset.splitId || '';
     const splitEntryId = form.dataset.splitEntryId || '';
+    const recurringId = form.dataset.recurringId || '';
+    const categoryName = form.dataset.categoryName || '';
+    const personName = form.dataset.personName || '';
+    const tripId = form.dataset.tripId || '';
+
     if (queueType === 'transaction-edit') {
       return `/api/transactions/${encodeURIComponent(transactionId)}/update`;
     }
@@ -151,6 +156,72 @@
     if (queueType === 'split-entry-delete') {
       return `/api/splits/${encodeURIComponent(splitId)}/entries/${encodeURIComponent(splitEntryId)}/delete`;
     }
+    if (queueType === 'split-create') {
+      return '/splits';
+    }
+    if (queueType === 'split-edit') {
+      return `/splits/edit/${encodeURIComponent(splitId)}`;
+    }
+    if (queueType === 'split-delete') {
+      return `/splits/delete/${encodeURIComponent(splitId)}`;
+    }
+    if (queueType === 'split-live') {
+      return `/splits/${encodeURIComponent(splitId)}/live`;
+    }
+    if (queueType === 'split-unlive') {
+      return `/splits/${encodeURIComponent(splitId)}/unlive`;
+    }
+    if (queueType === 'recurring-create') {
+      return '/recurring';
+    }
+    if (queueType === 'recurring-edit') {
+      return `/recurring/edit/${encodeURIComponent(recurringId)}`;
+    }
+    if (queueType === 'recurring-delete') {
+      return `/recurring/delete/${encodeURIComponent(recurringId)}`;
+    }
+    if (queueType === 'recurring-balance-create') {
+      return '/recurring/balance';
+    }
+    if (queueType === 'recurring-balance-edit') {
+      return `/recurring/balance/edit/${encodeURIComponent(recurringId)}`;
+    }
+    if (queueType === 'recurring-balance-delete') {
+      return `/recurring/balance/delete/${encodeURIComponent(recurringId)}`;
+    }
+    if (queueType === 'category-create') {
+      return '/management';
+    }
+    if (queueType === 'category-edit') {
+      return `/management/categories/edit/${encodeURIComponent(categoryName)}`;
+    }
+    if (queueType === 'category-delete') {
+      return `/management/categories/delete/${encodeURIComponent(categoryName)}`;
+    }
+    if (queueType === 'person-create') {
+      return '/management';
+    }
+    if (queueType === 'person-edit') {
+      return `/management/split-people/edit/${encodeURIComponent(personName)}`;
+    }
+    if (queueType === 'person-delete') {
+      return `/management/split-people/delete/${encodeURIComponent(personName)}`;
+    }
+    if (queueType === 'trip-create') {
+      return '/trips';
+    }
+    if (queueType === 'trip-edit') {
+      return `/trips/edit/${encodeURIComponent(tripId)}`;
+    }
+    if (queueType === 'trip-delete') {
+      return `/trips/delete/${encodeURIComponent(tripId)}`;
+    }
+    if (queueType === 'trip-disconnect') {
+      return `/trips/disconnect/${encodeURIComponent(tripId)}`;
+    }
+    if (queueType === 'split-disconnect-trip') {
+      return `/splits/disconnect/${encodeURIComponent(splitId)}`;
+    }
     return '/api/transactions/create';
   }
 
@@ -161,9 +232,85 @@
   }
 
   function payloadFor(form, queueType) {
-    if (queueType === 'transaction-delete' || queueType === 'split-entry-delete') {
+    const isDeleteOrStatus = [
+      'transaction-delete',
+      'split-entry-delete',
+      'split-delete',
+      'split-live',
+      'split-unlive',
+      'recurring-delete',
+      'recurring-balance-delete',
+      'category-delete',
+      'person-delete',
+      'trip-delete',
+    ].includes(queueType);
+
+    if (isDeleteOrStatus) {
       return {};
     }
+
+    const data = new FormData(form);
+
+    if (queueType === 'trip-create' || queueType === 'trip-edit') {
+      return {
+        name: data.get('name'),
+        start_date: data.get('start_date'),
+        end_date: data.get('end_date'),
+        description: data.get('description'),
+        photo_link: data.get('photo_link'),
+        cost_type: data.get('cost_type'),
+        approx_cost: data.get('approx_cost')
+      };
+    }
+
+    if (queueType === 'trip-disconnect' || queueType === 'split-disconnect-trip') {
+      return {
+        action: data.get('action') || 'keep'
+      };
+    }
+
+    if (queueType === 'split-create' || queueType === 'split-edit') {
+      return {
+        title: data.get('title'),
+        is_live: data.has('is_live') && (data.get('is_live') === 'on' || data.get('is_live') === 'true')
+      };
+    }
+
+    if (queueType === 'recurring-create' || queueType === 'recurring-edit') {
+      return {
+        amount: data.get('amount'),
+        description: data.get('description'),
+        category: data.get('category'),
+        start_date: data.get('start_date'),
+        start_time: data.get('start_time'),
+        frequency: data.get('frequency')
+      };
+    }
+
+    if (queueType === 'recurring-balance-create' || queueType === 'recurring-balance-edit') {
+      return {
+        amount: data.get('amount') || data.get('balance'),
+        description: data.get('description') || data.get('note'),
+        start_date: data.get('start_date'),
+        start_time: data.get('start_time'),
+        frequency: data.get('frequency')
+      };
+    }
+
+    if (queueType === 'category-create' || queueType === 'category-edit') {
+      return {
+        action: 'add_category',
+        name: data.get('name')
+      };
+    }
+
+    if (queueType === 'person-create' || queueType === 'person-edit') {
+      return {
+        action: 'add_split_person',
+        name: data.get('name')
+      };
+    }
+
     return formPayload(form);
   }
 
@@ -266,6 +413,28 @@
           'split-entry-create',
           'split-entry-edit',
           'split-entry-delete',
+          'split-create',
+          'split-edit',
+          'split-delete',
+          'split-live',
+          'split-unlive',
+          'recurring-create',
+          'recurring-edit',
+          'recurring-delete',
+          'recurring-balance-create',
+          'recurring-balance-edit',
+          'recurring-balance-delete',
+          'category-create',
+          'category-edit',
+          'category-delete',
+          'person-create',
+          'person-edit',
+          'person-delete',
+          'trip-create',
+          'trip-edit',
+          'trip-delete',
+          'trip-disconnect',
+          'split-disconnect-trip',
         ].includes(queueType)) {
           return;
         }
@@ -279,10 +448,32 @@
 
         const submitButton = form.querySelector('button[type="submit"], button:not([type])');
         const payload = payloadFor(form, queueType);
-        const isDeleteAction = queueType === 'transaction-delete' || queueType === 'split-entry-delete';
-        const validationError = isDeleteAction ? '' : validatePayload(payload, {
+        const isDeleteAction = [
+          'transaction-delete',
+          'split-entry-delete',
+          'split-delete',
+          'split-live',
+          'split-unlive',
+          'recurring-delete',
+          'recurring-balance-delete',
+          'category-delete',
+          'person-delete',
+          'trip-delete',
+          'trip-disconnect',
+          'split-disconnect-trip',
+        ].includes(queueType);
+
+        const isStandardTxOrSplitEntry = [
+          'transaction-create',
+          'transaction-edit',
+          'split-entry-create',
+          'split-entry-edit'
+        ].includes(queueType);
+
+        const validationError = (isDeleteAction || !isStandardTxOrSplitEntry) ? '' : validatePayload(payload, {
           requirePerson: queueType.startsWith('split-entry-'),
         });
+
         if (validationError) {
           notify(validationError, 'error');
           return;
@@ -297,6 +488,7 @@
         });
 
         if (submitButton) submitButton.blur();
+
         if (queueType === 'transaction-create') {
           form.reset();
           closeFormModal(form);
@@ -313,11 +505,28 @@
           closeFormModal(form);
           notify('Split entry update saved locally. Syncing in background.', 'success');
           window.location.href = form.dataset.returnUrl || window.location.pathname.replace(/\/entries\/.+\/edit$/, '');
-        } else {
+        } else if (queueType === 'transaction-delete' || queueType === 'split-entry-delete') {
           const row = form.closest('tr');
           closeFormModal(form);
           if (row) row.remove();
           notify('Delete saved locally. Syncing in background.', 'success');
+        } else {
+          // General redirect/refresh handler for new background queue types
+          form.reset();
+          closeFormModal(form);
+          notify('Action saved locally. Syncing in background.', 'success');
+
+          let redirectUrl = window.location.pathname;
+          if (queueType.startsWith('split-')) {
+            redirectUrl = '/splits';
+          } else if (queueType.startsWith('recurring')) {
+            redirectUrl = '/recurring';
+          } else if (queueType.startsWith('category') || queueType.startsWith('person')) {
+            redirectUrl = '/management';
+          } else if (queueType.startsWith('trip-')) {
+            redirectUrl = '/trips';
+          }
+          setTimeout(() => { window.location.href = redirectUrl; }, 500);
         }
         syncQueue();
       });

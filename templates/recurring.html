@@ -60,7 +60,7 @@
                                 {% if not session.get('view_only') %}
                                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editExpenseModal{{ rid }}">Edit</button>
                                 <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
-                                    data-confirm="Delete recurring expense rule?" class="d-inline">
+                                    data-confirm="Delete recurring expense rule?" class="d-inline" data-offline-queue="recurring-delete" data-recurring-id="{{ rid }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
@@ -79,7 +79,7 @@
                                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                                         </div>
                                         <div class="modal-body">
-                                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}">
+                                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}" data-offline-queue="recurring-edit" data-recurring-id="{{ rid }}">
                                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                                 
                                                 <div class="mb-3">
@@ -190,7 +190,7 @@
                                 {% if not session.get('view_only') %}
                                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editBalanceModal{{ rid }}">Edit</button>
                                 <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
-                                    data-confirm="Delete recurring balance rule?" class="d-inline">
+                                    data-confirm="Delete recurring balance rule?" class="d-inline" data-offline-queue="recurring-balance-delete" data-recurring-id="{{ rid }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-sm btn-danger">Delete</button>
                                 </form>
@@ -209,7 +209,7 @@
                                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                                         </div>
                                         <div class="modal-body">
-                                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}">
+                                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}" data-offline-queue="recurring-balance-edit" data-recurring-id="{{ rid }}">
                                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                                 
                                                 <div class="mb-3">
@@ -275,7 +275,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form method="post" action="{{ url_for('recurring') }}">
+                <form method="post" action="{{ url_for('recurring') }}" data-offline-queue="recurring-create">
                     {{ form.hidden_tag() }}
 
                     <div class="mb-3">
@@ -325,7 +325,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form method="post" action="{{ url_for('recurring_balance') }}">
+                <form method="post" action="{{ url_for('recurring_balance') }}" data-offline-queue="recurring-balance-create">
                     {{ balance_form.hidden_tag() }}
 
                     <div class="mb-3">
