@@ -175,6 +175,8 @@ app.logger.debug("VIEW_PASS present? %s", bool(HW_PASSWORD))
 
 @app.template_filter('ist_datetime')
 def ist_datetime_filter(value, fmt='%Y-%m-%d %H:%M'):
+    if fmt == '%Y-%m-%d %H:%M':
+        fmt = "'%y-%m-%d %H:%M"
     return format_ist(value, fmt) or '-'
 
 @app.context_processor
@@ -2231,8 +2233,8 @@ def serialize_trip_for_cache(t):
     return {
         'id': t.get('_id') or t.get('id'),
         'name': t.get('name') or '',
-        'start_date': format_ist(t.get('start_date'), '%Y-%m-%d') if t.get('start_date') else None,
-        'end_date': format_ist(t.get('end_date'), '%Y-%m-%d') if t.get('end_date') else None,
+        'start_date': format_ist(t.get('start_date'), "'%y-%m-%d") if t.get('start_date') else None,
+        'end_date': format_ist(t.get('end_date'), "'%y-%m-%d") if t.get('end_date') else None,
         'description': t.get('description') or '',
         'photo_link': t.get('photo_link') or '',
         'cost_type': t.get('cost_type') or 'fixed',

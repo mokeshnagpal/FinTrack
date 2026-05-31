@@ -85,7 +85,8 @@
         const parts = parseDateParts(value);
         if (!parts) return null;
 
-        const dateText = `${ordinal(parts.day)} ${MONTH_NAMES[parts.month - 1]} ${parts.year}`;
+        const year2 = String(parts.year).slice(-2);
+        const dateText = `${ordinal(parts.day)} ${MONTH_NAMES[parts.month - 1]} '${year2}`;
         if (parts.hour === null) {
             return { date: dateText, time: '' };
         }

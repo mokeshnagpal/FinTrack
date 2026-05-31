@@ -48,7 +48,7 @@
                         <line x1="8" y1="2" x2="8" y2="6"></line>
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                     </svg>
-                    <span>{{ trip.start_date|ist_datetime('%Y-%m-%d') }}</span> to <span>{{ trip.end_date|ist_datetime('%Y-%m-%d') }}</span>
+                    <span>{{ trip.start_date|ist_datetime("'%y-%m-%d") }}</span> to <span>{{ trip.end_date|ist_datetime("'%y-%m-%d") }}</span>
                 </div>
 
                 <p class="card-text description-text text-muted flex-grow-1 mb-3" style="font-size: 0.88rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5;">
