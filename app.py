@@ -218,6 +218,7 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/api/transactions_range',
     '/api/render_status',
     '/export/transactions_csv',
+    '/export/all_data_zip',
     '/static/',
     '/view',
     '/view-login',
@@ -4246,6 +4247,92 @@ def export_transactions_csv():
     buf.seek(0)
     filename = f"transactions_{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}.csv"
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=filename)
+
+@app.route('/export/all_data_zip')
+@login_required
+def export_all_data_zip():
+    import zipfile
+    username = require_user()
+    
+    def dicts_to_csv_string(dicts, headers):
+        si = io.StringIO()
+        cw = csv.writer(si)
+        cw.writerow(headers)
+        for d in dicts:
+            row = []
+            for h in headers:
+                val = d.get(h)
+                if isinstance(val, datetime):
+                    val = format_ist(val)
+                elif isinstance(val, list):
+                    val = ",".join(map(str, val))
+                elif val is None:
+                    val = ""
+                row.append(val)
+            cw.writerow(row)
+        return si.getvalue()
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        try:
+            # 1. Transactions
+            txns = [doc_to_txn(d) for d in stream_with_timeout(tx_collection(username))]
+            zip_file.writestr('transactions.csv', dicts_to_csv_string(txns, ['id', 'timestamp', 'description', 'category', 'amount', 'recurring_id', 'client_action_id']))
+        except Exception as e:
+            app.logger.error("ZIP export transactions failed: %s", e)
+
+        try:
+            # 2. Balances
+            balances = [doc_to_txn(d) for d in stream_with_timeout(bal_collection(username))]
+            zip_file.writestr('balances.csv', dicts_to_csv_string(balances, ['id', 'timestamp', 'balance', 'type', 'balance_mode', 'delta', 'note', 'recurring_balance_id', 'recurring_balance_key', 'scheduled_for']))
+        except Exception as e:
+            app.logger.error("ZIP export balances failed: %s", e)
+
+        try:
+            # 3. Recurring Expense Rules
+            recurring_expenses = [doc_to_txn(d) for d in stream_with_timeout(rec_collection(username))]
+            zip_file.writestr('recurring_expense_rules.csv', dicts_to_csv_string(recurring_expenses, ['id', 'amount', 'description', 'category', 'start_datetime', 'frequency', 'active', 'last_applied']))
+        except Exception as e:
+            app.logger.error("ZIP export recurring expenses failed: %s", e)
+
+        try:
+            # 4. Recurring Balance Rules
+            recurring_balances = [doc_to_txn(d) for d in stream_with_timeout(rec_balance_collection(username))]
+            zip_file.writestr('recurring_balance_rules.csv', dicts_to_csv_string(recurring_balances, ['id', 'amount', 'description', 'start_datetime', 'frequency', 'active', 'last_applied']))
+        except Exception as e:
+            app.logger.error("ZIP export recurring balances failed: %s", e)
+
+        try:
+            # 5. Splits and Split Entries
+            splits = []
+            split_entries = []
+            for split_doc in stream_with_timeout(splits_collection(username)):
+                s_data = doc_to_txn(split_doc)
+                splits.append(s_data)
+                split_id = s_data.get('id')
+                split_title = s_data.get('title')
+                for entry_doc in stream_with_timeout(split_entries_collection(split_id, username)):
+                    e_data = doc_to_txn(entry_doc)
+                    e_data['split_id'] = split_id
+                    e_data['split_title'] = split_title
+                    split_entries.append(e_data)
+
+            zip_file.writestr('splits.csv', dicts_to_csv_string(splits, ['id', 'title', 'is_live', 'people', 'created_at', 'updated_at', 'transaction_id', 'recorded_amount']))
+            zip_file.writestr('split_entries.csv', dicts_to_csv_string(split_entries, ['split_id', 'split_title', 'id', 'person', 'amount', 'description', 'category', 'timestamp', 'created_at', 'updated_at']))
+        except Exception as e:
+            app.logger.error("ZIP export splits/entries failed: %s", e)
+
+        try:
+            # 6. Trips
+            trips = [doc_to_txn(d) for d in stream_with_timeout(trips_collection(username))]
+            zip_file.writestr('trips.csv', dicts_to_csv_string(trips, ['id', 'name', 'start_date', 'end_date', 'description', 'photo_link', 'cost_type', 'approx_cost', 'split_id', 'created_at', 'updated_at']))
+        except Exception as e:
+            app.logger.error("ZIP export trips failed: %s", e)
+
+    zip_buffer.seek(0)
+    filename = f"fintrak_data_{username}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.zip"
+    app.logger.info("ZIP data export generated for user=%s filename=%s", username, filename)
+    return send_file(zip_buffer, mimetype='application/zip', as_attachment=True, download_name=filename)
 
 # legacy endpoints
 @app.route('/api/daily_totals')

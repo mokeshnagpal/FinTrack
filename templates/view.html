@@ -1,81 +1,45 @@
 <!doctype html>
+{% from "macros/ui.html" import auth_layout %}
 <html lang="en" data-theme="light">
 
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token() }}" />
     <title>FinTrak - View-only</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
 </head>
 
 <body>
-    <div class="auth-wrapper">
-        <div style="position: absolute; top: 1.5rem; right: 1.5rem; z-index: 10;">
-            <button id="themeToggle" class="btn btn-sm btn-outline-primary shadow-sm" aria-pressed="false" title="Toggle theme">
-                <span id="themeIcon">Dark</span>
-                <span class="visually-hidden">Toggle theme</span>
-            </button>
-        </div>
-        <div class="auth-card card">
-            <div class="card-body">
-                <div class="stack auth-stack">
-                    <div class="center auth-heading">
-                        <div class="auth-brand">FT</div>
-                        <div>
-                            <div class="page-title">FinTrak</div>
-                            <div class="kicker">Open view-only for a user</div>
-                        </div>
-                    </div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% call auth_layout('FinTrak', 'Open view-only for a user', messages=messages) %}
+        <form method="post" action="{{ url_for('view_login') }}" novalidate>
+            {{ form.hidden_tag() }}
+            <div class="stack">
+                <label class="kicker" for="username">Username</label>
+                <input id="username" name="username" class="form-control" type="email" placeholder="email"
+                    maxlength="120"
+                    value="{{ request.form.username or '' }}" autocomplete="username" autofocus />
 
-                    {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                    {% for category, msg in messages %}
-                    <div class="flash-inline {{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
-                    {% endfor %}
-                    {% endif %}
-                    {% endwith %}
-
-                    <div class="auth-status-grid" aria-live="polite">
-                        <div class="auth-status-item">
-                            <span class="kicker">Service</span>
-                            <strong id="authRenderState">Waking</strong>
-                            <p id="authRenderMessage">Waiting for the service to respond.</p>
-                        </div>
-                        <div class="auth-status-item">
-                            <span class="kicker">Cache</span>
-                            <strong id="authCacheState">Not available</strong>
-                            <p id="authCacheMessage">Enter username to check cached login.</p>
-                        </div>
-                    </div>
-
-                    <form method="post" action="{{ url_for('view_login') }}" novalidate>
-                        {{ form.hidden_tag() }}
-                        <div class="stack">
-                            <label class="kicker" for="username">Username</label>
-                            <input id="username" name="username" class="form-control" type="email" placeholder="email"
-                                maxlength="120"
-                                value="{{ request.form.username or '' }}" autocomplete="username" autofocus />
-
-                            <label class="kicker" for="password">Password</label>
-                            <input id="password" name="password" class="form-control" type="password"
-                                placeholder="View-only password" autocomplete="current-password" maxlength="128" />
-                        </div>
-
-                        <div class="form-foot">
-                            <button type="submit" class="btn btn-primary">Open view</button>
-                            <a href="{{ url_for('login') }}" class="small-muted">Admin Mode</a>
-                        </div>
-                    </form>
-                </div>
+                <label class="kicker" for="password">Password</label>
+                <input id="password" name="password" class="form-control" type="password"
+                    placeholder="View-only password" autocomplete="current-password" maxlength="128" />
             </div>
-        </div>
-    </div>
+
+            <div class="form-foot">
+                <button type="submit" class="btn btn-primary">Open view</button>
+                <a href="{{ url_for('login') }}" class="small-muted">Admin Mode</a>
+            </div>
+        </form>
+    {% endcall %}
+    {% endwith %}
 
     <script>
         window.FinTrakConstants = {{ client_constants | tojson }};
     </script>
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
     <script src="{{ url_for('static', filename='js/browser_cache.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/offline_queue.js') }}"></script>
     <script src="{{ url_for('static', filename='js/flash.js') }}"></script>
     <script src="{{ url_for('static', filename='js/auth_status.js') }}"></script>
 </body>

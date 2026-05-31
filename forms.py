@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 from flask_wtf import FlaskForm
 from wtforms import (
-    BooleanField,
     DateField,
     DecimalField,
     PasswordField,

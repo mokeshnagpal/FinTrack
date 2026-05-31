@@ -1,17 +1,13 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input, form_select %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">Records</span>
-        <h1>Transaction History</h1>
-        <p>Review recent spending activity.</p>
-    </div>
-    {% if not session.get('view_only') %}
-    <div class="page-actions">
+{% if not session.get('view_only') %}
+    {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTransactionModal">Add Transaction</button>
-    </div>
-    {% endif %}
-</section>
+    {% endcall %}
+{% else %}
+    {{ page_header('Transaction History', kicker='Records', description='Review recent spending activity.') }}
+{% endif %}
 
 <form class="transaction-toolbar" method="get" action="{{ url_for('transactions') }}">
     <input type="hidden" name="sort" value="{{ txns.sort }}">
@@ -38,206 +34,115 @@
     </a>
 {%- endmacro %}
 
-<div class="table-shell table-responsive">
-    <table class="table table-sm table-striped align-middle server-sorted">
-        <thead>
-            <tr>
-                <th>{{ sort_link('Date', 'timestamp') }}</th>
-                <th>{{ sort_link('Description', 'description') }}</th>
-                <th>{{ sort_link('Category', 'category') }}</th>
-                <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
-                <th class="text-end">Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for txn in txns.items %}
-            {% set can_manage_txn = not session.get('view_only') %}
-            <tr>
-                <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
-                <td data-label="Description"><small>{{ txn.description }}</small></td>
-                <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
-                <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
-                <td data-label="Actions" class="text-end">
-                    {% if can_manage_txn %}
-                    <div class="table-actions">
-                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editTransactionModal{{ txn.id }}">
-                            Edit
+{% call table_shell(extra_class='table-striped server-sorted') %}
+    <thead>
+        <tr>
+            <th>{{ sort_link('Date', 'timestamp') }}</th>
+            <th>{{ sort_link('Description', 'description') }}</th>
+            <th>{{ sort_link('Category', 'category') }}</th>
+            <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
+            <th class="text-end">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for txn in txns.items %}
+        {% set can_manage_txn = not session.get('view_only') %}
+        <tr>
+            <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+            <td data-label="Description"><small>{{ txn.description }}</small></td>
+            <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
+            <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
+            <td data-label="Actions" class="text-end">
+                {% if can_manage_txn %}
+                <div class="table-actions">
+                    {{ edit_button('editTransactionModal' ~ txn.id) }}
+                    <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
+                        class="delete-form d-inline"
+                        data-offline-queue="transaction-delete"
+                        data-transaction-id="{{ txn.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
+                            data-bs-target="#deleteModal{{ txn.id }}">
+                            Delete
                         </button>
-                        <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
-                            class="delete-form d-inline"
-                            data-offline-queue="transaction-delete"
-                            data-transaction-id="{{ txn.id }}">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
-                                data-bs-target="#deleteModal{{ txn.id }}">
-                                Delete
-                            </button>
 
-                            <div class="modal fade" id="deleteModal{{ txn.id }}" tabindex="-1"
-                                aria-labelledby="deleteModalLabel{{ txn.id }}" aria-hidden="true">
-                                <div class="modal-dialog modal-dialog-centered">
-                                    <div class="modal-content shadow-lg border-0">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title" id="deleteModalLabel{{ txn.id }}">
-                                                Confirm Deletion
-                                            </h5>
-                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
-                                                aria-label="Close"></button>
-                                        </div>
-                                        <div class="modal-body text-center">
-                                            <p class="fw-semibold mb-1">Delete this transaction?</p>
-                                            <p class="text-muted small mb-0">This action cannot be undone.</p>
-                                        </div>
-                                        <div class="modal-footer d-flex justify-content-center gap-2">
-                                            <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
-                                                Cancel
-                                            </button>
-                                            <button type="submit" class="btn btn-danger px-4">Delete</button>
-                                        </div>
-                                    </div>
+                        <!-- Delete Confirmation Modal -->
+                        {% call modal('deleteModal' ~ txn.id, 'Confirm Deletion', text_start=false) %}
+                            <div class="text-center">
+                                <p class="fw-semibold mb-1">Delete this transaction?</p>
+                                <p class="text-muted small mb-3">This action cannot be undone.</p>
+                                <div class="d-flex justify-content-center gap-2">
+                                    <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
+                                        Cancel
+                                    </button>
+                                    <button type="submit" class="btn btn-danger px-4">Delete</button>
                                 </div>
                             </div>
-                        </form>
-                    </div>
+                        {% endcall %}
+                    </form>
+                </div>
 
-                    <!-- Edit Transaction Modal -->
-                    <div class="modal fade text-start" id="editTransactionModal{{ txn.id }}" tabindex="-1" aria-labelledby="editTransactionModalLabel{{ txn.id }}" aria-hidden="true">
-                        <div class="modal-dialog modal-dialog-centered">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title" id="editTransactionModalLabel{{ txn.id }}">Edit Transaction</h5>
-                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                                </div>
-                                <div class="modal-body">
-                                    <form method="post" action="{{ url_for('edit_transaction', tx_id=txn.id) }}"
-                                        data-offline-queue="transaction-edit"
-                                        data-transaction-id="{{ txn.id }}">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        
-                                        <div class="mb-3">
-                                            <label class="form-label" for="amount{{ txn.id }}">Amount (Rs.)</label>
-                                            <input class="form-control" id="amount{{ txn.id }}" name="amount" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(txn.amount) }}" required>
-                                        </div>
-                                        
-                                        <div class="mb-3">
-                                            <label class="form-label" for="description{{ txn.id }}">What was it for?</label>
-                                            <input class="form-control" id="description{{ txn.id }}" name="description" type="text" placeholder="e.g. Grocery shopping" maxlength="120" value="{{ txn.description }}" required>
-                                        </div>
-                                        
-                                        <div class="mb-3">
-                                            <label class="form-label" for="category{{ txn.id }}">Category</label>
-                                            <select class="form-select" id="category{{ txn.id }}" name="category">
-                                                {% for val, lbl in form.category.choices %}
-                                                <option value="{{ val }}" {% if txn.category == val %}selected{% endif %}>{{ lbl }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        </div>
-                                        
-                                        <div class="row g-2">
-                                            <div class="col-sm-6 mb-3">
-                                                <label class="form-label" for="date{{ txn.id }}">Date (IST)</label>
-                                                <input class="form-control" id="date{{ txn.id }}" name="date" type="date" value="{{ txn.timestamp|ist_datetime('%Y-%m-%d') }}" required>
-                                            </div>
-                                            <div class="col-sm-6 mb-3">
-                                                <label class="form-label" for="time{{ txn.id }}">Time (IST)</label>
-                                                <input class="form-control" id="time{{ txn.id }}" name="time" type="time" value="{{ txn.timestamp|ist_datetime('%H:%M') }}" required>
-                                            </div>
-                                        </div>
-                                        
-                                        <div class="mt-4">
-                                            <button type="submit" class="btn btn-primary w-100">Update Transaction</button>
-                                        </div>
-                                    </form>
-                                </div>
+                <!-- Edit Transaction Modal -->
+                {% call modal('editTransactionModal' ~ txn.id, 'Edit Transaction') %}
+                    <form method="post" action="{{ url_for('edit_transaction', tx_id=txn.id) }}"
+                        data-offline-queue="transaction-edit"
+                        data-transaction-id="{{ txn.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        
+                        {{ form_input('amount' ~ txn.id, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(txn.amount), step='0.01', min='0.01', required=true) }}
+                        {{ form_input('description' ~ txn.id, 'What was it for?', 'description', placeholder='e.g. Grocery shopping', maxlength='120', value=txn.description, required=true) }}
+                        {{ form_select('category' ~ txn.id, 'Category', 'category', form.category.choices, selected_value=txn.category) }}
+                        
+                        <div class="row g-2">
+                            <div class="col-sm-6">
+                                {{ form_input('date' ~ txn.id, 'Date (IST)', 'date', type='date', value=txn.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
+                            </div>
+                            <div class="col-sm-6">
+                                {{ form_input('time' ~ txn.id, 'Time (IST)', 'time', type='time', value=txn.timestamp|ist_datetime('%H:%M'), required=true) }}
                             </div>
                         </div>
-                    </div>
-                    {% else %}
-                    <span class="badge">Read only</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% else %}
-            <tr>
-                <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-
-{% if txns.items %}
-<nav aria-label="Transactions pagination">
-    <ul class="pagination justify-content-center">
-        {% if txns.has_prev %}
-        <li class="page-item">
-            <a class="page-link"
-                href="{{ url_for('transactions', page=txns.prev_num, cursor=txns.prev_cursor, q=txns.search, sort=txns.sort, dir=txns.direction) }}">
-                Previous
-            </a>
-        </li>
+                        
+                        <div class="mt-4">
+                            <button type="submit" class="btn btn-primary w-100">Update Transaction</button>
+                        </div>
+                    </form>
+                {% endcall %}
+                {% else %}
+                <span class="badge">Read only</span>
+                {% endif %}
+            </td>
+        </tr>
         {% else %}
-        <li class="page-item disabled"><span class="page-link">Previous</span></li>
-        {% endif %}
+        <tr>
+            <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+{% endcall %}
 
-        <li class="page-item active"><span class="page-link">{{ txns.page }}</span></li>
-
-        {% if txns.has_next %}
-        <li class="page-item">
-            <a class="page-link"
-                href="{{ url_for('transactions', page=txns.next_num, cursor=txns.next_cursor, q=txns.search, sort=txns.sort, dir=txns.direction) }}">
-                Next
-            </a>
-        </li>
-        {% else %}
-        <li class="page-item disabled"><span class="page-link">Next</span></li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
+{{ pager(txns, 'transactions', extra_params={'q': txns.search, 'sort': txns.sort, 'dir': txns.direction}) }}
 
 <!-- Add Transaction Modal -->
 {% if not session.get('view_only') %}
-<div class="modal fade" id="addTransactionModal" tabindex="-1" aria-labelledby="addTransactionModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="addTransactionModalLabel">Record Spending</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+{% call modal('addTransactionModal', 'Record Spending') %}
+    <form method="post" action="{{ url_for('add') }}" data-offline-queue="transaction-create">
+        {{ form.hidden_tag() }}
+        {{ form_field(form.amount, step="0.01", min="0.01") }}
+        {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
+        {{ form_field(form.category) }}
+        <div class="row g-2">
+            <div class="col-sm-6">
+                {{ form_field(form.date, type="date") }}
             </div>
-            <div class="modal-body">
-                <form method="post" action="{{ url_for('add') }}" data-offline-queue="transaction-create">
-                    {{ form.hidden_tag() }}
-                    <div class="mb-3">
-                        {{ form.amount.label(class="form-label") }}
-                        {{ form.amount(class="form-control", step="0.01", min="0.01") }}
-                    </div>
-                    <div class="mb-3">
-                        {{ form.description.label(class="form-label") }}
-                        {{ form.description(class="form-control", placeholder="e.g. Grocery shopping", maxlength="120") }}
-                    </div>
-                    <div class="mb-3">
-                        {{ form.category.label(class="form-label") }}
-                        {{ form.category(class="form-select") }}
-                    </div>
-                    <div class="row g-2">
-                        <div class="col-sm-6 mb-3">
-                            {{ form.date.label(class="form-label") }}
-                            {{ form.date(class="form-control", type="date") }}
-                        </div>
-                        <div class="col-sm-6 mb-3">
-                            {{ form.time.label(class="form-label") }}
-                            {{ form.time(class="form-control", type="time") }}
-                        </div>
-                    </div>
-                    <div class="mt-4">
-                        <button type="submit" class="btn btn-primary w-100">Save Transaction</button>
-                    </div>
-                </form>
+            <div class="col-sm-6">
+                {{ form_field(form.time, type="time") }}
             </div>
         </div>
-    </div>
-</div>
+        <div class="mt-4">
+            <button type="submit" class="btn btn-primary w-100">Save Transaction</button>
+        </div>
+    </form>
+{% endcall %}
 {% endif %}
 
 {% endblock %}

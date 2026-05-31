@@ -1,70 +1,39 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header, table_shell, metric_card, chart_card, analytics_controls %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">Insights</span>
-        <h1>Spend Analytics</h1>
-        <p>Review spending trends, categories, and transactions in IST.</p>
-    </div>
-    <div class="page-actions">
-        <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">Transactions</a>
-        <button id="exportCsvBtn" class="btn btn-outline-secondary" title="Export CSV for the current view">Export CSV</button>
-    </div>
-</section>
 
-{% include 'partials/analytics_controls.html' %}
+{% call page_header('Spend Analytics', kicker='Insights', description='Review spending trends, categories, and transactions in IST.') %}
+    <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">Transactions</a>
+    <button id="exportCsvBtn" class="btn btn-outline-secondary" title="Export CSV for the current view">Export CSV</button>
+{% endcall %}
+
+{{ analytics_controls() }}
 
 <div id="analyticsStatus" class="analytics-status mb-3" role="status" aria-live="polite"></div>
 
 <div class="analytics-metrics mb-3" aria-label="Summary metrics">
-    <div class="metric-card">
-        <span>Total</span>
-        <strong id="sumTotal">0.00</strong>
-    </div>
-    <div class="metric-card">
-        <span>Transactions</span>
-        <strong id="sumCount">0</strong>
-    </div>
-    <div class="metric-card">
-        <span>Average</span>
-        <strong id="sumAvg">0.00</strong>
-    </div>
-    <div class="metric-card">
-        <span>Median</span>
-        <strong id="sumMedian">0.00</strong>
-    </div>
-    <div class="metric-card">
-        <span>Change</span>
-        <strong id="sumPct">N/A</strong>
-    </div>
+    {{ metric_card('Total', 'sumTotal') }}
+    {{ metric_card('Transactions', 'sumCount', default_value='0') }}
+    {{ metric_card('Average', 'sumAvg') }}
+    {{ metric_card('Median', 'sumMedian') }}
+    {{ metric_card('Change', 'sumPct', default_value='N/A') }}
 </div>
 
 <div class="row g-3 mb-3">
     <div class="col-lg-8 col-md-12">
-        <div class="card p-3 shadow-sm h-100">
-            <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
-                <h5 id="chartTitle" class="card-title mb-0">Spending Trend</h5>
-                <span class="badge" id="sumPrevBadge">Prev: <span id="sumPrev">0.00</span></span>
-            </div>
-            <div class="chart-wrapper chart-wrapper-lg">
-                <canvas id="mainChart" role="img" aria-label="Spending trend chart"></canvas>
-            </div>
-        </div>
+        {% call chart_card('Spending Trend', 'mainChart') %}
+            <span class="badge" id="sumPrevBadge">Prev: <span id="sumPrev">0.00</span></span>
+        {% endcall %}
     </div>
     <div class="col-lg-4 col-md-12">
-        <div class="card p-3 shadow-sm h-100">
-            <h6 id="sideTitle" class="card-title mb-2">Category Breakdown</h6>
-            <div class="side-chart-wrapper chart-wrapper-lg">
-                <canvas id="sideChart" role="img" aria-label="Category breakdown chart"></canvas>
-            </div>
-        </div>
+        {{ chart_card('Category Breakdown', 'sideChart') }}
     </div>
 </div>
 
 <div class="row g-3">
     <div class="col-lg-4 col-md-12">
         <div class="card p-3 shadow-sm h-100">
-            <h6 class="mb-2">Details</h6>
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Details</h6>
             <ul class="list-unstyled mb-0 analytics-detail-list">
                 <li>Minimum <strong id="sumMin">0.00</strong></li>
                 <li>Maximum <strong id="sumMax">0.00</strong></li>
@@ -94,23 +63,20 @@
                 </div>
 
                 <div class="tab-pane fade" id="rawPane">
-                    <div class="table-shell table-responsive analytics-table-wrap">
-                        <table class="table table-sm align-middle mb-0" id="rawTable"
-                            data-can-edit="{{ 'true' if not session.get('view_only') else 'false' }}">
-                            <thead>
-                                <tr>
-                                    <th class="sortable-header">When</th>
-                                    <th class="sortable-header">Description</th>
-                                    <th class="sortable-header">Category</th>
-                                    <th class="sortable-header text-end">Amount</th>
-                                    {% if not session.get('view_only') %}
-                                    <th class="text-end">Actions</th>
-                                    {% endif %}
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
+                    {% call table_shell(extra_class='analytics-table-wrap', id='rawTable', **{'data-can-edit': 'true' if not session.get('view_only') else 'false'}) %}
+                        <thead>
+                            <tr>
+                                <th class="sortable-header">When</th>
+                                <th class="sortable-header">Description</th>
+                                <th class="sortable-header">Category</th>
+                                <th class="sortable-header text-end">Amount</th>
+                                {% if not session.get('view_only') %}
+                                <th class="text-end">Actions</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    {% endcall %}
                 </div>
             </div>
         </div>

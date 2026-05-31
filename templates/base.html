@@ -1,4 +1,5 @@
 <!doctype html>
+{% from "macros/ui.html" import flash_alerts %}
 <html lang="en" data-theme="light">
 
 <head>
@@ -43,29 +44,12 @@
                     <button type="button" class="btn-close btn-close-white" aria-label="Close" data-bs-toggle="collapse" data-bs-target="#navMain"></button>
                 </div>
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0 align-items-lg-center">
-                    {% if session.get('view_only') %}
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance_analytics' else '' }}" href="{{ url_for('balance_analytics') }}">Balance Analytics</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Spend Analytics</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['trips', 'trip_detail'] else '' }}" href="{{ url_for('trips') }}">Trips</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['splits', 'split_detail'] else '' }}" href="{{ url_for('splits') }}">Split Bills</a></li>
-                    {% else %}
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance' else '' }}" href="{{ url_for('balance') }}">Balance</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'balance_analytics' else '' }}" href="{{ url_for('balance_analytics') }}">Balance Analytics</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'transactions' else '' }}" href="{{ url_for('transactions') }}">Transactions</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'analytics' else '' }}" href="{{ url_for('analytics') }}">Spend Analytics</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'] else '' }}" href="{{ url_for('recurring') }}">Recurring Bills</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['trips', 'trip_detail'] else '' }}" href="{{ url_for('trips') }}">Trips</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['splits', 'split_detail', 'split_edit', 'split_entry_edit'] else '' }}" href="{{ url_for('splits') }}">Split Bills</a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'sync_status' else '' }}" href="{{ url_for('sync_status') }}">Offline Sync <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span></a></li>
-                    <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ['management', 'management_category_delete', 'management_category_edit', 'management_split_person_edit', 'management_split_person_delete'] else '' }}" href="{{ url_for('management') }}">Setup & Settings</a></li>
-                    {% endif %}
+                    {% include 'partials/navbar_links.html' %}
                 </ul>
 
                 <div class="d-flex align-items-center gap-2">
                     {% if session.get('view_only') %}
-                    <span class="badge bg-warning text-dark me-2" title="Read-only session">View-only</span>
+                    <span class="badge badge-view-only me-2" title="Read-only session">View-only</span>
                     {% if session.get('username') %}
                     <span class="small text-light me-2">as <strong>{{ session.get('username') }}</strong></span>
                     {% endif %}
@@ -99,16 +83,7 @@
     {% block scripts %}{% endblock %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-    <script>
-        const messages = {{ messages | tojson }};
-        for (const [category, msg] of messages) {
-            if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
-                window.FinTrak.showFlash(msg, category);
-            }
-        }
-    </script>
-    {% endif %}
+        {{ flash_alerts(messages) }}
     {% endwith %}
 </body>
 

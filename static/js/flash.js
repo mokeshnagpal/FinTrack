@@ -13,9 +13,7 @@
     // Hide inline flashes after 3.5s with a small animation
     setTimeout(() => {
       flashes.forEach(el => {
-        el.style.transition = 'opacity .4s, transform .4s';
-        el.style.opacity = '0';
-        el.style.transform = 'translateY(-6px)';
+        el.classList.add('flash-hiding');
         setTimeout(() => el.remove(), 450);
       });
     }, 3500);

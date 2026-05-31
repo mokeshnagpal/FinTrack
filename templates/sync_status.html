@@ -1,20 +1,15 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header, card %}
 {% block title %}Sync Status - FinTrak{% endblock %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">System Status</span>
-        <h1>Offline Sync Queue</h1>
-        <p>Check pending actions and Render server readiness.</p>
-    </div>
-    <div class="page-actions">
-        <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">Transactions</a>
-        <button class="btn btn-primary" type="button" id="syncNowBtn">Sync Now</button>
-    </div>
-</section>
+
+{% call page_header('Offline Sync Queue', kicker='System Status', description='Check pending actions and Render server readiness.') %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">Transactions</a>
+    <button class="btn btn-primary" type="button" id="syncNowBtn">Sync Now</button>
+{% endcall %}
 
 <section class="sync-status-grid" aria-live="polite">
-    <div class="card sync-status-panel sync-status-main">
+    {% call card(extra_class='sync-status-panel sync-status-main', no_body=true) %}
         <div class="sync-status-count">
             <span>Pending</span>
             <strong id="pendingCount">0</strong>
@@ -23,28 +18,28 @@
             <h2 id="syncHeadline">Checking sync queue</h2>
             <p id="syncMessage">Looking for pending actions in this browser.</p>
         </div>
-    </div>
+    {% endcall %}
 
-    <div class="card sync-status-panel">
+    {% call card(extra_class='sync-status-panel', no_body=true) %}
         <span class="sync-status-label">Render</span>
         <strong id="renderState">Checking</strong>
         <p id="renderMessage">Checking whether the server is awake.</p>
-    </div>
+    {% endcall %}
 
-    <div class="card sync-status-panel">
+    {% call card(extra_class='sync-status-panel', no_body=true) %}
         <span class="sync-status-label">Cache Check</span>
         <strong id="cacheState">Waiting</strong>
         <p id="cacheMessage">Cache check will run when Render responds.</p>
-    </div>
+    {% endcall %}
 
-    <div class="card sync-status-panel">
+    {% call card(extra_class='sync-status-panel', no_body=true) %}
         <span class="sync-status-label">Last Check</span>
         <strong id="lastCheck">-</strong>
         <p id="lastCheckMessage">Status refreshes automatically while this page is open.</p>
-    </div>
+    {% endcall %}
 </section>
 
-<div class="card sync-status-detail">
+{% call card(extra_class='sync-status-detail', no_body=true) %}
     <div class="management-section-heading">
         <div>
             <span class="kicker">Cache Details</span>
@@ -53,9 +48,9 @@
         <span class="badge" id="cacheDetailBadge">Waiting</span>
     </div>
     <div id="cacheDetailList" class="sync-cache-list" aria-live="polite"></div>
-</div>
+{% endcall %}
 
-<div class="card sync-status-detail">
+{% call card(extra_class='sync-status-detail', no_body=true) %}
     <div class="management-section-heading">
         <div>
             <span class="kicker">Pending Actions</span>
@@ -66,7 +61,8 @@
     <div id="pendingList" class="sync-pending-list">
         <p class="text-muted mb-0">No pending actions found.</p>
     </div>
-</div>
+{% endcall %}
+
 {% endblock %}
 
 {% block scripts %}

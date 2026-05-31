@@ -1,12 +1,8 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">FinTrak</span>
-        <h1>Monthly Spending Recorder</h1>
-        <p>Track spending, recurring payments, balance, and analytics from one place.</p>
-    </div>
-</section>
+
+{{ page_header('Monthly Spending Recorder', kicker='FinTrak', description='Track spending, recurring payments, balance, and analytics from one place.') }}
 
 <div class="quick-grid">
     {% if not session.get('view_only') %}

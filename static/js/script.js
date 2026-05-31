@@ -22,8 +22,8 @@
 
     const saved = readStorage(storageKey);
 
-    const sunIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon" style="vertical-align: middle;"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
-    const moonIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon" style="vertical-align: middle;"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`;
+    const sunIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
+    const moonIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`;
 
     function setTheme(theme) {
         root.setAttribute('data-theme', theme);
@@ -52,6 +52,23 @@
         });
     }
 
+    function registerServiceWorker() {
+        if (!('serviceWorker' in navigator)) return;
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').catch((error) => {
+                console.warn('FinTrak service worker registration failed', error);
+            });
+        });
+    }
+
+    function refreshSnapshotAfterAuthenticatedLoad() {
+        const path = window.location.pathname;
+        if (path === '/login' || path === '/view-login') return;
+        window.FinTrak?.cache?.refreshSnapshot?.().catch((error) => {
+            console.warn('FinTrak browser snapshot refresh failed after page load', error);
+        });
+    }
+
     function ordinal(day) {
         if (day > 10 && day < 20) return `${day}th`;
         const last = day % 10;
@@ -63,17 +80,56 @@
 
     function parseDateParts(value) {
         if (!value) return null;
-        const match = String(value).trim().match(
-            /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::\d{2})?)?/,
+        const raw = String(value).trim().toLowerCase();
+        const match = raw.match(
+            /^(\d{4})-(\d{2})(?:-(\d{2}))?(?:[ t](\d{1,2}):(\d{2})(?::\d{2})?)?/,
         );
-        if (!match) return null;
-        return {
-            year: Number(match[1]),
-            month: Number(match[2]),
-            day: Number(match[3]),
-            hour: match[4] === undefined ? null : Number(match[4]),
-            minute: match[5] === undefined ? null : Number(match[5]),
-        };
+        if (match) {
+            return {
+                year: Number(match[1]),
+                month: Number(match[2]),
+                day: match[3] === undefined ? null : Number(match[3]),
+                hour: match[4] === undefined ? null : Number(match[4]),
+                minute: match[5] === undefined ? null : Number(match[5]),
+            };
+        }
+
+        const shortIsoMatch = raw.match(
+            /^'?(?:20)?(\d{2})-(\d{2})-(\d{2})(?:[ t](\d{1,2}):(\d{2})(?::\d{2})?)?/,
+        );
+        if (shortIsoMatch) {
+            return {
+                year: 2000 + Number(shortIsoMatch[1]),
+                month: Number(shortIsoMatch[2]),
+                day: Number(shortIsoMatch[3]),
+                hour: shortIsoMatch[4] === undefined ? null : Number(shortIsoMatch[4]),
+                minute: shortIsoMatch[5] === undefined ? null : Number(shortIsoMatch[5]),
+            };
+        }
+
+        const textMatch = raw.match(
+            /^(\d{1,2})\s+([a-z]{3,9})\s+'?(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(am|pm)?)?/,
+        );
+        if (textMatch) {
+            const monthIndex = MONTH_NAMES.findIndex((name) => name.startsWith(textMatch[2].slice(0, 3)));
+            if (monthIndex >= 0) {
+                let hour = textMatch[4] === undefined ? null : Number(textMatch[4]);
+                const minute = textMatch[5] === undefined ? null : Number(textMatch[5]);
+                const suffix = textMatch[6] || '';
+                if (hour !== null && suffix === 'pm' && hour < 12) hour += 12;
+                if (hour !== null && suffix === 'am' && hour === 12) hour = 0;
+                const yearText = textMatch[3];
+                return {
+                    year: yearText.length === 2 ? 2000 + Number(yearText) : Number(yearText),
+                    month: monthIndex + 1,
+                    day: Number(textMatch[1]),
+                    hour,
+                    minute,
+                };
+            }
+        }
+
+        return null;
     }
 
     const MONTH_NAMES = [
@@ -87,7 +143,9 @@
 
         const year2 = String(parts.year).slice(-2);
         const SHORT_MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-        const dateText = `${parts.day} ${SHORT_MONTH_NAMES[parts.month - 1]} '${year2}`;
+        const dateText = parts.day === null
+            ? `${SHORT_MONTH_NAMES[parts.month - 1]} '${year2}`
+            : `${parts.day} ${SHORT_MONTH_NAMES[parts.month - 1]} '${year2}`;
         if (parts.hour === null) {
             return { date: dateText, time: '' };
         }
@@ -271,8 +329,7 @@
         const input = document.createElement('textarea');
         input.value = value;
         input.setAttribute('readonly', '');
-        input.style.position = 'fixed';
-        input.style.opacity = '0';
+        input.className = 'copy-buffer';
         document.body.appendChild(input);
         input.select();
         document.execCommand('copy');
@@ -307,7 +364,7 @@
             modalEl.innerHTML = `
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content shadow-lg border-0">
-                        <div class="modal-header bg-danger text-white">
+                        <div class="modal-header modal-header-danger">
                             <h5 class="modal-title">Confirm Action</h5>
                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
@@ -536,12 +593,12 @@
 
         navMain.addEventListener('show.bs.collapse', () => {
             backdrop.classList.add('show');
-            document.body.style.overflow = 'hidden';
+            document.body.classList.add('body-scroll-locked');
         });
 
         navMain.addEventListener('hide.bs.collapse', () => {
             backdrop.classList.remove('show');
-            document.body.style.overflow = '';
+            document.body.classList.remove('body-scroll-locked');
         });
 
         backdrop.addEventListener('click', () => {
@@ -562,9 +619,9 @@
     }
 
     // Premium SVG icons for sorting
-    const doubleArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="ms-1" style="vertical-align: middle; opacity: 0.5;"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>`;
-    const upArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary" style="vertical-align: middle;"><path d="m18 15-6-6-6 6"/></svg>`;
-    const downArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary" style="vertical-align: middle;"><path d="m6 9 6 6 6-6"/></svg>`;
+    const doubleArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="ms-1 sort-svg-icon sort-svg-icon-muted"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>`;
+    const upArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary sort-svg-icon"><path d="m18 15-6-6-6 6"/></svg>`;
+    const downArrowSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="ms-1 text-primary sort-svg-icon"><path d="m6 9 6 6 6-6"/></svg>`;
 
     function initUnifiedTable(table, options = {}) {
         if (!table) return;
@@ -578,9 +635,6 @@
         // 1. Client-Side Sorting Setup
         const headers = table.querySelectorAll('th.sortable-header');
         headers.forEach((header, index) => {
-            header.style.cursor = 'pointer';
-            header.style.userSelect = 'none';
-
             let iconSpan = header.querySelector('.sort-icon');
             if (!iconSpan) {
                 iconSpan = document.createElement('span');
@@ -646,7 +700,7 @@
             const dataRows = allRows.filter(row => !row.querySelector('td[colspan]'));
 
             if (dataRows.length === 0) {
-                pagContainer.style.display = 'none';
+                pagContainer.classList.add('is-hidden');
                 return;
             }
 
@@ -654,13 +708,13 @@
             const totalPages = Math.ceil(totalRows / itemsPerPage);
 
             if (totalPages <= 1) {
-                pagContainer.style.display = 'none';
+                pagContainer.classList.add('is-hidden');
                 // Show all rows
-                allRows.forEach(r => r.style.display = '');
+                allRows.forEach(r => r.classList.remove('table-row-hidden'));
                 return;
             }
 
-            pagContainer.style.display = 'flex';
+            pagContainer.classList.remove('is-hidden');
             currentPage = Math.max(1, Math.min(page, totalPages));
 
             const startIdx = (currentPage - 1) * itemsPerPage;
@@ -668,7 +722,7 @@
 
             // Hide/Show appropriate rows
             dataRows.forEach((row, idx) => {
-                row.style.display = (idx >= startIdx && idx < endIdx) ? '' : 'none';
+                row.classList.toggle('table-row-hidden', !(idx >= startIdx && idx < endIdx));
             });
 
             // Rebuild controls content
@@ -790,7 +844,7 @@
     function parseDateOrValue(val) {
         const parts = parseDateParts(val);
         if (parts) {
-            return new Date(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0);
+            return new Date(parts.year, parts.month - 1, parts.day || 1, parts.hour || 0, parts.minute || 0);
         }
         const parsed = Date.parse(val);
         return isNaN(parsed) ? new Date(0) : new Date(parsed);
@@ -889,7 +943,9 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        registerServiceWorker();
         window.FinTrak?.cache?.commitCredentials?.();
+        refreshSnapshotAfterAuthenticatedLoad();
         formatDateElements();
         initCopyButtons();
         initConfirmForms();

@@ -1,130 +1,84 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">Overview</span>
-        <h1>Balance</h1>
-        <p>Track current cashflow balance, adjustments, and recent history.</p>
-    </div>
-    <div class="page-actions">
-        <a class="btn btn-outline-primary" href="{{ url_for('balance_analytics') }}">Balance Analytics</a>
-        <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">View Transactions</a>
-    </div>
-</section>
+
+{% call page_header('Balance', kicker='Overview', description='Track current cashflow balance, adjustments, and recent history.') %}
+    <a class="btn btn-outline-primary" href="{{ url_for('balance_analytics') }}">Balance Analytics</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">View Transactions</a>
+{% endcall %}
 
 <div class="row g-3">
     <div class="col-lg-4 col-md-5 col-sm-12">
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
-                <div class="balance-amount">
-                    Rs. <span id="currentBalance">0.00</span>
-                </div>
-                <small class="text-muted" id="balanceTimestamp">-</small>
-                <hr>
-                <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
+        {% call card(extra_class='mb-3') %}
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
+            <div class="balance-amount">
+                Rs. <span id="currentBalance">0.00</span>
             </div>
-        </div>
+            <small class="text-muted" id="balanceTimestamp">-</small>
+            <hr>
+            <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
+        {% endcall %}
 
         {% if not session.get('view_only') %}
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
-                <div class="d-flex flex-column gap-2">
-                    <button class="btn btn-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#addBalanceModal">Add Manual Entry</button>
-                    <button class="btn btn-outline-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#syncBalanceModal">Sync Absolute Balance</button>
-                </div>
+        {% call card(extra_class='mb-3') %}
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+            <div class="d-flex flex-column gap-2">
+                <button class="btn btn-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#addBalanceModal">Add Manual Entry</button>
+                <button class="btn btn-outline-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#syncBalanceModal">Sync Absolute Balance</button>
             </div>
-        </div>
+        {% endcall %}
         {% else %}
-        <div class="card shadow-sm">
-            <div class="card-body">
-                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
-                <p class="mb-2 small text-muted">
-                    You are viewing this account in <strong>view-only</strong> mode. Action controls are not available.
-                </p>
-                <p class="small mb-0">Sign in with editing access to make changes.</p>
-            </div>
-        </div>
+        {% call card() %}
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
+            <p class="mb-2 small text-muted">
+                You are viewing this account in <strong>view-only</strong> mode. Action controls are not available.
+            </p>
+            <p class="small mb-0">Sign in with editing access to make changes.</p>
+        {% endcall %}
         {% endif %}
     </div>
 
     <div class="col-lg-8 col-md-7 col-sm-12">
-        <div class="card shadow-sm">
-            <div class="card-body">
-                <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
-                <div class="table-shell table-responsive recent-entries">
-                    <table class="table table-sm mb-0 align-middle">
-                        <thead>
-                            <tr>
-                                <th class="sortable-header">When</th>
-                                <th class="sortable-header">Type</th>
-                                <th class="sortable-header text-end">Delta</th>
-                                <th class="sortable-header text-end">Balance</th>
-                                <th class="sortable-header">Note</th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="historyBody"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+        {% call card() %}
+            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
+            {% call table_shell(extra_class='recent-entries') %}
+                <thead>
+                    <tr>
+                        <th class="sortable-header">When</th>
+                        <th class="sortable-header">Source</th>
+                        <th class="sortable-header">Mode</th>
+                        <th class="sortable-header text-end">Delta</th>
+                        <th class="sortable-header text-end">Balance</th>
+                        <th class="sortable-header">Note</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="historyBody"></tbody>
+            {% endcall %}
+        {% endcall %}
     </div>
 </div>
 
 <!-- Add Manual Entry Modal -->
 {% if not session.get('view_only') %}
-<div class="modal fade text-start" id="addBalanceModal" tabindex="-1" aria-labelledby="addBalanceModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="addBalanceModalLabel">Add Manual Entry</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label" for="addAmount">Amount (Rs.)</label>
-                    <input id="addAmount" type="number" step="0.01" class="form-control" placeholder="e.g. 500 or -250">
-                    <div class="form-text small text-muted">Use positive values to add, negative values to subtract.</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label" for="addNote">Note (optional)</label>
-                    <input id="addNote" class="form-control" placeholder="Note description" maxlength="120">
-                </div>
-                <div class="mt-4">
-                    <button id="addBtn" type="button" class="btn btn-primary w-100">Save Entry</button>
-                </div>
-            </div>
-        </div>
+{% call modal('addBalanceModal', 'Add Manual Entry') %}
+    {{ form_input('addAmount', 'Amount (Rs.)', 'amount', type='number', step='0.01', placeholder='e.g. 500 or -250') }}
+    <div class="form-text small text-muted mb-3 mt-n3">Use positive values to add, negative values to subtract.</div>
+    {{ form_input('addNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
+    <div class="mt-4">
+        <button id="addBtn" type="button" class="btn btn-primary w-100">Save Entry</button>
     </div>
-</div>
+{% endcall %}
 
 <!-- Sync Absolute Balance Modal -->
-<div class="modal fade text-start" id="syncBalanceModal" tabindex="-1" aria-labelledby="syncBalanceModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="syncBalanceModalLabel">Sync Absolute Balance</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label" for="syncAmount">Absolute Balance (Rs.)</label>
-                    <input id="syncAmount" type="number" step="0.01" class="form-control" placeholder="Set absolute balance">
-                    <div class="form-text small text-muted">Set the exact current balance amount.</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label" for="syncNote">Note (optional)</label>
-                    <input id="syncNote" class="form-control" placeholder="Note description" maxlength="120">
-                </div>
-                <div class="mt-4">
-                    <button id="syncBtn" type="button" class="btn btn-primary w-100">Sync Balance</button>
-                </div>
-            </div>
-        </div>
+{% call modal('syncBalanceModal', 'Sync Absolute Balance') %}
+    {{ form_input('syncAmount', 'Absolute Balance (Rs.)', 'amount', type='number', step='0.01', placeholder='Set absolute balance') }}
+    <div class="form-text small text-muted mb-3 mt-n3">Set the exact current balance amount.</div>
+    {{ form_input('syncNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
+    <div class="mt-4">
+        <button id="syncBtn" type="button" class="btn btn-primary w-100">Sync Balance</button>
     </div>
-</div>
+{% endcall %}
 {% endif %}
 
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>

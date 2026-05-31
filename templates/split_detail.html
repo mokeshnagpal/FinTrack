@@ -1,27 +1,17 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import page_header, offline_notice, table_shell, modal, form_field, form_input, form_select %}
 {% block content %}
 {% set split_id = split_doc.id or split_doc._id %}
-<section class="page-header split-detail-header" data-split-id="{{ split_id }}" data-split-live="{{ 'true' if split_doc.is_live else 'false' }}">
-    <div>
-        <span class="kicker">Shared Bills</span>
-        <h1>{{ split_doc.title or 'Untitled split' }}</h1>
-        <p>
-            {% if split_doc.is_live %}
-            ✓ Live split bill. Cached totals and latest entries remain available.
-            {% else %}
-            Saved split bill. Full data available when backend responds.
-            {% endif %}
-        </p>
-    </div>
-    <div class="page-actions">
-        <a class="btn btn-outline-secondary" href="{{ url_for('splits') }}">Back</a>
-        {% if not session.get('view_only') %}
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEntryModal">New Entry</button>
-        {% endif %}
-    </div>
-</section>
 
-<div id="splitOfflineNotice" class="alert alert-warning d-none" role="status"></div>
+{% set header_desc = '✓ Live split bill. Cached totals and latest entries remain available.' if split_doc.is_live else 'Saved split bill. Full data available when backend responds.' %}
+{% call page_header(split_doc.title or 'Untitled split', kicker='Shared Bills', description=header_desc, extra_class='split-detail-header', **{'data-split-id': split_id, 'data-split-live': 'true' if split_doc.is_live else 'false'}) %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('splits') }}">Back</a>
+    {% if not session.get('view_only') %}
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEntryModal">New Entry</button>
+    {% endif %}
+{% endcall %}
+
+{{ offline_notice('splitOfflineNotice') }}
 
 <div class="split-total-grid" id="splitTotals">
     {% for person, amount in totals|dictsort %}
@@ -42,117 +32,80 @@
         <div class="card shadow-sm">
             <div class="card-body">
                 <h4 class="page-title mb-3">Latest Entries</h4>
-                <div class="table-shell table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th class="sortable-header">When <span class="sort-icon">&#8597;</span></th>
-                                <th class="sortable-header">Person <span class="sort-icon">&#8597;</span></th>
-                                <th class="sortable-header">For <span class="sort-icon">&#8597;</span></th>
-                                <th class="sortable-header">Category <span class="sort-icon">&#8597;</span></th>
-                                <th class="sortable-header text-end">Amount <span class="sort-icon">&#8597;</span></th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="splitEntryBody">
-                            {% for entry in entries %}
-                            {% set eid = entry.id or entry._id %}
-                            <tr>
-                                <td data-label="When"><small data-format-date>{{ entry.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
-                                <td data-label="Person"><small>{{ entry.person }}</small></td>
-                                <td data-label="For"><small>{{ entry.description }}</small></td>
-                                <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
-                                <td data-label="Amount" class="text-end"><small>{{ '%.2f'|format(entry.amount) }}</small></td>
-                                <td data-label="Actions" class="text-end">
-                                    {% if not session.get('view_only') %}
-                                    <div class="table-actions">
-                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editEntryModal{{ eid }}">Edit</button>
-                                        <form method="post" action="{{ url_for('split_entry_delete', split_id=split_id, entry_id=eid) }}"
-                                            data-offline-queue="split-entry-delete"
-                                            data-split-id="{{ split_id }}"
-                                            data-split-entry-id="{{ eid }}"
-                                            data-confirm="Delete this split entry?" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button class="btn btn-sm btn-danger">Delete</button>
-                                        </form>
-                                    </div>
+                {% call table_shell() %}
+                    <thead>
+                        <tr>
+                            <th class="sortable-header">When <span class="sort-icon">&#8597;</span></th>
+                            <th class="sortable-header">Person <span class="sort-icon">&#8597;</span></th>
+                            <th class="sortable-header">For <span class="sort-icon">&#8597;</span></th>
+                            <th class="sortable-header">Category <span class="sort-icon">&#8597;</span></th>
+                            <th class="sortable-header text-end">Amount <span class="sort-icon">&#8597;</span></th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="splitEntryBody">
+                        {% for entry in entries %}
+                        {% set eid = entry.id or entry._id %}
+                        <tr>
+                            <td data-label="When"><small data-format-date>{{ entry.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                            <td data-label="Person"><small>{{ entry.person }}</small></td>
+                            <td data-label="For"><small>{{ entry.description }}</small></td>
+                            <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
+                            <td data-label="Amount" class="text-end"><small>{{ '%.2f'|format(entry.amount) }}</small></td>
+                            <td data-label="Actions" class="text-end">
+                                {% if not session.get('view_only') %}
+                                <div class="table-actions">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editEntryModal{{ eid }}">Edit</button>
+                                    <form method="post" action="{{ url_for('split_entry_delete', split_id=split_id, entry_id=eid) }}"
+                                        data-offline-queue="split-entry-delete"
+                                        data-split-id="{{ split_id }}"
+                                        data-split-entry-id="{{ eid }}"
+                                        data-confirm="Delete this split entry?" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="btn btn-sm btn-danger">Delete</button>
+                                    </form>
+                                </div>
 
-                                    <!-- Edit Entry Modal -->
-                                    <div class="modal fade text-start" id="editEntryModal{{ eid }}" tabindex="-1" aria-labelledby="editEntryModalLabel{{ eid }}" aria-hidden="true">
-                                        <div class="modal-dialog modal-dialog-centered">
-                                            <div class="modal-content">
-                                                <div class="modal-header">
-                                                    <h5 class="modal-title" id="editEntryModalLabel{{ eid }}">Edit Entry</h5>
-                                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                                                </div>
-                                                <div class="modal-body">
-                                                    <form method="post"
-                                                        action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}"
-                                                        data-offline-queue="split-entry-edit"
-                                                        data-split-id="{{ split_id }}"
-                                                        data-split-entry-id="{{ eid }}"
-                                                        data-return-url="{{ url_for('split_detail', split_id=split_id) }}"
-                                                        novalidate>
-                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                        
-                                                        <div class="mb-3">
-                                                            <label class="form-label" for="person{{ eid }}">Person</label>
-                                                            <select class="form-select" id="person{{ eid }}" name="person">
-                                                                {% for val, lbl in entry_form.person.choices %}
-                                                                <option value="{{ val }}" {% if entry.person == val %}selected{% endif %}>{{ lbl }}</option>
-                                                                {% endfor %}
-                                                            </select>
-                                                        </div>
+                                <!-- Edit Entry Modal -->
+                                {% call modal('editEntryModal' ~ eid, 'Edit Entry') %}
+                                    <form method="post"
+                                        action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}"
+                                        data-offline-queue="split-entry-edit"
+                                        data-split-id="{{ split_id }}"
+                                        data-split-entry-id="{{ eid }}"
+                                        data-return-url="{{ url_for('split_detail', split_id=split_id) }}"
+                                        novalidate>
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        
+                                        {{ form_select('person' ~ eid, 'Person', 'person', entry_form.person.choices, selected_value=entry.person) }}
+                                        {{ form_input('amount' ~ eid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(entry.amount), step='0.01', min='0.01', required=true) }}
+                                        {{ form_input('description' ~ eid, 'What was it for?', 'description', value=entry.description, maxlength=120, required=true) }}
+                                        {{ form_select('category' ~ eid, 'Category', 'category', entry_form.category.choices, selected_value=entry.category) }}
 
-                                                        <div class="mb-3">
-                                                            <label class="form-label" for="amount{{ eid }}">Amount (Rs.)</label>
-                                                            <input class="form-control" id="amount{{ eid }}" name="amount" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(entry.amount) }}" required>
-                                                        </div>
-
-                                                        <div class="mb-3">
-                                                            <label class="form-label" for="description{{ eid }}">What was it for?</label>
-                                                            <input class="form-control" id="description{{ eid }}" name="description" type="text" maxlength="120" value="{{ entry.description }}" required>
-                                                        </div>
-
-                                                        <div class="mb-3">
-                                                            <label class="form-label" for="category{{ eid }}">Category</label>
-                                                            <select class="form-select" id="category{{ eid }}" name="category">
-                                                                {% for val, lbl in entry_form.category.choices %}
-                                                                <option value="{{ val }}" {% if entry.category == val %}selected{% endif %}>{{ lbl }}</option>
-                                                                {% endfor %}
-                                                            </select>
-                                                        </div>
-
-                                                        <div class="row g-2">
-                                                            <div class="col-sm-6 mb-3">
-                                                                <label class="form-label" for="date{{ eid }}">Date (IST)</label>
-                                                                <input class="form-control" id="date{{ eid }}" name="date" type="date" value="{{ entry.timestamp|ist_datetime('%Y-%m-%d') }}" required>
-                                                            </div>
-                                                            <div class="col-sm-6 mb-3">
-                                                                <label class="form-label" for="time{{ eid }}">Time (IST)</label>
-                                                                <input class="form-control" id="time{{ eid }}" name="time" type="time" value="{{ entry.timestamp|ist_datetime('%H:%M') }}" required>
-                                                            </div>
-                                                        </div>
-
-                                                        <button class="btn btn-primary w-100">Update Entry</button>
-                                                    </form>
-                                                </div>
+                                        <div class="row g-2">
+                                            <div class="col-sm-6">
+                                                {{ form_input('date' ~ eid, 'Date (IST)', 'date', type='date', value=entry.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
+                                            </div>
+                                            <div class="col-sm-6">
+                                                {{ form_input('time' ~ eid, 'Time (IST)', 'time', type='time', value=entry.timestamp|ist_datetime('%H:%M'), required=true) }}
                                             </div>
                                         </div>
-                                    </div>
-                                    {% else %}
-                                    <span class="badge">Read only</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="6" class="text-center text-muted py-4">No split entries found.</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+
+                                        <button class="btn btn-primary w-100">Update Entry</button>
+                                    </form>
+                                {% endcall %}
+                                {% else %}
+                                <span class="badge">Read only</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">No split entries found.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                {% endcall %}
             </div>
         </div>
     </div>
@@ -160,58 +113,31 @@
 
 <!-- Add Entry Modal -->
 {% if not session.get('view_only') %}
-<div class="modal fade" id="addEntryModal" tabindex="-1" aria-labelledby="addEntryModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="addEntryModalLabel">Add Entry</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+{% call modal('addEntryModal', 'Add Entry') %}
+    <form method="post"
+        action="{{ url_for('split_entry_add', split_id=split_id) }}"
+        data-offline-queue="split-entry-create"
+        data-split-id="{{ split_id }}"
+        novalidate>
+        {{ entry_form.hidden_tag() }}
+
+        {{ form_field(entry_form.person) }}
+        {{ form_field(entry_form.amount, step="0.01", min="0.01") }}
+        {{ form_field(entry_form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
+        {{ form_field(entry_form.category) }}
+
+        <div class="row g-2">
+            <div class="col-sm-6">
+                {{ form_field(entry_form.date, type="date") }}
             </div>
-            <div class="modal-body">
-                <form method="post"
-                    action="{{ url_for('split_entry_add', split_id=split_id) }}"
-                    data-offline-queue="split-entry-create"
-                    data-split-id="{{ split_id }}"
-                    novalidate>
-                    {{ entry_form.hidden_tag() }}
-
-                    <div class="mb-3">
-                        {{ entry_form.person.label(class="form-label") }}
-                        {{ entry_form.person(class="form-select") }}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ entry_form.amount.label(class="form-label") }}
-                        {{ entry_form.amount(class="form-control", step="0.01", min="0.01") }}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ entry_form.description.label(class="form-label") }}
-                        {{ entry_form.description(class="form-control", maxlength="120") }}
-                    </div>
-
-                    <div class="mb-3">
-                        {{ entry_form.category.label(class="form-label") }}
-                        {{ entry_form.category(class="form-select") }}
-                    </div>
-
-                    <div class="row g-2">
-                        <div class="col-sm-6 mb-3">
-                            {{ entry_form.date.label(class="form-label") }}
-                            {{ entry_form.date(class="form-control", type="date") }}
-                        </div>
-                        <div class="col-sm-6 mb-3">
-                            {{ entry_form.time.label(class="form-label") }}
-                            {{ entry_form.time(class="form-control", type="time") }}
-                        </div>
-                    </div>
-
-                    <button class="btn btn-primary w-100">Save Entry</button>
-                </form>
+            <div class="col-sm-6">
+                {{ form_field(entry_form.time, type="time") }}
             </div>
         </div>
-    </div>
-</div>
+
+        <button class="btn btn-primary w-100">Save Entry</button>
+    </form>
+{% endcall %}
 {% endif %}
 {% endblock %}
 

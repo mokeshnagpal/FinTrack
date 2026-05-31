@@ -7,6 +7,7 @@
   const pollMs = Number(window.FinTrakConstants?.sync_status_poll_seconds || 12) * 1000;
   let cacheRefreshRequested = false;
   let authCacheTimer = null;
+  let wakeCheckInFlight = false;
 
   if (!renderState || !renderMessage || !cacheState || !cacheMessage) return;
 
@@ -29,31 +30,52 @@
   }
 
   async function checkWake() {
-    const shouldRefreshCache = !cacheRefreshRequested;
+    if (wakeCheckInFlight) return;
+    wakeCheckInFlight = true;
     renderState.textContent = 'Checking';
     renderMessage.textContent = 'Checking whether the service is awake.';
     checkAuthCache();
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
     try {
-      const url = shouldRefreshCache ? '/api/login_wake_status?refresh_cache=1' : '/api/login_wake_status';
-      const response = await fetch(url, {
+      const response = await fetch('/api/login_wake_status', {
         cache: 'no-store',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
       const data = await response.json().catch(() => ({}));
       const awake = response.ok && data.ok;
-      cacheRefreshRequested = awake || cacheRefreshRequested;
       renderState.textContent = awake ? 'Awake' : 'Not ready';
       renderMessage.textContent = awake
         ? 'The service responded. Login is ready.'
         : 'The service did not return a ready response yet.';
+      if (awake && !cacheRefreshRequested) {
+        cacheRefreshRequested = true;
+        refreshLoginCache();
+      }
       checkAuthCache();
     } catch (error) {
       cacheRefreshRequested = false;
       setWaiting();
+    } finally {
+      clearTimeout(timeout);
+      wakeCheckInFlight = false;
+    }
+  }
+
+  async function refreshLoginCache() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    try {
+      await fetch('/api/login_wake_status?refresh_cache=1', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      checkAuthCache();
+    } catch (error) {
+      cacheRefreshRequested = false;
     } finally {
       clearTimeout(timeout);
     }
@@ -61,7 +83,7 @@
 
   async function checkAuthCache() {
     if (!usernameInput) return;
-    const username = String(usernameInput.value || '').trim();
+    const username = String(usernameInput.value || '').trim().toLowerCase();
     if (!username) {
       cacheState.textContent = 'Not available';
       cacheMessage.textContent = 'Enter username to check cached login.';
@@ -69,18 +91,18 @@
     }
 
     cacheState.textContent = 'Checking';
-    cacheMessage.textContent = 'Checking cached username and password hash.';
+    cacheMessage.textContent = 'Checking this browser for cached login.';
     try {
-      const response = await fetch(`/api/login_password_cache_status?username=${encodeURIComponent(username)}`, {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json().catch(() => ({}));
-      const available = response.ok && data.cache_available;
+      const cachedRaw = localStorage.getItem('fintrak_cached_auth');
+      const cached = cachedRaw ? JSON.parse(cachedRaw) : null;
+      const isViewMode = window.location.pathname.includes('/view') || window.location.pathname.includes('/view-login');
+      const available = isViewMode
+        ? username === String(cached?.view_username || '').trim().toLowerCase() && Boolean(cached?.view_password_hash)
+        : username === String(cached?.username || '').trim().toLowerCase() && Boolean(cached?.password_hash);
       cacheState.textContent = available ? 'Available' : 'Not available';
       cacheMessage.textContent = available
-        ? 'Cached username and password hash are available.'
-        : 'Cached login is not available for this username.';
+        ? 'Cached login is available in this browser.'
+        : 'Cached login is not available for this username in this browser.';
     } catch (error) {
       cacheState.textContent = 'Unknown';
       cacheMessage.textContent = 'Cached login status could not be checked.';
@@ -140,6 +162,21 @@
               type: type,
               created_at: new Date().toISOString()
             }));
+
+            if (window.FinTrak?.enqueueOfflineAction) {
+              window.FinTrak.enqueueOfflineAction(
+                'offline_login',
+                { username: usernameVal, type },
+                '/api/login_offline',
+                { skipSync: true },
+              );
+              window.FinTrak.enqueueOfflineAction(
+                'cache_refresh',
+                { reason: 'offline_login' },
+                '/api/render_status?refresh_cache=1',
+                { dedupeType: 'cache_refresh' },
+              );
+            }
 
             // Attempt session sync on local server
             try {

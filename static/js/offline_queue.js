@@ -1,5 +1,7 @@
 (function () {
   const storageKey = 'fintrak_pending_actions';
+  const lockKey = `${storageKey}_sync_lock`;
+  const tabId = actionId();
   let syncing = false;
 
   function storageAvailable() {
@@ -53,6 +55,65 @@
       return window.crypto.randomUUID();
     }
     return `action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function sameAction(left, right) {
+    const leftId = left?.payload?.client_action_id;
+    const rightId = right?.payload?.client_action_id;
+    if (leftId && rightId) return leftId === rightId;
+    return (
+      left?.type === right?.type &&
+      left?.endpoint === right?.endpoint &&
+      left?.created_at === right?.created_at
+    );
+  }
+
+  function removeQueuedAction(action) {
+    const latest = readQueue();
+    const index = latest.findIndex((item) => sameAction(item, action));
+    if (index >= 0) {
+      latest.splice(index, 1);
+      writeQueue(latest);
+      return latest;
+    }
+    emitQueueChange(latest);
+    return latest;
+  }
+
+  function readSyncLock() {
+    try {
+      return JSON.parse(localStorage.getItem(lockKey) || 'null');
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function acquireSyncLock() {
+    if (!canPersistQueue) return true;
+    const now = Date.now();
+    const current = readSyncLock();
+    if (current?.owner && current.expires_at && current.expires_at > now && current.owner !== tabId) {
+      return false;
+    }
+    const next = { owner: tabId, expires_at: now + 30000 };
+    localStorage.setItem(lockKey, JSON.stringify(next));
+    return readSyncLock()?.owner === tabId;
+  }
+
+  function refreshSyncLock() {
+    if (!canPersistQueue) return;
+    const current = readSyncLock();
+    if (current?.owner === tabId) {
+      localStorage.setItem(lockKey, JSON.stringify({ owner: tabId, expires_at: Date.now() + 30000 }));
+    }
+  }
+
+  function releaseSyncLock() {
+    if (!canPersistQueue) return;
+    const current = readSyncLock();
+    if (current?.owner === tabId) {
+      localStorage.removeItem(lockKey);
+    }
   }
 
   function closeFormModal(form) {
@@ -228,6 +289,8 @@
   function endpointForActionType(type) {
     if (type === 'balance_add') return '/api/balance/add';
     if (type === 'balance_sync') return '/api/balance/sync';
+    if (type === 'offline_login') return '/api/login_offline';
+    if (type === 'cache_refresh') return '/api/render_status?refresh_cache=1';
     return '';
   }
 
@@ -316,13 +379,20 @@
     return formPayload(form);
   }
 
-  function enqueue(action) {
+  function enqueue(action, options = {}) {
     const queue = readQueue();
-    queue.push(action);
+    if (options.dedupeType && queue.some((item) => item.type === options.dedupeType)) {
+      return;
+    }
+    if (options.front) {
+      queue.unshift(action);
+    } else {
+      queue.push(action);
+    }
     writeQueue(queue);
   }
 
-  function enqueueAction(type, payload, endpoint = '') {
+  function enqueueAction(type, payload, endpoint = '', options = {}) {
     const action = {
       type,
       endpoint: endpoint || endpointForActionType(type),
@@ -332,12 +402,64 @@
       },
       created_at: new Date().toISOString(),
     };
-    enqueue(action);
-    syncQueue({ quiet: true });
+    enqueue(action, options);
+    if (!options.skipSync) syncQueue({ quiet: true });
     return action;
   }
 
+  async function refreshCaches(action) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(action.endpoint || '/api/render_status?refresh_cache=1', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || `Cache refresh failed (${response.status})`);
+      }
+      if (window.FinTrak?.cache?.refreshSnapshot) {
+        await window.FinTrak.cache.refreshSnapshot();
+      }
+      return data;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function checkServerAwake() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    try {
+      const response = await fetch('/api/render_status', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || `Server is not ready (${response.status})`);
+      }
+      return data;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function refreshSnapshotQuietly(context) {
+    if (!window.FinTrak?.cache?.refreshSnapshot) return;
+    window.FinTrak.cache.refreshSnapshot().catch((error) => {
+      console.warn(`browser cache snapshot refresh failed ${context}`, error);
+    });
+  }
+
   async function postAction(action) {
+    if (action.type === 'cache_refresh') {
+      return refreshCaches(action);
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
 
@@ -365,43 +487,58 @@
 
   async function syncQueue(options = {}) {
     if (syncing) return { synced: 0, failed: 0, remaining: readQueue().length, skipped: true };
+    if (!acquireSyncLock()) return { synced: 0, failed: 0, remaining: readQueue().length, skipped: true };
     syncing = true;
 
-    const queue = readQueue();
-    const remaining = [];
     let synced = 0;
     let failed = 0;
+    let remainingCount = readQueue().length;
 
-    for (const action of queue) {
-      try {
-        await postAction(action);
-        synced += 1;
-      } catch (error) {
-        failed += 1;
-        if (!error.permanent) {
-          remaining.push(action);
-        } else {
-          notify('One invalid queued action was removed.', 'error');
+    try {
+      while (readQueue().length > 0) {
+        refreshSyncLock();
+        const queue = readQueue();
+        const action = queue[0];
+        try {
+          if (action.type !== 'offline_login' && action.type !== 'cache_refresh') {
+            await checkServerAwake();
+          }
+          await postAction(action);
+          const updatedQueue = removeQueuedAction(action);
+          synced += 1;
+          remainingCount = updatedQueue.length;
+          if (action.type !== 'cache_refresh') {
+            refreshSnapshotQuietly('after queued job');
+          }
+        } catch (error) {
+          failed += 1;
+          if (error.permanent) {
+            const updatedQueue = removeQueuedAction(action);
+            notify('One invalid queued action was removed.', 'error');
+            remainingCount = updatedQueue.length;
+            continue;
+          }
+          emitQueueChange(readQueue());
+          remainingCount = readQueue().length;
+          break;
         }
       }
+    } finally {
+      syncing = false;
+      releaseSyncLock();
     }
 
-    writeQueue(remaining);
-    syncing = false;
-
-    if (synced > 0 && window.FinTrak?.cache?.refreshSnapshot) {
-      window.FinTrak.cache.refreshSnapshot().catch((error) => {
-        console.warn('browser cache snapshot refresh failed after queued sync', error);
-      });
+    if (synced > 0 && remainingCount === 0) {
+      refreshSnapshotQuietly('after queued sync');
     }
 
     if (!options.quiet && synced > 0) {
       notify(`${synced} pending action${synced === 1 ? '' : 's'} synced.`, 'success');
-    } else if (!options.quiet && failed > 0 && remaining.length > 0) {
+    } else if (!options.quiet && failed > 0 && remainingCount > 0) {
       notify('Saved locally. Will sync when the server responds.', 'info');
     }
 
-    return { synced, failed, remaining: remaining.length, skipped: false };
+    return { synced, failed, remaining: remainingCount, skipped: false };
   }
 
   function initQueuedForms() {

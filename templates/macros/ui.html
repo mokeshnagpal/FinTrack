@@ -1,0 +1,320 @@
+{% macro auth_theme_toggle() -%}
+<div class="auth-theme-toggle">
+    <button id="themeToggle" class="btn btn-sm btn-outline-primary shadow-sm" aria-pressed="false" title="Toggle theme">
+        <span id="themeIcon">Dark</span>
+        <span class="visually-hidden">Toggle theme</span>
+    </button>
+</div>
+{%- endmacro %}
+
+{% macro protected_badge(label='Protected') -%}
+<span class="badge badge-protected">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1" aria-hidden="true">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+    </svg>
+    {{ label }}
+</span>
+{%- endmacro %}
+
+{% macro compact_badge(label, tone='neutral', extra_class='') -%}
+<span class="badge badge-compact badge-{{ tone }} {{ extra_class }}">{{ label }}</span>
+{%- endmacro %}
+
+{% macro people_picker(people, id_prefix, checked_people=none, checked_by_default=true) -%}
+<div class="people-picker-grid">
+    {% for person in people %}
+    {% set is_checked = checked_by_default or checked_people is none or person in checked_people %}
+    <div class="people-picker-item">
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="{{ id_prefix }}{{ loop.index }}" {% if is_checked %}checked{% endif %}>
+            <label class="form-check-label small" for="{{ id_prefix }}{{ loop.index }}">
+                {{ person }}
+            </label>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro choice_panel(input_id, value, label, help_text, danger=false, checked=false) -%}
+<div class="form-check choice-panel {{ 'choice-panel-danger' if danger else '' }}">
+    <input class="form-check-input ms-0 me-2" type="radio" name="action" id="{{ input_id }}" value="{{ value }}" {% if checked %}checked{% endif %}>
+    <label class="form-check-label fw-semibold {{ 'text-danger' if danger else '' }}" for="{{ input_id }}">
+        {{ label }}
+    </label>
+    <div class="form-text text-muted small ms-4">{{ help_text }}</div>
+</div>
+{%- endmacro %}
+
+{% macro card(extra_class='', shadow='sm', no_body=false) -%}
+<div class="card shadow-{{ shadow }} {{ extra_class }}">
+    {% if no_body %}
+        {{ caller() }}
+    {% else %}
+        <div class="card-body">
+            {{ caller() }}
+        </div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro delete_button(action_url, confirm_text='', disabled=false, offline_queue='', extra_attrs=none) -%}
+<form method="post" action="{{ action_url }}" 
+      {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} 
+      class="d-inline"
+      {% if offline_queue %}data-offline-queue="{{ offline_queue }}"{% endif %}
+      {% if extra_attrs %}
+        {% for k, v in extra_attrs.items() %}
+          data-{{ k }}="{{ v }}"
+        {% endfor %}
+      {% endif %}>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-sm btn-danger" {% if disabled %}disabled{% endif %}>
+        Delete
+    </button>
+</form>
+{%- endmacro %}
+
+{% macro edit_button(target_modal_id, size='sm', outline=true, extra_class='') -%}
+<button type="button" class="btn btn-{{ size }} {{ 'btn-outline-primary' if outline else 'btn-primary' }} {{ extra_class }}" data-bs-toggle="modal" data-bs-target="#{{ target_modal_id }}">Edit</button>
+{%- endmacro %}
+
+{% macro modal(modal_id, title, text_start=true) -%}
+<div class="modal fade {{ 'text-start' if text_start else '' }}" id="{{ modal_id }}" tabindex="-1" aria-labelledby="{{ modal_id }}Label" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="{{ modal_id }}Label">{{ title }}</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                {{ caller() }}
+            </div>
+        </div>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro form_input(id, label, name, type='text', value='', placeholder='', required=false, max_length=none, extra_class='') -%}
+<div class="mb-3">
+    {% if label %}
+    <label class="form-label" for="{{ id }}">{{ label }}</label>
+    {% endif %}
+    <input class="form-control {{ extra_class }}" id="{{ id }}" name="{{ name }}" type="{{ type }}" 
+           {% if value is not none %}value="{{ value }}"{% endif %} 
+           {% if placeholder %}placeholder="{{ placeholder }}"{% endif %} 
+           {% if required %}required{% endif %} 
+           {% if max_length %}maxlength="{{ max_length }}"{% endif %}
+           {{ kwargs | xmlattr }}>
+ </div>
+ {%- endmacro %}
+
+{% macro table_shell(extra_class='') -%}
+<div class="table-shell table-responsive">
+    <table class="table table-sm align-middle mb-0 {{ extra_class }}" {{ kwargs | xmlattr }}>
+        {{ caller() }}
+    </table>
+</div>
+{%- endmacro %}
+
+{% macro page_header(title, kicker='', description='', extra_class='') -%}
+<section class="page-header {{ extra_class }}" {{ kwargs | xmlattr }}>
+    <div>
+        {% if kicker %}<span class="kicker">{{ kicker }}</span>{% endif %}
+        <h1>{{ title }}</h1>
+        {% if description %}<p>{{ description }}</p>{% endif %}
+    </div>
+    {% if caller is defined %}
+    <div class="page-actions">
+        {{ caller() }}
+    </div>
+    {% endif %}
+</section>
+{%- endmacro %}
+
+{% macro offline_notice(id, extra_class='') -%}
+<div id="{{ id }}" class="alert alert-warning d-none {{ extra_class }}" role="alert"></div>
+{%- endmacro %}
+
+{% macro pager(paginate_obj, endpoint, extra_params=none) -%}
+{% if paginate_obj.items %}
+<nav aria-label="Pagination">
+    <ul class="pagination justify-content-center">
+        {% if paginate_obj.has_prev %}
+        <li class="page-item">
+            <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.prev_num, cursor=paginate_obj.prev_cursor, **(extra_params or {})) }}">
+                Previous
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Previous</span></li>
+        {% endif %}
+
+        <li class="page-item active"><span class="page-link">{{ paginate_obj.page }}</span></li>
+
+        {% if paginate_obj.has_next %}
+        <li class="page-item">
+            <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.next_num, cursor=paginate_obj.next_cursor, **(extra_params or {})) }}">
+                Next
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Next</span></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{%- endmacro %}
+
+{% macro form_field(field, label_class='form-label') -%}
+<div class="mb-3">
+    {% if field.type != 'HiddenField' and field.type != 'CSRFTokenField' %}
+        {{ field.label(class=label_class) }}
+        {% set class_arg = kwargs.pop('class', '') %}
+        {% set default_class = 'form-select' if field.type == 'SelectField' else ('form-check-input' if field.type == 'BooleanField' else 'form-control') %}
+        {% set merged_class = default_class ~ ' ' ~ class_arg %}
+        {{ field(class=merged_class|trim, **kwargs) }}
+        {% for err in field.errors %}
+        <div class="text-danger small">{{ err }}</div>
+        {% endfor %}
+    {% else %}
+        {{ field(**kwargs) }}
+    {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro form_select(id, label, name, choices, selected_value=none, extra_class='') -%}
+<div class="mb-3">
+    {% if label %}
+    <label class="form-label" for="{{ id }}">{{ label }}</label>
+    {% endif %}
+    <select class="form-select {{ extra_class }}" id="{{ id }}" name="{{ name }}" {{ kwargs | xmlattr }}>
+        {% for val, lbl in choices %}
+        <option value="{{ val }}" {% if selected_value is not none and selected_value|string == val|string %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+    </select>
+</div>
+{%- endmacro %}
+
+{% macro auth_layout(title, kicker, messages=none) -%}
+<div class="auth-wrapper">
+    {{ auth_theme_toggle() }}
+    <div class="auth-card card">
+        <div class="card-body">
+            <div class="stack auth-stack">
+                <div class="center auth-heading">
+                    <div class="auth-brand">FT</div>
+                    <div>
+                        <div class="page-title">{{ title }}</div>
+                        <div class="kicker">{{ kicker }}</div>
+                    </div>
+                </div>
+
+                {% if messages %}
+                    {% for category, msg in messages %}
+                    <div class="flash-inline {{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
+                    {% endfor %}
+                {% endif %}
+
+                <div class="auth-status-grid" aria-live="polite">
+                    <div class="auth-status-item">
+                        <span class="kicker">Service</span>
+                        <strong id="authRenderState">Waking</strong>
+                        <p id="authRenderMessage">Waiting for the service to respond.</p>
+                    </div>
+                    <div class="auth-status-item">
+                        <span class="kicker">Cache</span>
+                        <strong id="authCacheState">Not available</strong>
+                        <p id="authCacheMessage">Enter username to check cached login.</p>
+                    </div>
+                </div>
+
+                {{ caller() }}
+            </div>
+        </div>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro metric_card(label, value_id, default_value='0.00', kicker='') -%}
+<div class="metric-card">
+    {% if kicker %}<span class="kicker">{{ kicker }}</span>{% endif %}
+    <span>{{ label }}</span>
+    <strong id="{{ value_id }}">{{ default_value }}</strong>
+</div>
+{%- endmacro %}
+
+{% macro chart_card(title, canvas_id, extra_class='', size='lg') -%}
+<div class="card p-3 shadow-sm h-100">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        <h6 id="{{ canvas_id }}Title" class="card-title mb-0">{{ title }}</h6>
+        {% if caller is defined %}
+            {{ caller() }}
+        {% endif %}
+    </div>
+    <div class="chart-wrapper {% if size %}chart-wrapper-{{ size }}{% endif %} {{ extra_class }}">
+        <canvas id="{{ canvas_id }}" role="img" aria-label="{{ title }} chart"></canvas>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro flash_alerts(messages, inline=false) -%}
+    {% if messages %}
+        {% if inline %}
+            {% for category, msg in messages %}
+            <div class="flash-inline {{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
+            {% endfor %}
+        {% else %}
+            <script>
+                const messages = {{ messages | tojson }};
+                for (const [category, msg] of messages) {
+                    if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
+                        window.FinTrak.showFlash(msg, category);
+                    }
+                }
+            </script>
+        {% endif %}
+    {% endif %}
+{%- endmacro %}
+{% macro analytics_controls() -%}
+<div class="card p-3 mb-3 shadow-sm analytics-controls">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <div class="analytics-presets" aria-label="Quick ranges">
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="30d">30 Days</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="90d">90 Days</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="12m">12 Months</button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-range="ytd">This Year</button>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+            <label class="form-label small mb-0 text-nowrap" for="periodSelect">Group by:</label>
+            <select id="periodSelect" class="form-select form-select-sm period-select">
+                <option value="daily" selected>Daily</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="analytics-or-divider mb-3">
+        <span>(or) Custom Dates</span>
+    </div>
+
+    <div class="analytics-filter-grid">
+        <div>
+            <label class="form-label small mb-1 d-block" for="fromDate">From</label>
+            <input id="fromDate" class="form-control form-control-sm" type="date">
+        </div>
+
+        <div>
+            <label class="form-label small mb-1 d-block" for="toDate">To</label>
+            <input id="toDate" class="form-control form-control-sm" type="date">
+        </div>
+
+        <div class="analytics-filter-action">
+            <button id="applyBtn" class="btn btn-primary w-100">Apply</button>
+        </div>
+    </div>
+</div>
+{%- endmacro %}

@@ -1,22 +1,16 @@
 {% extends "base.html" %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, table_shell, modal, form_field, form_input, form_select %}
 {% block content %}
-<section class="page-header">
-    <div>
-        <span class="kicker">Shared Bills</span>
-        <h1>Split Bills</h1>
-        {% if session.get('view_only') %}
-        <p>Open shared-spend bill splits and review live split totals in read-only mode.</p>
-        {% else %}
-        <p>Create trip or shared-spend bill splits, and open each split to manage entries.</p>
-        {% endif %}
-    </div>
-    {% if not session.get('view_only') %}
-    <div class="page-actions">
+
+{% set header_desc = 'Open shared-spend bill splits and review live split totals in read-only mode.' if session.get('view_only') else 'Create trip or shared-spend bill splits, and open each split to manage entries.' %}
+{% if not session.get('view_only') %}
+    {% call page_header('Split Bills', kicker='Shared Bills', description=header_desc) %}
         <a class="btn btn-outline-primary" href="{{ url_for('management') }}">People</a>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newSplitModal">New Split</button>
-    </div>
-    {% endif %}
-</section>
+    {% endcall %}
+{% else %}
+    {{ page_header('Split Bills', kicker='Shared Bills', description=header_desc) }}
+{% endif %}
 
 <div class="row g-3">
     <div class="col-12">
@@ -30,230 +24,158 @@
         </div>
         {% endif %}
 
-        <div class="table-shell table-responsive">
-            <table class="table table-sm align-middle mb-0">
-                <thead>
-                    <tr>
-                        <th class="sortable-header">Name <span class="sort-icon">&#8597;</span></th>
-                        <th class="sortable-header">Connected Trip</th>
-                        <th class="sortable-header">Updated <span class="sort-icon">&#8597;</span></th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for split in splits %}
-                    {% set sid = split.id or split._id %}
-                    <tr>
-                        <td data-label="Name">
-                            <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
-                            {% if split.is_live %}
-                            <span class="badge bg-success ms-2 shadow-sm" style="font-size: 0.72rem; padding: 0.18rem 0.45rem;">Live</span>
-                            {% endif %}
-                        </td>
-                        <td data-label="Connected Trip">
-                            {% set connected_trip = trip_map.get(sid) %}
-                            {% if connected_trip %}
-                            <div class="d-flex align-items-center gap-2">
-                                <span class="badge bg-info text-dark" style="font-size: 0.72rem; padding: 0.18rem 0.45rem;">{{ connected_trip.name }}</span>
-                                {% if not session.get('view_only') %}
-                                <button type="button" class="btn btn-sm btn-link p-0 text-warning text-decoration-none" style="font-size: 0.75rem;" data-bs-toggle="modal" data-bs-target="#disconnectTripModal{{ sid }}">
-                                    Disconnect
-                                </button>
-                                {% endif %}
-                            </div>
-
+        {% call table_shell() %}
+            <thead>
+                <tr>
+                    <th class="sortable-header">Name <span class="sort-icon">&#8597;</span></th>
+                    <th class="sortable-header">Connected Trip</th>
+                    <th class="sortable-header">Updated <span class="sort-icon">&#8597;</span></th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for split in splits %}
+                {% set sid = split.id or split._id %}
+                <tr>
+                    <td data-label="Name">
+                        <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
+                        {% if split.is_live %}
+                        {{ compact_badge('Live', 'live', 'ms-2') }}
+                        {% endif %}
+                    </td>
+                    <td data-label="Connected Trip">
+                        {% set connected_trip = trip_map.get(sid) %}
+                        {% if connected_trip %}
+                        <div class="d-flex align-items-center gap-2">
+                            {{ compact_badge(connected_trip.name, 'trip') }}
                             {% if not session.get('view_only') %}
-                            <!-- Disconnect Trip Modal -->
-                            <div class="modal fade" id="disconnectTripModal{{ sid }}" tabindex="-1" aria-labelledby="disconnectTripModalLabel{{ sid }}" aria-hidden="true">
-                                <div class="modal-dialog modal-dialog-centered">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title" id="disconnectTripModalLabel{{ sid }}">Disconnect Trip Connection</h5>
-                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                                        </div>
-                                        <div class="modal-body text-start">
-                                            <p>This split account is currently connected to the Trip <strong>{{ connected_trip.name }}</strong>. What would you like to do with the connected Trip?</p>
-                                            <form method="post" action="{{ url_for('split_disconnect_trip', split_id=sid) }}" data-offline-queue="split-disconnect-trip" data-split-id="{{ sid }}">
-                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                
-                                                <div class="form-check mb-3 p-3 border rounded" style="background: rgba(var(--primary-rgb), 0.02);">
-                                                    <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectTripKeep{{ sid }}" value="keep" checked>
-                                                    <label class="form-check-label fw-semibold" for="disconnectTripKeep{{ sid }}">
-                                                        Just Disconnect
-                                                    </label>
-                                                    <div class="form-text text-muted small ms-4">Keep the Trip as a regular fixed-budget trip so its itinerary is preserved.</div>
-                                                </div>
-
-                                                <div class="form-check mb-4 p-3 border border-danger rounded" style="background: rgba(220, 53, 69, 0.02);">
-                                                    <input class="form-check-input ms-0 me-2" type="radio" name="action" id="disconnectTripDelete{{ sid }}" value="delete">
-                                                    <label class="form-check-label text-danger fw-semibold" for="disconnectTripDelete{{ sid }}">
-                                                        Delete the connected Trip
-                                                    </label>
-                                                    <div class="form-text text-muted small ms-4">Permanently delete the Trip itinerary entirely from Firestore.</div>
-                                                </div>
-
-                                                <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                            <button type="button" class="btn btn-sm btn-link btn-compact p-0 text-warning text-decoration-none" data-bs-toggle="modal" data-bs-target="#disconnectTripModal{{ sid }}">
+                                Disconnect
+                            </button>
                             {% endif %}
+                        </div>
+
+                        {% if not session.get('view_only') %}
+                        <!-- Disconnect Trip Modal -->
+                        {% call modal('disconnectTripModal' ~ sid, 'Disconnect Trip Connection') %}
+                            <p>This split account is currently connected to the Trip <strong>{{ connected_trip.name }}</strong>. What would you like to do with the connected Trip?</p>
+                            <form method="post" action="{{ url_for('split_disconnect_trip', split_id=sid) }}" data-offline-queue="split-disconnect-trip" data-split-id="{{ sid }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                
+                                {{ choice_panel('disconnectTripKeep' ~ sid, 'keep', 'Just Disconnect', 'Keep the Trip as a regular fixed-budget trip so its itinerary is preserved.', checked=true) }}
+                                {{ choice_panel('disconnectTripDelete' ~ sid, 'delete', 'Delete the connected Trip', 'Permanently delete the Trip itinerary entirely from Firestore.', danger=true) }}
+
+                                <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
+                            </form>
+                        {% endcall %}
+                        {% endif %}
+                        {% else %}
+                        <span class="text-muted small">None</span>
+                        {% endif %}
+                    </td>
+                    <td data-label="Updated">
+                        <small>
+                            {% if split.updated_at %}
+                            <span data-format-date>{{ split.updated_at|ist_datetime('%Y-%m-%d %H:%M') }}</span>
                             {% else %}
-                            <span class="text-muted small">None</span>
+                            -
                             {% endif %}
-                        </td>
-                        <td data-label="Updated">
-                            <small>
-                                {% if split.updated_at %}
-                                <span data-format-date>{{ split.updated_at|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                                {% else %}
-                                -
-                                {% endif %}
-                            </small>
-                        </td>
-                        <td data-label="Actions" class="text-end">
-                            <div class="table-actions">
-                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=sid) }}">Open</a>
-                                {% if not session.get('view_only') %}
-                                {% if not split.is_live %}
-                                <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-live" data-split-id="{{ sid }}">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button class="btn btn-sm btn-outline-success">Make Live</button>
-                                </form>
-                                {% else %}
-                                <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-unlive" data-split-id="{{ sid }}">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button class="btn btn-sm btn-outline-warning">Remove Live</button>
-                                </form>
-                                {% endif %}
-
-                                {% if split.transaction_id %}
-                                <button type="button" class="btn btn-sm btn-outline-info record-share-btn"
-                                    data-split-id="{{ sid }}"
-                                    data-txn-id="{{ split.transaction_id }}"
-                                    data-recorded-amount="{{ '%.2f' | format(split.recorded_amount or 0.0) }}"
-                                    data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
-                                    data-split-title="{{ split.title or 'Untitled split' }}">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                                    </svg>
-                                    Re-add Share
-                                </button>
-                                {% else %}
-                                <button type="button" class="btn btn-sm btn-outline-success record-share-btn"
-                                    data-split-id="{{ sid }}"
-                                    data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
-                                    data-split-title="{{ split.title or 'Untitled split' }}">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                                    </svg>
-                                    Add Share
-                                </button>
-                                {% endif %}
-
-                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSplitModal{{ sid }}">Edit</button>
-                                <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
-                                    data-confirm="Delete this split and its entries?" class="d-inline" data-offline-queue="split-delete" data-split-id="{{ sid }}">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button class="btn btn-sm btn-danger">Delete</button>
-                                </form>
-                                {% endif %}
-                            </div>
-
+                        </small>
+                    </td>
+                    <td data-label="Actions" class="text-end">
+                        <div class="table-actions">
+                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=sid) }}">Open</a>
                             {% if not session.get('view_only') %}
-                            <!-- Edit Split Modal -->
-                            <div class="modal fade text-start" id="editSplitModal{{ sid }}" tabindex="-1" aria-labelledby="editSplitModalLabel{{ sid }}" aria-hidden="true">
-                                <div class="modal-dialog modal-dialog-centered">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title" id="editSplitModalLabel{{ sid }}">Edit Split</h5>
-                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                                        </div>
-                                        <div class="modal-body">
-                                            <form method="post" action="{{ url_for('split_edit', split_id=sid) }}" novalidate data-offline-queue="split-edit" data-split-id="{{ sid }}">
-                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                <div class="mb-3">
-                                                    <label class="form-label" for="title{{ sid }}">Split name</label>
-                                                    <input class="form-control" id="title{{ sid }}" name="title" type="text" maxlength="80" placeholder="Chennai trip" value="{{ split.title }}" required>
-                                                </div>
-                                                <div class="mb-3">
-                                                    <label class="form-label d-block text-white-50">Members Included</label>
-                                                    <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
-                                                        {% for person in all_people %}
-                                                        {% set is_checked = (split.get('people') is none) or (person in split.get('people', [])) %}
-                                                        <div class="col-6">
-                                                            <div class="form-check">
-                                                                <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="editSplitPerson{{ sid }}_{{ loop.index }}" {% if is_checked %}checked{% endif %}>
-                                                                <label class="form-check-label text-light small" for="editSplitPerson{{ sid }}_{{ loop.index }}">
-                                                                    {{ person }}
-                                                                </label>
-                                                            </div>
-                                                        </div>
-                                                        {% endfor %}
-                                                    </div>
-                                                </div>
-                                                <button type="submit" class="btn btn-primary w-100">Update Split</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                            {% if not split.is_live %}
+                            <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-live" data-split-id="{{ sid }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-sm btn-outline-success">Make Live</button>
+                            </form>
+                            {% else %}
+                            <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-unlive" data-split-id="{{ sid }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-sm btn-outline-warning">Remove Live</button>
+                            </form>
                             {% endif %}
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="4" class="text-center text-muted py-4">No split documents found.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+
+                            {% if split.transaction_id %}
+                            <button type="button" class="btn btn-sm btn-outline-info record-share-btn"
+                                data-split-id="{{ sid }}"
+                                data-txn-id="{{ split.transaction_id }}"
+                                data-recorded-amount="{{ '%.2f' | format(split.recorded_amount or 0.0) }}"
+                                data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
+                                data-split-title="{{ split.title or 'Untitled split' }}">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+                                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                                </svg>
+                                Re-add Share
+                            </button>
+                            {% else %}
+                            <button type="button" class="btn btn-sm btn-outline-success record-share-btn"
+                                data-split-id="{{ sid }}"
+                                data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
+                                data-split-title="{{ split.title or 'Untitled split' }}">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                                Add Share
+                            </button>
+                            {% endif %}
+
+                            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSplitModal{{ sid }}">Edit</button>
+                            <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
+                                data-confirm="Delete this split and its entries?" class="d-inline" data-offline-queue="split-delete" data-split-id="{{ sid }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-sm btn-danger">Delete</button>
+                            </form>
+                            {% endif %}
+                        </div>
+
+                        {% if not session.get('view_only') %}
+                        <!-- Edit Split Modal -->
+                        {% call modal('editSplitModal' ~ sid, 'Edit Split') %}
+                            <form method="post" action="{{ url_for('split_edit', split_id=sid) }}" novalidate data-offline-queue="split-edit" data-split-id="{{ sid }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                
+                                {{ form_input('title' ~ sid, 'Split name', 'title', placeholder='Chennai trip', value=split.title, maxlength=80, required=true) }}
+
+                                <div class="mb-3">
+                                    <label class="form-label d-block text-muted">Members Included</label>
+                                    {{ people_picker(all_people, 'editSplitPerson' ~ sid ~ '_', checked_people=split.get('people'), checked_by_default=false) }}
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100">Update Split</button>
+                            </form>
+                        {% endcall %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-4">No split documents found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        {% endcall %}
     </div>
 </div>
 
 <!-- New Split Modal -->
 {% if not session.get('view_only') %}
-<div class="modal fade" id="newSplitModal" tabindex="-1" aria-labelledby="newSplitModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="newSplitModalLabel">New Split</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <form method="post" action="{{ url_for('splits') }}" novalidate data-offline-queue="split-create">
-                    {{ form.hidden_tag() }}
-                    <div class="mb-3">
-                        {{ form.title.label(class="form-label") }}
-                        {{ form.title(class="form-control", maxlength="80", placeholder="Chennai trip") }}
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label d-block text-white-50">Members Included</label>
-                        <div class="row g-2 p-2 border border-secondary border-opacity-25 rounded bg-dark bg-opacity-25" style="max-height: 150px; overflow-y: auto;">
-                            {% for person in all_people %}
-                            <div class="col-6">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" name="people" value="{{ person }}" id="newSplitPerson{{ loop.index }}" checked>
-                                    <label class="form-check-label text-light small" for="newSplitPerson{{ loop.index }}">
-                                        {{ person }}
-                                    </label>
-                                </div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                    <div class="form-text small text-muted mb-3">
-                        ✓ New split will be set as live by default
-                    </div>
-                    <button class="btn btn-primary w-100">Save Split</button>
-                </form>
-            </div>
+{% call modal('newSplitModal', 'New Split') %}
+    <form method="post" action="{{ url_for('splits') }}" novalidate data-offline-queue="split-create">
+        {{ form.hidden_tag() }}
+        {{ form_field(form.title, placeholder="Chennai trip", maxlength="80") }}
+        <div class="mb-3">
+            <label class="form-label d-block text-muted">Members Included</label>
+            {{ people_picker(all_people, 'newSplitPerson', checked_by_default=true) }}
         </div>
-    </div>
-</div>
+        <div class="form-text small text-muted mb-3">
+            ✓ New split will be set as live by default
+        </div>
+        <button class="btn btn-primary w-100">Save Split</button>
+    </form>
+{% endcall %}
 {% endif %}
 
 <!-- Record Share Overwrite Confirmation Modal -->
@@ -261,7 +183,7 @@
 <div class="modal fade" id="recordShareConfirmModal" tabindex="-1" aria-labelledby="recordShareConfirmModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content shadow-lg border-0">
-            <div class="modal-header bg-warning text-dark border-bottom-0">
+            <div class="modal-header modal-header-warning">
                 <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="recordShareConfirmModalLabel">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-dark me-1">
                         <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
@@ -273,16 +195,16 @@
                 <button type="button" class="btn-close btn-close-dark" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body text-start py-4">
-                <p class="mb-3 text-light">
+                <p class="mb-3 text-muted">
                     A transaction for the split <strong id="confirmSplitTitle" class="text-info"></strong> has already been saved.
                 </p>
                 <div class="p-3 rounded mb-3 border border-secondary border-opacity-25 bg-dark bg-opacity-50">
                     <div class="d-flex justify-content-between mb-2">
-                        <span class="text-white-50">Previous saved amount:</span>
+                        <span class="text-muted">Previous saved amount:</span>
                         <span class="fw-bold text-warning" id="confirmOldAmount"></span>
                     </div>
                     <div class="d-flex justify-content-between">
-                        <span class="text-white-50">New calculated amount:</span>
+                        <span class="text-muted">New calculated amount:</span>
                         <span class="fw-bold text-success" id="confirmNewAmount"></span>
                     </div>
                 </div>
@@ -302,7 +224,7 @@
     </div>
 </div>
 
-<form id="recordShareDirectForm" method="post" action="" style="display: none;">
+<form id="recordShareDirectForm" method="post" action="" class="hidden-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="overwrite" value="false">
 </form>

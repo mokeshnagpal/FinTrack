@@ -71,6 +71,13 @@ function formatDisplayDate(value) {
   return escapeHtml(value || '');
 }
 
+function formatDisplayDateText(value) {
+  if (window.FinTrak?.formatFriendlyDate) {
+    return window.FinTrak.formatFriendlyDate(value);
+  }
+  return value || '';
+}
+
 function formatDisplayNote(note) {
   return window.FinTrak?.formatBalanceNote
     ? window.FinTrak.formatBalanceNote(note)
@@ -186,6 +193,14 @@ function renderInsights(data) {
     : '<p>No insights available for this range.</p>';
 }
 
+function renderOfflineBalanceNotice(fallback) {
+  elements.insightsArea.innerHTML = `
+    <p><strong>Offline limited view.</strong> Full balance analytics need the server because date filtering, type grouping, comparisons, and complete chart series are calculated from Firestore.</p>
+    <p>Showing only <strong>${fallback.entries.length}</strong> cached balance histor${fallback.entries.length === 1 ? 'y row' : 'y rows'} stored in this browser.</p>
+    <p>Cached net change: <strong>${Number(fallback.summary.net_change || 0).toFixed(2)}</strong>.</p>
+  `;
+}
+
 function renderCharts(data) {
   destroyCharts();
 
@@ -194,7 +209,7 @@ function renderCharts(data) {
     return false;
   }
 
-  const labels = data.labels || [];
+  const labels = (data.labels || []).map(formatDisplayDateText);
   const balanceValues = data.balance_values || [];
   const deltaValues = data.delta_values || [];
 
@@ -338,13 +353,9 @@ async function refreshAnalytics() {
     if (snapshot?.balance?.history?.length) {
       destroyCharts();
       const history = snapshot.balance.history;
-      const labels = history.map((entry) => entry.timestamp || '').reverse();
       const balanceValues = history.map((entry) => Number(entry.balance || 0)).reverse();
       const deltaValues = history.map((entry) => Number(entry.delta || 0)).reverse();
       const fallback = {
-        labels,
-        balance_values: balanceValues,
-        delta_values: deltaValues,
         summary: {
           current_balance: snapshot.balance.current?.balance || 0,
           net_change: deltaValues.reduce((sum, value) => sum + value, 0),
@@ -356,13 +367,15 @@ async function refreshAnalytics() {
         entries: history,
       };
       updateSummary(fallback.summary);
-      renderInsights(fallback);
-      renderCharts(fallback);
       renderEntries(fallback.entries);
-      setStatus('Showing cached balance history. Full analytics load when the service wakes.', 'warning');
+      setStatus('Offline: showing limited cached balance history only. Full analytics will load when the service wakes.', 'warning');
+      renderOfflineBalanceNotice(fallback);
     } else {
-      setStatus(error.message, 'danger');
-      elements.insightsArea.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      destroyCharts();
+      updateSummary({});
+      renderEntries([]);
+      setStatus('Offline: balance analytics are unavailable because no cached balance history was found.', 'danger');
+      elements.insightsArea.innerHTML = '<p><strong>Offline.</strong> Full balance analytics need server data. Open this page once online to cache recent balance history for a small offline view.</p>';
     }
   } finally {
     elements.applyBtn.disabled = false;

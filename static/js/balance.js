@@ -39,6 +39,16 @@ function formatDisplayNote(note) {
     : note;
 }
 
+function normalizeBalanceMode(entry) {
+  const mode = String(entry?.balance_mode || '').toLowerCase();
+  if (mode === 'sync' || mode === 'add') return mode;
+  return String(entry?.type || '').toLowerCase() === 'sync' ? 'sync' : 'add';
+}
+
+function modeLabel(mode) {
+  return mode === 'sync' ? 'Sync' : 'Add';
+}
+
 function closeModal(id) {
   const el = document.getElementById(id);
   if (el && window.FinTrak?.hideModal) {
@@ -77,8 +87,7 @@ function showToast(title, type = 'info', message = '') {
   if (!container) {
     container = document.createElement('div');
     container.id = 'toastContainer';
-    container.className = 'toast-container position-fixed top-0 end-0 p-3';
-    container.style.zIndex = '2000';
+    container.className = 'toast-container toast-container-elevated position-fixed top-0 end-0 p-3';
     document.body.appendChild(container);
   }
 
@@ -135,14 +144,15 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   (data.history || []).forEach((entry) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
-    const isManual = ['add', 'sync'].includes(type);
+    const mode = normalizeBalanceMode(entry);
     const viewOnly = document.body.dataset.viewOnly === 'true';
-    const hasActions = isManual && !viewOnly;
+    const hasActions = !viewOnly;
 
     const actionButtons = hasActions
       ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
             data-id="${escapeAttr(entry.id || '')}"
             data-type="${escapeAttr(type)}"
+            data-mode="${escapeAttr(mode)}"
             data-delta="${escapeAttr(entry.delta)}"
             data-balance="${escapeAttr(entry.balance)}"
             data-note="${escapeAttr(entry.note || '')}">
@@ -151,16 +161,17 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
          <button class="btn btn-sm btn-outline-danger balance-delete-btn"
             data-id="${escapeAttr(entry.id || '')}"
             data-type="${escapeAttr(type)}"
+            data-mode="${escapeAttr(mode)}"
+            data-delta="${escapeAttr(entry.delta)}"
+            data-balance="${escapeAttr(entry.balance)}"
             data-note="${escapeAttr(entry.note || '')}">
             Delete
          </button>`
-      : `<button class="btn btn-sm btn-outline-secondary" disabled
-            title="Only manual balance entries (Add/Sync) can be edited or deleted.">
-            Locked
-         </button>`;
+      : `<span class="text-muted small">View-only</span>`;
 
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
-                    <td data-label="Type">${escapeHtml(entry.type || '')}</td>
+                    <td data-label="Source">${escapeHtml(entry.type || '')}</td>
+                    <td data-label="Mode"><span class="badge badge-compact ${mode === 'sync' ? 'badge-sync' : 'badge-add'}">${modeLabel(mode)}</span></td>
                     <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
                     <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
                     <td data-label="Note">${escapeHtml(formatDisplayNote(entry.note || ''))}</td>
@@ -185,9 +196,17 @@ function ensureEditModal() {
     <div class="confirm-content balance-edit-content">
       <h5 class="fw-bold mb-3">Edit Balance Entry</h5>
       <input type="hidden" id="editBalanceId">
-      <input type="hidden" id="editBalanceType">
+      <input type="hidden" id="editBalanceSourceType">
       <input type="hidden" id="editBalanceOriginalDelta">
       <input type="hidden" id="editBalanceOriginalBalance">
+      <div class="mb-3">
+        <label class="form-label" for="editBalanceMode">Mode</label>
+        <select id="editBalanceMode" class="form-select">
+          <option value="add">Add / Change Amount</option>
+          <option value="sync">Sync / Absolute Balance</option>
+        </select>
+        <small class="text-muted d-block mt-2">Changing this controls whether the value below is treated as a delta or an absolute balance.</small>
+      </div>
       <div class="mb-3">
         <label class="form-label" id="editBalanceValueLabel" for="editBalanceValue">Amount</label>
         <input id="editBalanceValue" class="form-control" type="number" step="0.01">
@@ -212,6 +231,10 @@ function ensureEditModal() {
     }
   });
   modal.querySelector('#editBalanceValue').addEventListener('input', () => updateEditImpact(modal));
+  modal.querySelector('#editBalanceMode').addEventListener('change', () => {
+    syncEditModeFields(modal, true);
+    updateEditImpact(modal);
+  });
 
   return modal;
 }
@@ -222,7 +245,7 @@ function readMoneyValue(value) {
 }
 
 function updateEditImpact(modal) {
-  const type = modal.querySelector('#editBalanceType').value;
+  const mode = modal.querySelector('#editBalanceMode').value;
   const rawValue = modal.querySelector('#editBalanceValue').value;
   const value = parseFloat(rawValue);
   const originalDelta = readMoneyValue(modal.querySelector('#editBalanceOriginalDelta').value);
@@ -235,13 +258,13 @@ function updateEditImpact(modal) {
     return;
   }
 
-  if (type === 'sync') {
+  if (mode === 'sync') {
     const shiftAmount = value - originalBalance;
     const resultingDelta = originalDelta + shiftAmount;
     impactEl.innerHTML = `
       <span>New absolute balance: <strong>Rs. ${formatNumber(value)}</strong></span>
       <span>Entry change becomes: <strong>Rs. ${formatNumber(resultingDelta)}</strong></span>
-      <span>Later balances shift by: <strong>Rs. ${formatNumber(shiftAmount)}</strong></span>
+      <span>Following rows are recalculated from this balance.</span>
     `;
     return;
   }
@@ -251,22 +274,35 @@ function updateEditImpact(modal) {
   impactEl.innerHTML = `
     <span>Entry change becomes: <strong>Rs. ${formatNumber(value)}</strong></span>
     <span>Entry balance becomes: <strong>Rs. ${formatNumber(resultingBalance)}</strong></span>
-    <span>Later balances shift by: <strong>Rs. ${formatNumber(shiftAmount)}</strong></span>
+    <span>Immediate shift before the next sync: <strong>Rs. ${formatNumber(shiftAmount)}</strong></span>
   `;
+}
+
+function syncEditModeFields(modal, resetValue = false) {
+  const mode = modal.querySelector('#editBalanceMode').value;
+  const valueInput = modal.querySelector('#editBalanceValue');
+  modal.querySelector('#editBalanceValueLabel').textContent = mode === 'sync' ? 'Absolute Balance' : 'Change Amount';
+  modal.querySelector('#editBalanceModeHelp').textContent = mode === 'sync'
+    ? 'Sync mode saves this row as an absolute balance. Its change amount is calculated from the previous row.'
+    : 'Add mode saves this row as a change amount. Following rows are recalculated; later sync rows stay absolute.';
+  if (resetValue) {
+    valueInput.value = mode === 'sync'
+      ? modal.querySelector('#editBalanceOriginalBalance').value || ''
+      : modal.querySelector('#editBalanceOriginalDelta').value || '';
+  }
 }
 
 function openEditModal(button) {
   const modal = ensureEditModal();
   const type = button.dataset.type;
+  const mode = button.dataset.mode || (type === 'sync' ? 'sync' : 'add');
   modal.querySelector('#editBalanceId').value = button.dataset.id || '';
-  modal.querySelector('#editBalanceType').value = type || '';
+  modal.querySelector('#editBalanceSourceType').value = type || '';
+  modal.querySelector('#editBalanceMode').value = mode;
   modal.querySelector('#editBalanceOriginalDelta').value = button.dataset.delta || '0';
   modal.querySelector('#editBalanceOriginalBalance').value = button.dataset.balance || '0';
-  modal.querySelector('#editBalanceValueLabel').textContent = type === 'sync' ? 'New Absolute Balance' : 'New Change Amount';
-  modal.querySelector('#editBalanceModeHelp').textContent = type === 'sync'
-    ? 'Sync entries are edited as an absolute balance. The change amount is calculated from the previous balance.'
-    : 'Add entries are edited as a change amount. Later balances move by the difference.';
-  modal.querySelector('#editBalanceValue').value = type === 'sync' ? button.dataset.balance || '' : button.dataset.delta || '';
+  syncEditModeFields(modal, false);
+  modal.querySelector('#editBalanceValue').value = mode === 'sync' ? button.dataset.balance || '' : button.dataset.delta || '';
   modal.querySelector('#editBalanceNote').value = button.dataset.note || '';
   updateEditImpact(modal);
   modal.classList.add('show');
@@ -275,7 +311,7 @@ function openEditModal(button) {
 async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) {
   const modal = ensureEditModal();
   const id = modal.querySelector('#editBalanceId').value;
-  const type = modal.querySelector('#editBalanceType').value;
+  const mode = modal.querySelector('#editBalanceMode').value;
   const value = parseFloat(modal.querySelector('#editBalanceValue').value);
   const note = modal.querySelector('#editBalanceNote').value || '';
 
@@ -289,7 +325,7 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) 
     return;
   }
 
-  const payload = type === 'sync' ? { balance: value, note } : { delta: value, note };
+  const payload = mode === 'sync' ? { mode, balance: value, note } : { mode, delta: value, note };
   try {
     await fetchJSON(`/api/balance/${encodeURIComponent(id)}/update`, {}, {
       method: 'POST',
@@ -313,8 +349,10 @@ async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, 
   const id = button.dataset.id;
   const note = button.dataset.note || 'No note';
   const type = button.dataset.type || '';
+  const mode = button.dataset.mode || (type === 'sync' ? 'sync' : 'add');
+  const delta = readMoneyValue(button.dataset.delta);
   
-  const confirmed = await window.FinTrak?.confirm?.(`Delete this balance entry (${type}: ${note})?`, 'Delete');
+  const confirmed = await window.FinTrak?.confirm?.(`Delete this balance entry (${type}/${mode}: ${note})? Its change of Rs. ${formatNumber(delta)} will be removed and following rows recalculated.`, 'Delete');
   if (!confirmed) return;
 
   try {

@@ -1,0 +1,26 @@
+{% set nav_items = [
+    (['balance'], 'balance', 'Balance'),
+    (['balance_analytics'], 'balance_analytics', 'Balance Analytics'),
+    (['transactions'], 'transactions', 'Transactions'),
+    (['analytics'], 'analytics', 'Spend Analytics'),
+    (['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'], 'recurring', 'Recurring Bills'),
+    (['trips', 'trip_detail'], 'trips', 'Trips'),
+    (['splits', 'split_detail', 'split_edit', 'split_entry_edit'], 'splits', 'Split Bills'),
+    (['sync_status'], 'sync_status', 'Offline Sync'),
+    (['management', 'management_category_delete', 'management_category_edit', 'management_split_person_edit', 'management_split_person_delete'], 'management', 'Setup & Settings')
+] %}
+
+{% for endpoints, route, label in nav_items %}
+    {% set is_view_only = session.get('view_only') %}
+    {# If in view-only mode, skip recurring, sync_status, and management routes #}
+    {% if not is_view_only or route not in ['recurring', 'sync_status', 'management'] %}
+        <li class="nav-item">
+            <a class="nav-link {{ 'active' if request.endpoint in endpoints else '' }}" href="{{ url_for(route) }}">
+                {{ label }}
+                {% if route == 'sync_status' %}
+                    <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span>
+                {% endif %}
+            </a>
+        </li>
+    {% endif %}
+{% endfor %}

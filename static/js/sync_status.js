@@ -22,10 +22,10 @@
   let cacheRefreshRequestedForCurrentWake = false;
   const pollMs = Number(window.FinTrakConstants?.sync_status_poll_seconds || 12) * 1000;
   const cacheItems = [
-    { id: 'view_only_password', group: 'Server', label: 'View-only password hash', detail: 'Waiting for Render.' },
-    { id: 'categories', group: 'Server', label: 'Categories', detail: 'Waiting for Render.' },
-    { id: 'split_people', group: 'Server', label: 'Split people', detail: 'Waiting for Render.' },
-    { id: 'user_auth', group: 'Server', label: 'Current user auth hash', detail: 'Waiting for Render.' },
+    { id: 'view_only_password', group: 'Firestore', label: 'View-only password hash', detail: 'Waiting for Render.' },
+    { id: 'categories', group: 'Firestore', label: 'Categories', detail: 'Waiting for Render.' },
+    { id: 'split_people', group: 'Firestore', label: 'Split people', detail: 'Waiting for Render.' },
+    { id: 'user_auth', group: 'Firestore', label: 'Current user auth hash', detail: 'Waiting for Render.' },
     { id: 'browser_categories', group: 'Browser', label: 'Cached categories', detail: 'No local snapshot checked yet.' },
     { id: 'browser_balance', group: 'Browser', label: 'Cached balance', detail: 'No local snapshot checked yet.' },
     { id: 'browser_balance_history', group: 'Browser', label: 'Cached balance history', detail: 'No local snapshot checked yet.' },
@@ -99,9 +99,7 @@
       group.textContent = item.group;
 
       const statusBadge = document.createElement('span');
-      statusBadge.className = `badge ${statusClass}`;
-      statusBadge.style.fontSize = '0.62rem';
-      statusBadge.style.padding = '0.1rem 0.3rem';
+      statusBadge.className = `badge sync-status-compact ${statusClass}`;
       statusBadge.textContent = statusText;
 
       groupContainer.append(group, statusBadge);
@@ -143,9 +141,9 @@
 
     ['view_only_password', 'categories', 'split_people', 'user_auth'].forEach((id) => {
       if (updated.has(id)) {
-        setCacheItem(id, 'Updated', 'Server cache refreshed.');
+        setCacheItem(id, 'Updated', 'Firestore value checked.');
       } else if (errors.has(id)) {
-        setCacheItem(id, 'Failed', 'Server cache refresh failed.');
+        setCacheItem(id, 'Failed', 'Firestore check failed.');
       } else {
         setCacheItem(id, 'Skipped', 'No update returned.');
       }
@@ -259,8 +257,8 @@
     const updated = Array.isArray(cacheRefresh.updated) ? cacheRefresh.updated : [];
     elements.cacheState.textContent = cacheRefresh.ok ? 'Updated' : 'Needs retry';
     elements.cacheMessage.textContent = cacheRefresh.ok
-      ? `Checked ${updated.length || 0} cache area${updated.length === 1 ? '' : 's'} before sync.`
-      : 'Cache check could not finish. It will retry on the next status check.';
+      ? `Checked ${updated.length || 0} Firestore area${updated.length === 1 ? '' : 's'} before sync.`
+      : 'Firestore check could not finish. It will retry on the next status check.';
     applyServerCacheResult(cacheRefresh);
   }
 
@@ -288,7 +286,7 @@
       if (shouldRefreshCache) cacheRefreshRequestedForCurrentWake = renderAwake;
       elements.renderState.textContent = renderAwake ? 'Awake' : 'Not ready';
       elements.renderMessage.textContent = renderAwake
-        ? 'The server responded. Cache check ran before pending actions.'
+        ? 'The server responded. Firestore check ran before pending actions.'
         : 'The server did not return a ready response yet.';
       renderCacheRefreshStatus(data.cache_refresh);
       if (renderAwake) {
