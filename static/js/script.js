@@ -858,6 +858,36 @@
         }
     }
 
+    function initParticipantChecklistValidation() {
+        document.addEventListener('submit', (event) => {
+            const form = event.target;
+            const queueType = form.dataset.offlineQueue;
+            
+            if (queueType === 'split-create' || queueType === 'split-edit') {
+                const checked = form.querySelectorAll('input[name="people"]:checked');
+                if (checked.length === 0) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showFlash('At least 1 participant must be selected.', 'warning');
+                    return false;
+                }
+            }
+            
+            if (queueType === 'trip-create' || queueType === 'trip-edit') {
+                const costTypeSelect = form.querySelector('[name="cost_type"]');
+                if (costTypeSelect && costTypeSelect.value === 'split') {
+                    const checked = form.querySelectorAll('input[name="people"]:checked');
+                    if (checked.length === 0) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        showFlash('At least 1 participant must be selected for the Split Account.', 'warning');
+                        return false;
+                    }
+                }
+            }
+        }, true);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         window.FinTrak?.cache?.commitCredentials?.();
         formatDateElements();
@@ -869,6 +899,7 @@
         initMobileNavbarDrawer();
         initClientTableSorting();
         initQueryParamModals();
+        initParticipantChecklistValidation();
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltipTriggers.forEach((el) => new bootstrap.Tooltip(el));
