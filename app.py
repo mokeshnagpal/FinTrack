@@ -4654,6 +4654,50 @@ def api_balance_update(entry_id):
         app.logger.exception("Failed to update balance entry id=%s user=%s", entry_id, username)
         return jsonify({"error": "Failed to update balance entry"}), 500
 
+@app.route('/api/balance/<string:entry_id>/delete', methods=['POST'])
+@login_required
+def api_balance_delete(entry_id):
+    if not session.get('logged_in'):
+        abort(403, description="Full authentication required")
+
+    username = require_user()
+    doc_ref = bal_collection(username).document(entry_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        app.logger.warning("Balance delete requested for missing entry id=%s user=%s", entry_id, username)
+        return jsonify({"error": "Balance entry not found"}), 404
+
+    entry = doc_to_txn(doc)
+    entry_type = (entry.get('type') or '').lower()
+    if entry_type not in {'add', 'sync'}:
+        app.logger.warning("Balance delete blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
+        return jsonify({"error": "Only manual add/sync balance entries can be deleted."}), 400
+
+    try:
+        delta = float(entry.get('delta', 0.0))
+        balance_diff = -delta
+
+        # Delete the document
+        doc_ref.delete()
+
+        # Shift all subsequent entries
+        shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+        app.logger.info(
+            "Balance entry deleted id=%s user=%s type=%s shifted=%s",
+            entry_id,
+            username,
+            entry_type,
+            shifted,
+        )
+        return jsonify({
+            "ok": True,
+            "shifted": shifted
+        })
+    except Exception:
+        app.logger.exception("Failed to delete balance entry id=%s user=%s", entry_id, username)
+        return jsonify({"error": "Failed to delete balance entry"}), 500
+
+
 @app.route('/api/balance/undo', methods=['POST'])
 @login_required
 def api_balance_undo():

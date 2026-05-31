@@ -132,31 +132,39 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   if (!historyBody) return;
   historyBody.innerHTML = '';
 
-  (data.history || []).forEach((entry, index) => {
+  (data.history || []).forEach((entry) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
-    const isLatest = index === 0;
-    const canEdit = isLatest && ['add', 'sync'].includes(type) && document.body.dataset.viewOnly !== 'true';
-    const editButton = canEdit
-      ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn"
+    const isManual = ['add', 'sync'].includes(type);
+    const viewOnly = document.body.dataset.viewOnly === 'true';
+    const hasActions = isManual && !viewOnly;
+
+    const actionButtons = hasActions
+      ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
             data-id="${escapeAttr(entry.id || '')}"
             data-type="${escapeAttr(type)}"
             data-delta="${escapeAttr(entry.delta)}"
             data-balance="${escapeAttr(entry.balance)}"
             data-note="${escapeAttr(entry.note || '')}">
             Edit
-          </button>`
+         </button>
+         <button class="btn btn-sm btn-outline-danger balance-delete-btn"
+            data-id="${escapeAttr(entry.id || '')}"
+            data-type="${escapeAttr(type)}"
+            data-note="${escapeAttr(entry.note || '')}">
+            Delete
+         </button>`
       : `<button class="btn btn-sm btn-outline-secondary" disabled
-            title="${isLatest ? 'Edit the source transaction for transaction-linked entries.' : 'Only the latest manual balance entry can be edited.'}">
+            title="Only manual balance entries (Add/Sync) can be edited or deleted.">
             Locked
-          </button>`;
+         </button>`;
 
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
                     <td data-label="Type">${escapeHtml(entry.type || '')}</td>
                     <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
                     <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
                     <td data-label="Note">${escapeHtml(formatDisplayNote(entry.note || ''))}</td>
-                    <td data-label="Actions" class="text-end"><div class="table-actions">${editButton}</div></td>`;
+                    <td data-label="Actions" class="text-end"><div class="table-actions">${actionButtons}</div></td>`;
     historyBody.appendChild(tr);
   });
 
@@ -301,6 +309,26 @@ async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody) {
   await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody);
 }
 
+async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, historyBody) {
+  const id = button.dataset.id;
+  const note = button.dataset.note || 'No note';
+  const type = button.dataset.type || '';
+  
+  const confirmed = await window.FinTrak?.confirm?.(`Delete this balance entry (${type}: ${note})?`, 'Delete');
+  if (!confirmed) return;
+
+  try {
+    await fetchJSON(`/api/balance/${encodeURIComponent(id)}/delete`, {}, {
+      method: 'POST'
+    });
+    showToast('Balance entry deleted', 'success');
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+  } catch (error) {
+    console.error('Balance entry deletion failed', error);
+    showToast('Deletion failed', 'danger', error.message);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const currentBalanceEl = document.getElementById('currentBalance');
   const balanceTimestampEl = document.getElementById('balanceTimestamp');
@@ -409,10 +437,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (historyBody) {
-    historyBody.addEventListener('click', (event) => {
-      const button = event.target.closest('.balance-edit-btn');
-      if (!button) return;
-      openEditModal(button);
+    historyBody.addEventListener('click', async (event) => {
+      const editBtn = event.target.closest('.balance-edit-btn');
+      if (editBtn) {
+        openEditModal(editBtn);
+        return;
+      }
+
+      const deleteBtn = event.target.closest('.balance-delete-btn');
+      if (deleteBtn) {
+        await deleteBalanceEntry(deleteBtn, currentBalanceEl, balanceTimestampEl, historyBody);
+      }
     });
   }
 
