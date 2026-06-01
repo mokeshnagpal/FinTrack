@@ -44,7 +44,7 @@
             <span class="kicker">Cache Details</span>
             <h5>Updated Data</h5>
         </div>
-        {% call badge('Waiting', id='cacheDetailBadge') %}{% endcall %}
+        {{ badge('Waiting', id='cacheDetailBadge') }}
     </div>
     <div id="cacheDetailList" class="sync-cache-list" aria-live="polite"></div>
 {% endcall %}
@@ -55,7 +55,7 @@
             <span class="kicker">Pending Actions</span>
             <h5>Browser Queue</h5>
         </div>
-        {% call badge('Waiting', id='queueBadge') %}{% endcall %}
+        {{ badge('Waiting', id='queueBadge') }}
     </div>
     <div id="pendingList" class="sync-pending-list">
         <p class="text-muted mb-0">No pending actions found.</p>

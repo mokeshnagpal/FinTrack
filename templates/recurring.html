@@ -61,7 +61,7 @@
                                 {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
                             {% else %}
-                            {% call badge('Read only') %}{% endcall %}
+                            {{ badge('Read only') }}
                             {% endif %}
                         </div>
 
@@ -155,7 +155,7 @@
                                 {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
                             {% else %}
-                            {% call badge('Read only') %}{% endcall %}
+                            {{ badge('Read only') }}
                             {% endif %}
                         </div>
 

@@ -3,7 +3,7 @@
 {% block content %}
 {% set split_id = split_doc.id or split_doc._id %}
 
-{% set header_desc = '✓ Live split bill. Cached totals and latest entries remain available.' if split_doc.is_live else 'Saved split bill. Full data available when backend responds.' %}
+{% set header_desc = 'Live split bill. Cached totals and latest entries remain available.' if split_doc.is_live else 'Saved split bill. Full data available when backend responds.' %}
 {% call page_header(split_doc.title or 'Untitled split', kicker='Shared Bills', description=header_desc, extra_class='split-detail-header', attrs={'data-split-id': split_id, 'data-split-live': 'true' if split_doc.is_live else 'false'}) %}
     {{ link_button(url_for('splits'), 'Back', kind='secondary', outline=true) }}
     {% if not session.get('view_only') %}
@@ -111,7 +111,7 @@
                                     </form>
                                 {% endcall %}
                                 {% else %}
-                                {% call badge('Read only') %}{% endcall %}
+                                {{ badge('Read only') }}
                                 {% endif %}
                             </td>
                         </tr>

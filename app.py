@@ -1,6 +1,6 @@
 from flask import (
     Flask, render_template, redirect, url_for, flash,
-    request, jsonify, send_file, abort, session
+    request, jsonify, send_file, send_from_directory, abort, session
 )
 from functools import wraps
 
@@ -196,6 +196,13 @@ def client_constants_context():
         }
     }
 
+@app.route('/sw.js')
+def service_worker():
+    response = send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
+
 # ---------------------------------------------------------------------
 # Utilities: timestamp parsing & document conversion
 # ---------------------------------------------------------------------
@@ -207,6 +214,7 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/balance/analytics',
     '/analytics',
     '/transactions',
+    '/trips',
     '/splits',
     '/api/balance_current',
     '/api/balance_series',
@@ -2033,7 +2041,7 @@ def build_recurring_balance_doc_from_payload(payload, last_applied=None):
 @login_required
 def recurring():
     form = RecurringForm()
-    balance_form = RecurringBalanceForm()
+    balance_form = RecurringBalanceForm(prefix='balance')
     apply_category_choices(form)
     if request.method == 'POST':
         if request.is_json:
@@ -2151,7 +2159,7 @@ def recurring_delete(r_id):
 @app.route('/recurring/balance', methods=['POST'])
 @login_required
 def recurring_balance():
-    form = RecurringBalanceForm()
+    form = RecurringBalanceForm(prefix='balance')
     if request.is_json:
         username = require_user()
         payload = request.get_json(silent=True) or {}
@@ -2475,6 +2483,9 @@ def create_split_entry(username, split_id, entry_doc, client_action_id=None):
 @login_required
 def splits():
     username = require_user()
+    if session.get('view_only') and request.method != 'GET':
+        abort(401, description="View-only sessions cannot create splits")
+
     form = SplitDocumentForm()
     if session.get('view_only'):
         form = SplitDocumentForm(formdata=None)
@@ -3071,6 +3082,9 @@ def split_record_txn(split_id):
 @login_required
 def trips():
     username = require_user()
+    if session.get('view_only') and request.method != 'GET':
+        abort(401, description="View-only sessions cannot create trips")
+
     form = TripForm()
     if session.get('view_only'):
         form = TripForm(formdata=None)
@@ -3082,8 +3096,10 @@ def trips():
             name = validate_short_text(payload.get('name'), 'Trip Name')
             start_date_str = payload.get('start_date')
             end_date_str = payload.get('end_date')
-            description = validate_short_text(payload.get('description'), 'Description', max_len=500) or ''
-            photo_link = validate_short_text(payload.get('photo_link'), 'Photos Link', max_len=255) or ''
+            description_raw = (payload.get('description') or '').strip()
+            photo_link_raw = (payload.get('photo_link') or '').strip()
+            description = validate_short_text(description_raw, 'Description', max_length=500) if description_raw else ''
+            photo_link = validate_short_text(photo_link_raw, 'Photos Link', max_length=255) if photo_link_raw else ''
             cost_type = payload.get('cost_type', 'fixed')
             approx_cost_val = float(payload.get('approx_cost') or 0.0)
 
@@ -3204,8 +3220,10 @@ def trip_edit(trip_id):
         name = validate_short_text(payload.get('name'), 'Trip Name')
         start_date_str = payload.get('start_date')
         end_date_str = payload.get('end_date')
-        description = validate_short_text(payload.get('description'), 'Description', max_len=500) or ''
-        photo_link = validate_short_text(payload.get('photo_link'), 'Photos Link', max_len=255) or ''
+        description_raw = (payload.get('description') or '').strip()
+        photo_link_raw = (payload.get('photo_link') or '').strip()
+        description = validate_short_text(description_raw, 'Description', max_length=500) if description_raw else ''
+        photo_link = validate_short_text(photo_link_raw, 'Photos Link', max_length=255) if photo_link_raw else ''
         cost_type = payload.get('cost_type', 'fixed')
         approx_cost_val = float(payload.get('approx_cost') or 0.0)
 

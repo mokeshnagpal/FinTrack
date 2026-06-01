@@ -133,7 +133,7 @@
                 </div>
 
                 <div class="form-text small text-muted mb-3 edit-split-notice-container {% if trip.cost_type == 'fixed' %}is-hidden{% endif %}" id="splitNoticeEdit{{ tid }}">
-                    ✓ Cost is automatically calculated from split entries per participant
+                    Cost is automatically calculated from split entries per participant.
                 </div>
 
                 {{ button('Update Trip', kind='primary', extra_class='w-100', type='submit') }}
@@ -204,7 +204,7 @@
         </div>
 
         <div class="form-text small text-muted mb-3 d-none" id="newSplitNotice">
-            ✓ Cost is automatically calculated from split entries per participant, and a split account will be created automatically.
+            Cost is automatically calculated from split entries per participant, and a split account will be created automatically.
         </div>
 
         {{ button('Save Trip', kind='primary', extra_class='w-100', type='submit') }}
