@@ -271,7 +271,14 @@ function renderCharts(totals, categories) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { tooltip: { mode: 'index', intersect: false } },
-      scales: { x: { ticks: { maxRotation: 0 } } },
+      scales: {
+        x: {
+          ticks: {
+            minRotation: 45,
+            maxRotation: 45,
+          },
+        },
+      },
     },
   });
 
@@ -293,24 +300,18 @@ function renderCharts(totals, categories) {
 function renderTransactions(transactions) {
   if (!elements.rawTableBody) return;
   elements.rawTableBody.innerHTML = '';
-  const canEdit = elements.rawTable && elements.rawTable.dataset.canEdit === 'true';
-  const emptyColspan = canEdit ? 5 : 4;
 
   if (!transactions.length) {
-    elements.rawTableBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="text-center text-muted py-4">No transactions in this range.</td></tr>`;
+    elements.rawTableBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted py-4">No transactions in this range.</td></tr>`;
     return;
   }
 
   transactions.forEach((transaction) => {
     const tr = document.createElement('tr');
-    const editCell = canEdit
-      ? `<td data-label="Actions" class="text-end"><div class="table-actions"><a class="btn btn-sm btn-outline-primary" href="/edit/${encodeURIComponent(transaction.id)}">Edit</a></div></td>`
-      : `<td data-label="Actions" class="text-end"><span class="badge">Read only</span></td>`;
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(transaction.timestamp)}</td>
                     <td data-label="Description">${escapeHtml(transaction.description)}</td>
                     <td data-label="Category">${escapeHtml(transaction.category)}</td>
-                    <td data-label="Amount" class="text-end">${Number(transaction.amount).toFixed(2)}</td>
-                    ${editCell}`;
+                    <td data-label="Amount" class="text-end">${Number(transaction.amount).toFixed(2)}</td>`;
     elements.rawTableBody.appendChild(tr);
   });
 }
@@ -335,7 +336,7 @@ async function refreshAnalytics() {
       window.FinTrak.initUnifiedTable(elements.rawTable);
     }
     if (chartsRendered) {
-      setStatus(`Showing ${params.from} to ${params.to}, grouped ${params.period}.`, 'success');
+      setStatus(`Showing ${formatDisplayDateText(params.from)} to ${formatDisplayDateText(params.to)}, grouped ${params.period}.`, 'success');
     }
   } catch (error) {
     console.error('analytics render failed', error);

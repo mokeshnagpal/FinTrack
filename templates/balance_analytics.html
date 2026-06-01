@@ -5,7 +5,7 @@
 
 {% call page_header('Balance Analytics', kicker='Insights', description='Track balance level, net changes, and entry types over time in IST.') %}
     <a class="btn btn-outline-primary" href="{{ url_for('balance') }}">Balance</a>
-    <a class="btn btn-outline-secondary" href="{{ url_for('analytics') }}">Spend Analytics</a>
+    <button id="exportCsvBtn" class="btn btn-outline-secondary" title="Export CSV for the current view">Export CSV</button>
 {% endcall %}
 
 {{ analytics_controls() }}

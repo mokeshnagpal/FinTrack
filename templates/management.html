@@ -135,6 +135,19 @@
                 <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">Add Category</button>
             </div>
 
+            <form method="post" action="{{ url_for('management_set_default_category') }}" class="management-form-box mb-3 d-flex align-items-center gap-2 flex-wrap" style="max-width: 480px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label class="form-label mb-0 fw-semibold" for="defaultCategorySelect" style="font-size: 0.95rem;">Default selected category:</label>
+                <div class="d-flex align-items-center gap-2 flex-grow-1">
+                    <select id="defaultCategorySelect" name="default_category" class="form-select form-select-sm" onchange="this.form.submit()">
+                        {% for category in categories %}
+                        <option value="{{ category }}" {% if category == default_category %}selected{% endif %}>{{ category }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-primary d-none">Save</button>
+                </div>
+            </form>
+
             {% call table_shell() %}
                 <thead>
                     <tr>

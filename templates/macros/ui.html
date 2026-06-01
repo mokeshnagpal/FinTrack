@@ -140,29 +140,36 @@
 {% macro pager(paginate_obj, endpoint, extra_params=none) -%}
 {% if paginate_obj.items %}
 <nav aria-label="Pagination">
-    <ul class="pagination justify-content-center">
-        {% if paginate_obj.has_prev %}
-        <li class="page-item">
-            <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.prev_num, cursor=paginate_obj.prev_cursor, **(extra_params or {})) }}">
-                Previous
-            </a>
-        </li>
-        {% else %}
-        <li class="page-item disabled"><span class="page-link">Previous</span></li>
-        {% endif %}
+    {% set start = ((paginate_obj.page - 1) * paginate_obj.per_page) + 1 %}
+    {% set end = start + paginate_obj.items|length - 1 %}
+    <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-2">
+        <div class="small text-muted">
+            Showing {{ start }}&ndash;{{ end }} · page {{ paginate_obj.page }}
+        </div>
+        <ul class="pagination mb-0">
+            {% if paginate_obj.has_prev %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.prev_num, cursor=paginate_obj.prev_cursor, **(extra_params or {})) }}">
+                    Previous
+                </a>
+            </li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link">Previous</span></li>
+            {% endif %}
 
-        <li class="page-item active"><span class="page-link">{{ paginate_obj.page }}</span></li>
+            <li class="page-item active"><span class="page-link">{{ paginate_obj.page }}</span></li>
 
-        {% if paginate_obj.has_next %}
-        <li class="page-item">
-            <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.next_num, cursor=paginate_obj.next_cursor, **(extra_params or {})) }}">
-                Next
-            </a>
-        </li>
-        {% else %}
-        <li class="page-item disabled"><span class="page-link">Next</span></li>
-        {% endif %}
-    </ul>
+            {% if paginate_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.next_num, cursor=paginate_obj.next_cursor, **(extra_params or {})) }}">
+                    Next
+                </a>
+            </li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link">Next</span></li>
+            {% endif %}
+        </ul>
+    </div>
 </nav>
 {% endif %}
 {%- endmacro %}
@@ -310,6 +317,15 @@
         <div>
             <label class="form-label small mb-1 d-block" for="toDate">To</label>
             <input id="toDate" class="form-control form-control-sm" type="date">
+        </div>
+
+        <div>
+            <label class="form-label small mb-1 d-block" for="customPeriodSelect">Group by</label>
+            <select id="customPeriodSelect" class="form-select form-select-sm period-select">
+                <option value="daily" selected>Daily</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+            </select>
         </div>
 
         <div class="analytics-filter-action">

@@ -141,7 +141,12 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
   if (!historyBody) return;
   historyBody.innerHTML = '';
 
-  (data.history || []).forEach((entry) => {
+  const manualHistory = (data.history || []).filter((entry) => {
+    const type = String(entry.type || '').toLowerCase();
+    return type === 'add' || type === 'sync';
+  });
+
+  manualHistory.forEach((entry) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
     const mode = normalizeBalanceMode(entry);

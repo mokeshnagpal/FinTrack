@@ -7,8 +7,11 @@
   }
 
   function buildParams(elements) {
+    const periodSelect = document.getElementById('periodSelect');
+    const customPeriodSelect = document.getElementById('customPeriodSelect');
+    const periodVal = (customPeriodSelect && customPeriodSelect.value) || (periodSelect && periodSelect.value) || 'daily';
     return {
-      period: elements.periodSelect.value,
+      period: periodVal,
       count: 30,
       from: elements.fromDate.value || '',
       to: elements.toDate.value || '',
@@ -71,12 +74,35 @@
       });
     });
 
+    const periodSelect = document.getElementById('periodSelect');
+    const customPeriodSelect = document.getElementById('customPeriodSelect');
+
+    if (periodSelect && customPeriodSelect) {
+      periodSelect.addEventListener('change', () => {
+        if (customPeriodSelect.value !== periodSelect.value) {
+          customPeriodSelect.value = periodSelect.value;
+          customPeriodSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+      customPeriodSelect.addEventListener('change', () => {
+        if (periodSelect.value !== customPeriodSelect.value) {
+          periodSelect.value = customPeriodSelect.value;
+          periodSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    }
+
     if (elements.applyBtn && onRefresh) {
       elements.applyBtn.addEventListener('click', onRefresh);
     }
 
     if (autoRefreshOnChange && onRefresh) {
-      elements.periodSelect.addEventListener('change', onRefresh);
+      if (periodSelect) {
+        periodSelect.addEventListener('change', onRefresh);
+      }
+      if (customPeriodSelect) {
+        customPeriodSelect.addEventListener('change', onRefresh);
+      }
       elements.fromDate.addEventListener('change', () => {
         clearPresetActive(elements);
         onRefresh();

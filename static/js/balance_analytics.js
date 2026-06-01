@@ -16,6 +16,7 @@ const elements = {
   fromDate: document.getElementById('fromDate'),
   toDate: document.getElementById('toDate'),
   periodSelect: document.getElementById('periodSelect'),
+  exportCsvBtn: document.getElementById('exportCsvBtn'),
   status: document.getElementById('analyticsStatus'),
   presets: Array.from(document.querySelectorAll('[data-range]')),
   tabs: Array.from(document.querySelectorAll('#balanceAnalyticsTabs [data-view]')),
@@ -233,6 +234,14 @@ function renderCharts(data) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { tooltip: { mode: 'index', intersect: false } },
+      scales: {
+        x: {
+          ticks: {
+            minRotation: 45,
+            maxRotation: 45,
+          },
+        },
+      },
     },
   });
 
@@ -252,6 +261,14 @@ function renderCharts(data) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: {
+            minRotation: 45,
+            maxRotation: 45,
+          },
+        },
+      },
     },
   });
 
@@ -270,6 +287,14 @@ function renderCharts(data) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: {
+            minRotation: 45,
+            maxRotation: 45,
+          },
+        },
+      },
     },
   });
 
@@ -343,7 +368,7 @@ async function refreshAnalytics() {
 
     if (chartsRendered) {
       const rangeLabel = params.from && params.to
-        ? `${params.from} to ${params.to}`
+        ? `${formatDisplayDateText(params.from)} to ${formatDisplayDateText(params.to)}`
         : 'selected range';
       setStatus(`Showing ${rangeLabel}, grouped ${params.period}.`, 'success');
     }
@@ -400,6 +425,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   elements.tabs.forEach((tab) => {
     tab.addEventListener('click', () => setActiveView(tab.dataset.view));
+  });
+
+  elements.exportCsvBtn.addEventListener('click', () => {
+    window.open(`/export/balances_csv?${new URLSearchParams(controlApi ? controlApi.buildParams() : {}).toString()}`, '_blank');
   });
 
   refreshAnalytics();

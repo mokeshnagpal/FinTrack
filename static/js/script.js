@@ -452,10 +452,10 @@
         });
     }
 
-    function initCategorySelects() {
-        document.querySelectorAll('select[name="category"]').forEach((select) => {
-            if (select.dataset.enhancedCategory === 'true') return;
-            select.dataset.enhancedCategory = 'true';
+    function initCustomSelects() {
+        document.querySelectorAll('select:not(.no-enhance)').forEach((select) => {
+            if (select.dataset.enhancedSelect === 'true') return;
+            select.dataset.enhancedSelect = 'true';
             select.classList.add('category-native-select');
 
             const wrapper = document.createElement('div');
@@ -483,21 +483,34 @@
             const search = document.createElement('input');
             search.type = 'search';
             search.className = 'category-select-search';
-            search.placeholder = 'Search category';
+            
+            const selectName = select.getAttribute('name') || 'option';
+            const cleanName = selectName.replace(/_/g, ' ');
+            const capitalizedName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+            search.placeholder = `Search ${cleanName}`;
             search.autocomplete = 'off';
 
             const list = document.createElement('div');
             list.className = 'category-select-list';
             list.setAttribute('role', 'listbox');
 
-            const options = Array.from(select.options).map((option) => ({
-                value: option.value,
-                label: option.textContent.trim(),
-            }));
+            let options = [];
+
+            function updateOptions() {
+                options = Array.from(select.options).map((option) => ({
+                    value: option.value,
+                    label: option.textContent.trim(),
+                }));
+            }
+            updateOptions();
+
+            if (options.length <= 5) {
+                search.style.display = 'none';
+            }
 
             function currentLabel() {
                 const selected = options.find((option) => option.value === select.value);
-                return selected ? selected.label : 'Select category';
+                return selected ? selected.label : `Select ${cleanName}`;
             }
 
             function closePanel() {
@@ -511,6 +524,8 @@
                 button.setAttribute('aria-expanded', 'true');
                 chevron.classList.add('is-open');
                 search.value = '';
+                updateOptions();
+                search.style.display = options.length <= 5 ? 'none' : 'block';
                 renderOptions('');
                 search.focus();
             }
@@ -531,7 +546,7 @@
                 if (matches.length === 0) {
                     const empty = document.createElement('div');
                     empty.className = 'category-select-empty';
-                    empty.textContent = 'No categories found';
+                    empty.textContent = 'No options found';
                     list.appendChild(empty);
                     return;
                 }
@@ -569,6 +584,17 @@
             document.addEventListener('click', (event) => {
                 if (!wrapper.contains(event.target)) closePanel();
             });
+
+            select.addEventListener('change', () => {
+                buttonText.textContent = currentLabel();
+            });
+
+            const observer = new MutationObserver(() => {
+                updateOptions();
+                search.style.display = options.length <= 5 ? 'none' : 'block';
+                buttonText.textContent = currentLabel();
+            });
+            observer.observe(select, { childList: true });
 
             panel.append(search, list);
             wrapper.append(button, panel);
@@ -942,6 +968,17 @@
         }, true);
     }
 
+    function autoDismissInlineAlerts() {
+        document.querySelectorAll('.flash-inline').forEach((alert) => {
+            setTimeout(() => {
+                alert.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+                alert.style.opacity = '0';
+                alert.style.transform = 'translateY(-10px)';
+                setTimeout(() => alert.remove(), 450);
+            }, 4000);
+        });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         registerServiceWorker();
         window.FinTrak?.cache?.commitCredentials?.();
@@ -950,12 +987,13 @@
         initCopyButtons();
         initConfirmForms();
         initPasswordToggles();
-        initCategorySelects();
+        initCustomSelects();
         initModalFormDismiss();
         initMobileNavbarDrawer();
         initClientTableSorting();
         initQueryParamModals();
         initParticipantChecklistValidation();
+        autoDismissInlineAlerts();
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltipTriggers.forEach((el) => new bootstrap.Tooltip(el));

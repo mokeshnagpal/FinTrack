@@ -218,6 +218,7 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/api/transactions_range',
     '/api/render_status',
     '/export/transactions_csv',
+    '/export/balances_csv',
     '/export/all_data_zip',
     '/static/',
     '/view',
@@ -330,17 +331,31 @@ def load_view_only_password_hash_from_store():
 
 def load_categories_from_store():
     categories = []
+    default_cat = 'Other'
     doc = categories_settings_ref().get(
         retry=None,
         timeout=FIRESTORE_TIMEOUT_SECONDS,
     )
     if doc.exists:
-        raw_categories = (doc.to_dict() or {}).get('items') or []
+        data = doc.to_dict() or {}
+        raw_categories = data.get('items') or []
         categories = [normalize_category_name(item) for item in raw_categories]
         categories = [item for item in categories if item]
+        default_cat = data.get('default_category') or 'Other'
     if not categories:
         categories = default_categories()
+    cache_set('default_category', default_cat)
     return list(cache_set('categories', categories))
+
+def get_default_category():
+    cached_default = cache_get('default_category')
+    if cached_default is not None:
+        return cached_default
+    try:
+        load_categories_from_store()
+        return cache_get('default_category') or 'Other'
+    except Exception:
+        return 'Other'
 
 def load_user_auth_from_store(username):
     normalized_username = normalize_username(username)
@@ -599,6 +614,12 @@ def apply_category_choices(form, include=None):
     if include_name and not category_exists(categories, include_name):
         categories.append(include_name)
     form.category.choices = [(item, item) for item in categories]
+    
+    default_cat = get_default_category()
+    if default_cat and category_exists(categories, default_cat):
+        form.category.default = default_cat
+        if request.method == 'GET' and not form.category.data:
+            form.category.data = default_cat
 
 def apply_split_entry_choices(form, person_include=None, category_include=None, split_people_override=None):
     apply_category_choices(form, include=category_include)
@@ -641,6 +662,7 @@ def render_management(
         current_username=get_current_username() or '',
         category_form=category_form or CategoryForm(prefix='category'),
         categories=categories if categories is not None else get_categories(),
+        default_category=get_default_category(),
         editing_category=editing_category,
         split_person_form=split_person_form or SplitPersonForm(prefix='split_person'),
         split_people=split_people if split_people is not None else get_split_people(),
@@ -3685,6 +3707,12 @@ def management_category_edit(category_name):
             return jsonify({'ok': False, 'error': 'Category already exists.'}), 400
         renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
         save_categories(renamed, updated_by=username)
+        if category_key(get_default_category()) == category_key(original):
+            categories_settings_ref().set({
+                'default_category': updated,
+                'updated_at': datetime.now(UTC),
+            }, merge=True)
+            cache_set('default_category', updated)
         app.logger.info("Category renamed via JSON old=%s new=%s user=%s", original, updated, username)
         return jsonify({'ok': True})
 
@@ -3696,6 +3724,12 @@ def management_category_edit(category_name):
 
         renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
         save_categories(renamed, updated_by=username)
+        if category_key(get_default_category()) == category_key(original):
+            categories_settings_ref().set({
+                'default_category': updated,
+                'updated_at': datetime.now(UTC),
+            }, merge=True)
+            cache_set('default_category', updated)
         app.logger.info("Category renamed old=%s new=%s user=%s", original, updated, username)
         flash('Category updated.', 'success')
         return redirect(url_for('management'))
@@ -3734,12 +3768,50 @@ def management_category_delete(category_name):
 
     if request.is_json:
         save_categories(remaining, updated_by=username)
+        if category_key(get_default_category()) == category_key(category):
+            categories_settings_ref().set({
+                'default_category': 'Other',
+                'updated_at': datetime.now(UTC),
+            }, merge=True)
+            cache_set('default_category', 'Other')
         app.logger.info("Category deleted via JSON name=%s user=%s", category, username)
         return jsonify({'ok': True})
 
     save_categories(remaining, updated_by=username)
+    if category_key(get_default_category()) == category_key(category):
+        categories_settings_ref().set({
+            'default_category': 'Other',
+            'updated_at': datetime.now(UTC),
+        }, merge=True)
+        cache_set('default_category', 'Other')
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
+    return redirect(url_for('management'))
+
+
+@app.route('/management/set_default_category', methods=['POST'])
+@login_required
+def management_set_default_category():
+    if session.get('view_only'):
+        flash("Action not allowed in view-only mode", "error")
+        return redirect(url_for('management'))
+
+    default_cat = request.form.get('default_category')
+    categories = get_categories()
+    if default_cat and category_exists(categories, default_cat):
+        try:
+            categories_settings_ref().set({
+                'default_category': default_cat,
+                'updated_at': datetime.now(UTC),
+            }, merge=True)
+            cache_set('default_category', default_cat)
+            flash(f"Default category updated to {default_cat}", "success")
+        except Exception as e:
+            app.logger.exception("Failed to set default category")
+            flash("Failed to update default category", "error")
+    else:
+        flash("Invalid category selected", "error")
+
     return redirect(url_for('management'))
 
 
@@ -4248,6 +4320,31 @@ def export_transactions_csv():
     filename = f"transactions_{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}.csv"
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=filename)
 
+@app.route('/export/balances_csv')
+@login_required
+def export_balances_csv():
+    start_dt, end_dt, _ = _parse_period_args(request.args)
+    username = require_user()
+    bal_docs = get_balances_in_range(start_dt, end_dt, order_desc=False, username=username)
+
+    si = io.StringIO()
+    cw = csv.writer(si)
+    cw.writerow(['id', 'timestamp', 'type', 'delta', 'balance', 'note'])
+    for b in bal_docs:
+        cw.writerow([
+            b.get('_id'),
+            format_ist(b.get('timestamp')),
+            _balance_type_label(b.get('type')),
+            f"{float(b.get('delta', 0.0)):.2f}",
+            f"{float(b.get('balance', 0.0)):.2f}",
+            b.get('note') or ''
+        ])
+
+    buf = io.BytesIO(si.getvalue().encode('utf-8'))
+    buf.seek(0)
+    filename = f"balances_{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}.csv"
+    return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=filename)
+
 @app.route('/export/all_data_zip')
 @login_required
 def export_all_data_zip():
@@ -4488,10 +4585,10 @@ def api_balance_current():
     q = (
         bal_collection(username)
         .order_by('timestamp', direction=firestore.Query.DESCENDING)
-        .limit(100)
+        .limit(500)
     )
     raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
-    docs = [d for d in raw_docs if d.get('type') not in ('txn', 'transaction')][:BALANCE_HISTORY_TABLE_LIMIT]
+    docs = [d for d in raw_docs if d.get('type') in ('add', 'sync')][:BALANCE_HISTORY_TABLE_LIMIT]
     history = [{
         'id': d.get('_id'),
         'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
