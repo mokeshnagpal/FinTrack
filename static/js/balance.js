@@ -326,7 +326,17 @@ async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, 
     await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
   } catch (error) {
     console.error('Balance entry deletion failed', error);
-    showToast('Deletion failed', 'danger', error.message);
+    if (window.FinTrak?.enqueueOfflineAction) {
+      window.FinTrak.enqueueOfflineAction(
+        'balance_delete',
+        { id },
+        `/api/balance/${encodeURIComponent(id)}/delete`
+      );
+      showToast('Delete saved locally', 'success', 'It will sync when the service wakes.');
+      await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+    } else {
+      showToast('Deletion failed', 'danger', error.message);
+    }
   }
 }
 
@@ -448,6 +458,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const deleteBtn = event.target.closest('.balance-delete-btn');
       if (deleteBtn) {
         await deleteBalanceEntry(deleteBtn, currentBalanceEl, balanceTimestampEl, historyBody);
+        return;
       }
     });
   }

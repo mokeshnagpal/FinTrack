@@ -289,6 +289,7 @@
   function endpointForActionType(type) {
     if (type === 'balance_add') return '/api/balance/add';
     if (type === 'balance_sync') return '/api/balance/sync';
+    if (type === 'balance_delete') return '';
     if (type === 'offline_login') return '/api/login_offline';
     if (type === 'cache_refresh') return '/api/render_status?refresh_cache=1';
     return '';
