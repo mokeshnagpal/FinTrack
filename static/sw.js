@@ -36,7 +36,100 @@ async function cachedFallback(request) {
     (await cache.match(request)) ||
     (await cache.match(NAVIGATION_FALLBACK)) ||
     new Response(
-      '<!doctype html><title>FinTrak</title><meta name="viewport" content="width=device-width,initial-scale=1"><h1>FinTrak</h1><p>The service is waking. Reopen this page after one successful online visit to use the cached login screen.</p>',
+      `<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FinTrak - Loading</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="auth-wrapper">
+    <div class="auth-card card">
+      <div class="card-body">
+        <div class="stack auth-stack">
+          <div class="center auth-heading">
+            <div class="auth-brand">FT</div>
+            <div>
+              <div class="page-title">FinTrak</div>
+              <div class="kicker">Loading</div>
+            </div>
+          </div>
+          <div class="auth-status-grid" aria-live="polite">
+            <div class="auth-status-item">
+              <span class="kicker">Service</span>
+              <strong id="authRenderState">Checking</strong>
+              <p id="authRenderMessage">Attempting to connect to the service...</p>
+            </div>
+            <div class="auth-status-item">
+              <span class="kicker">Cache</span>
+              <strong id="authCacheState">Checking</strong>
+              <p id="authCacheMessage">Checking for cached login...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Inline fallback status handler - keeps trying to load the real page
+    const authRenderState = document.getElementById('authRenderState');
+    const authRenderMessage = document.getElementById('authRenderMessage');
+    const authCacheState = document.getElementById('authCacheState');
+    const authCacheMessage = document.getElementById('authCacheMessage');
+
+    function setWaiting() {
+      authRenderState.textContent = 'Waking';
+      authRenderMessage.textContent = 'Waiting for the service to respond.';
+      checkCache();
+    }
+
+    function checkCache() {
+      try {
+        const cached = localStorage.getItem('fintrak_cached_auth');
+        if (cached) {
+          authCacheState.textContent = 'Available';
+          authCacheMessage.textContent = 'Cached login is available in this browser.';
+        } else {
+          authCacheState.textContent = 'Not available';
+          authCacheMessage.textContent = 'Enter username to check cached login.';
+        }
+      } catch (e) {
+        authCacheState.textContent = 'Unknown';
+        authCacheMessage.textContent = 'Could not check cache.';
+      }
+    }
+
+    // Keep trying to fetch the real login page
+    async function attemptReload() {
+      try {
+        const response = await fetch(window.location.href, { 
+          cache: 'no-store',
+          credentials: 'same-origin'
+        });
+        if (response.ok) {
+          // Real page is now available, reload
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        // Still offline
+      }
+      
+      authRenderState.textContent = 'Waking';
+      authRenderMessage.textContent = 'Service not ready yet. Retrying in 3 seconds...';
+      
+      // Retry after 3 seconds
+      setTimeout(attemptReload, 3000);
+    }
+
+    setWaiting();
+    attemptReload();
+  </script>
+</body>
+</html>`,
       { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
     )
   );

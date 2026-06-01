@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, metric_card, chart_card, analytics_controls %}
+{% from "macros/ui.html" import page_header, table_shell, metric_card, chart_card, analytics_controls, button, link_button, tab_button, badge, card %}
 {% block content %}
 
 {% call page_header('Spend Analytics', kicker='Insights', description='Review spending trends, categories, and transactions in IST.') %}
-    <a class="btn btn-outline-primary" href="{{ url_for('transactions') }}">Transactions</a>
-    <button id="exportCsvBtn" class="btn btn-outline-secondary" title="Export CSV for the current view">Export CSV</button>
+    {{ link_button(url_for('transactions'), 'Transactions', kind='primary', outline=true) }}
+    {% call button(kind='secondary', outline=true, id='exportCsvBtn', title='Export CSV for the current view') %}Export CSV{% endcall %}
 {% endcall %}
 
 {{ analytics_controls() }}
@@ -22,7 +22,9 @@
 <div class="row g-3 mb-3">
     <div class="col-lg-8 col-md-12">
         {% call chart_card('Spending Trend', 'mainChart') %}
-            <span class="badge" id="sumPrevBadge">Prev: <span id="sumPrev">0.00</span></span>
+            {% call badge(tone='neutral', id='sumPrevBadge') %}
+                Prev: <span id="sumPrev">0.00</span>
+            {% endcall %}
         {% endcall %}
     </div>
     <div class="col-lg-4 col-md-12">
@@ -32,7 +34,7 @@
 
 <div class="row g-3">
     <div class="col-lg-4 col-md-12">
-        <div class="card p-3 shadow-sm h-100">
+        {% call card(extra_class='p-3 shadow-sm h-100') %}
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Details</h6>
             <ul class="list-unstyled mb-0 analytics-detail-list">
                 <li>Minimum <strong id="sumMin">0.00</strong></li>
@@ -40,19 +42,19 @@
                 <li>Top Category <strong id="sumTopCat">-</strong></li>
                 <li>Largest Txn <strong id="sumLargest">-</strong></li>
             </ul>
-        </div>
+        {% endcall %}
     </div>
 
     <div class="col-lg-8 col-md-12">
-        <div class="card p-3 shadow-sm h-100">
+        {% call card(extra_class='p-3 shadow-sm h-100') %}
             <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
                 <h6 class="mb-0" id="panelHeading">Insight</h6>
                 <ul class="nav nav-tabs analytics-tabs" id="analyticsTabs" role="tablist">
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link active" id="graphs-tab" data-view="graphs" type="button">Insights</button>
+                        {{ tab_button('Insights', 'graphs-tab', active=true, attrs={'data-view':'graphs'}) }}
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link" id="raw-tab" data-view="raw" type="button">Transactions</button>
+                        {{ tab_button('Transactions', 'raw-tab', active=false, attrs={'data-view':'raw'}) }}
                     </li>
                 </ul>
             </div>
@@ -63,7 +65,7 @@
                 </div>
 
                 <div class="tab-pane fade" id="rawPane">
-                    {% call table_shell(extra_class='analytics-table-wrap', id='rawTable', **{'data-can-edit': 'true' if not session.get('view_only') else 'false'}) %}
+                    {% call table_shell(extra_class='analytics-table-wrap', id='rawTable', attrs={'data-can-edit': 'true' if not session.get('view_only') else 'false'}) %}
                         <thead>
                             <tr>
                                 <th class="sortable-header">When</th>
@@ -76,7 +78,7 @@
                     {% endcall %}
                 </div>
             </div>
-        </div>
+        {% endcall %}
     </div>
 </div>
 {% endblock %}

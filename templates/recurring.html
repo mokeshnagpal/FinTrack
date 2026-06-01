@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge %}
 {% block content %}
 
 {% if not session.get('view_only') %}
     {% call page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules and scheduled balance additions.') %}
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newExpenseModal">Set Expense Rule</button>
-        <button class="btn btn-outline-primary text-primary-hover" data-bs-toggle="modal" data-bs-target="#newBalanceModal">Set Balance Rule</button>
+        {{ button('Set Expense Rule', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newExpenseModal'}) }}
+        {{ button('Set Balance Rule', kind='primary', outline=true, type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newBalanceModal'}) }}
     {% endcall %}
 {% else %}
     {{ page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules and scheduled balance additions.') }}
@@ -54,14 +54,14 @@
                         {% if rid %}
                         <div class="table-actions">
                             {% if not session.get('view_only') %}
-                            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editExpenseModal{{ rid }}">Edit</button>
+                            {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editExpenseModal' ~ rid}) }}
                             <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
                                 data-confirm="Delete recurring expense rule?" class="d-inline" data-offline-queue="recurring-delete" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-danger">Delete</button>
+                                {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
                             {% else %}
-                            <span class="badge">Read only</span>
+                            {% call badge('Read only') %}{% endcall %}
                             {% endif %}
                         </div>
 
@@ -86,7 +86,7 @@
 
                                 {{ form_select('frequency' ~ rid, 'Frequency', 'frequency', form.frequency.choices, selected_value=r.frequency) }}
 
-                                <button type="submit" class="btn btn-primary w-100">Update Expense Rule</button>
+                                {{ button('Update Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
                             </form>
                         {% endcall %}
                         {% endif %}
@@ -148,14 +148,14 @@
                         {% if rid %}
                         <div class="table-actions">
                             {% if not session.get('view_only') %}
-                            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editBalanceModal{{ rid }}">Edit</button>
+                            {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editBalanceModal' ~ rid}) }}
                             <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
                                 data-confirm="Delete recurring balance rule?" class="d-inline" data-offline-queue="recurring-balance-delete" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-danger">Delete</button>
+                                {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
                             {% else %}
-                            <span class="badge">Read only</span>
+                            {% call badge('Read only') %}{% endcall %}
                             {% endif %}
                         </div>
 
@@ -179,7 +179,7 @@
 
                                 {{ form_select('bal_frequency' ~ rid, 'Frequency', 'frequency', balance_form.frequency.choices, selected_value=r.frequency) }}
 
-                                <button type="submit" class="btn btn-primary w-100">Update Balance Rule</button>
+                                {{ button('Update Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
                             </form>
                         {% endcall %}
                         {% endif %}
@@ -215,7 +215,7 @@
             </div>
         </div>
         {{ form_field(form.frequency) }}
-        <button class="btn btn-primary w-100">Save Expense Rule</button>
+        {{ button('Save Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
 
@@ -234,7 +234,7 @@
             </div>
         </div>
         {{ form_field(balance_form.frequency) }}
-        <button class="btn btn-primary w-100">Save Balance Rule</button>
+        {{ button('Save Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
 {% endif %}

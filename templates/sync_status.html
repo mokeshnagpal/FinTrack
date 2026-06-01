@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, card %}
+{% from "macros/ui.html" import page_header, card, button, badge %}
 {% block title %}Sync Status - FinTrak{% endblock %}
 {% block content %}
 
 {% call page_header('Offline Sync Queue', kicker='System Status', description='Check pending actions and Render server readiness.') %}
-    <button class="btn btn-primary" type="button" id="syncNowBtn">Sync Now</button>
+    {{ button('Sync Now', kind='primary', type='button', id='syncNowBtn') }}
 {% endcall %}
 
 <section class="sync-status-grid" aria-live="polite">
@@ -44,7 +44,7 @@
             <span class="kicker">Cache Details</span>
             <h5>Updated Data</h5>
         </div>
-        <span class="badge" id="cacheDetailBadge">Waiting</span>
+        {% call badge('Waiting', id='cacheDetailBadge') %}{% endcall %}
     </div>
     <div id="cacheDetailList" class="sync-cache-list" aria-live="polite"></div>
 {% endcall %}
@@ -55,7 +55,7 @@
             <span class="kicker">Pending Actions</span>
             <h5>Browser Queue</h5>
         </div>
-        <span class="badge" id="queueBadge">Waiting</span>
+        {% call badge('Waiting', id='queueBadge') %}{% endcall %}
     </div>
     <div id="pendingList" class="sync-pending-list">
         <p class="text-muted mb-0">No pending actions found.</p>

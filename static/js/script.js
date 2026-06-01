@@ -228,6 +228,57 @@
         return stack;
     }
 
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value).replace(/[&<>"'`=/]/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+            '`': '&#x60;',
+            '=': '&#x3D;',
+            '/': '&#x2F;',
+        }[char]));
+    }
+
+    function showToast(title, type = 'info', message = '') {
+        let container = document.getElementById('toastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toastContainer';
+            container.className = 'toast-container toast-container-elevated position-fixed top-0 end-0 p-3';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast text-bg-${type} border-0 shadow-sm mb-2`;
+        toast.setAttribute('role', 'alert');
+        toast.setAttribute('aria-live', 'assertive');
+        toast.setAttribute('aria-atomic', 'true');
+        toast.innerHTML = `
+            <div class="d-flex align-items-center">
+                <div class="toast-body">
+                    <strong>${escapeHtml(title)}</strong>${message ? `<div class="small mt-1">${escapeHtml(message)}</div>` : ''}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                    data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        `;
+
+        container.appendChild(toast);
+        if (typeof bootstrap !== 'undefined') {
+            const bsToast = new bootstrap.Toast(toast, { delay: 4000 });
+            bsToast.show();
+            toast.addEventListener('hidden.bs.toast', () => toast.remove());
+        } else {
+            setTimeout(() => toast.remove(), 4000);
+        }
+        return toast;
+    }
+
+    window.FinTrak.showToast = showToast;
+
     function showFlash(message, type = 'info', delay = 3500) {
         const div = document.createElement('div');
         div.className = `flash-message ${type}`;

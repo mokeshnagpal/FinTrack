@@ -2,9 +2,9 @@
   const limit = Number(window.FinTrakConstants?.split_entry_table_limit || 12);
   const refreshTimeoutMs = 8000;
 
-  function formatNumber(value) {
-    return Number(value || 0).toFixed(2);
-  }
+  // Use centralized functions from utils.js
+  const formatNumber = (v) => window.FinTrak.formatNumber(v);
+  const escapeHtml = (v) => window.FinTrak.escapeHtml(v);
 
   function formatDate(value) {
     if (window.FinTrak?.formatFriendlyDateHtml) {
@@ -13,25 +13,10 @@
     return escapeHtml(value || '');
   }
 
-  function escapeHtml(value) {
-    if (value === null || value === undefined) return '';
-    return String(value).replace(/[&<>"'`=/]/g, (char) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-      '`': '&#x60;',
-      '=': '&#x3D;',
-      '/': '&#x2F;',
-    }[char]));
-  }
-
   function showNotice(message, type = 'warning') {
-    const notice = document.getElementById('splitOfflineNotice');
-    if (!notice) return;
-    notice.className = `alert alert-${type}`;
-    notice.textContent = message;
+    if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
+      window.FinTrak.showToast(message, type === 'warning' ? 'warning' : 'info');
+    }
   }
 
   function renderTotals(totals) {

@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input, form_select %}
+{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input, form_select, button, link_button, badge %}
 {% block content %}
 {% if not session.get('view_only') %}
     {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTransactionModal">Add Transaction</button>
+        {{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addTransactionModal'}) }}
     {% endcall %}
 {% else %}
     {{ page_header('Transaction History', kicker='Records', description='Review recent spending activity.') }}
@@ -12,12 +12,10 @@
 <form class="transaction-toolbar" method="get" action="{{ url_for('transactions') }}">
     <input type="hidden" name="sort" value="{{ txns.sort }}">
     <input type="hidden" name="dir" value="{{ txns.direction }}">
-    <label class="visually-hidden" for="transactionSearch">Search transactions</label>
-    <input id="transactionSearch" class="form-control" type="search" name="q"
-        value="{{ txns.search }}" placeholder="Search description, category, amount, or date">
-    <button class="btn btn-primary" type="submit">Search</button>
+    {{ form_input('transactionSearch', 'Search transactions', 'q', type='search', value=txns.search, placeholder='Search description, category, amount, or date', label_class='visually-hidden') }}
+    {{ button('Search', kind='primary', type='submit') }}
     {% if txns.search %}
-    <a class="btn btn-outline-secondary" href="{{ url_for('transactions', sort=txns.sort, dir=txns.direction) }}">Clear</a>
+    {{ link_button(url_for('transactions', sort=txns.sort, dir=txns.direction), 'Clear', kind='secondary', outline=true) }}
     {% endif %}
 </form>
 
@@ -61,10 +59,7 @@
                         data-offline-queue="transaction-delete"
                         data-transaction-id="{{ txn.id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
-                            data-bs-target="#deleteModal{{ txn.id }}">
-                            Delete
-                        </button>
+                        {{ button('Delete', kind='danger', size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#deleteModal' ~ txn.id}) }}
 
                         <!-- Delete Confirmation Modal -->
                         {% call modal('deleteModal' ~ txn.id, 'Confirm Deletion', text_start=false) %}
@@ -72,10 +67,8 @@
                                 <p class="fw-semibold mb-1">Delete this transaction?</p>
                                 <p class="text-muted small mb-3">This action cannot be undone.</p>
                                 <div class="d-flex justify-content-center gap-2">
-                                    <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
-                                        Cancel
-                                    </button>
-                                    <button type="submit" class="btn btn-danger px-4">Delete</button>
+                                    {{ button('Cancel', kind='secondary', extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                                    {{ button('Delete', kind='danger', extra_class='px-4', type='submit') }}
                                 </div>
                             </div>
                         {% endcall %}
@@ -103,12 +96,12 @@
                         </div>
                         
                         <div class="mt-4">
-                            <button type="submit" class="btn btn-primary w-100">Update Transaction</button>
+                            {{ button('Update Transaction', kind='primary', extra_class='w-100', type='submit') }}
                         </div>
                     </form>
                 {% endcall %}
                 {% else %}
-                <span class="badge">Read only</span>
+                {% call badge('Read only') %}{% endcall %}
                 {% endif %}
             </td>
         </tr>
@@ -139,7 +132,7 @@
             </div>
         </div>
         <div class="mt-4">
-            <button type="submit" class="btn btn-primary w-100">Save Transaction</button>
+            {{ button('Save Transaction', kind='primary', extra_class='w-100', type='submit') }}
         </div>
     </form>
 {% endcall %}

@@ -196,7 +196,11 @@
             const targetUrl = type === 'view' ? '/balance' : '/';
             window.location.href = targetUrl;
           } else {
-            alert('Offline login is only available for the last successfully logged-in user with correct credentials.');
+            if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
+              window.FinTrak.showToast('Offline login unavailable', 'warning', 'Only the last successfully logged-in user with correct credentials can login offline.');
+            } else {
+              alert('Offline login is only available for the last successfully logged-in user with correct credentials.');
+            }
           }
         }
       });

@@ -1,5 +1,5 @@
 <!doctype html>
-{% from "macros/ui.html" import flash_alerts %}
+{% from "macros/ui.html" import flash_alerts, auth_theme_toggle, link_button, badge, navbar_links %}
 <html lang="en" data-theme="light">
 
 <head>
@@ -44,23 +44,19 @@
                     <button type="button" class="btn-close btn-close-white" aria-label="Close" data-bs-toggle="collapse" data-bs-target="#navMain"></button>
                 </div>
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0 align-items-lg-center">
-                    {% include 'partials/navbar_links.html' %}
+                    {{ navbar_links() }}
                 </ul>
 
                 <div class="d-flex align-items-center gap-2">
                     {% if session.get('view_only') %}
-                    <span class="badge badge-view-only me-2" title="Read-only session">View-only</span>
+                    {{ badge('View-only', tone='neutral', extra_class='badge-view-only me-2') }}
                     {% if session.get('username') %}
                     <span class="small text-light me-2">as <strong>{{ session.get('username') }}</strong></span>
                     {% endif %}
                     {% endif %}
 
-                    <button id="themeToggle" class="btn btn-sm btn-outline-light" aria-pressed="false"
-                        title="Toggle theme">
-                        <span id="themeIcon">Dark</span>
-                        <span class="visually-hidden">Toggle theme</span>
-                    </button>
-                    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-light">Logout</a>
+                    {{ auth_theme_toggle(kind='light', outline=true, size='sm', extra_class='', id='themeToggle') }}
+                    {{ link_button(url_for('logout'), 'Logout', kind='light', outline=true, size='sm') }}
                 </div>
             </div>
         </div>
@@ -76,6 +72,7 @@
     <script>
         window.FinTrakConstants = {{ client_constants | tojson }};
     </script>
+    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
     <script src="{{ url_for('static', filename='js/browser_cache.js') }}"></script>
     <script src="{{ url_for('static', filename='js/offline_queue.js') }}"></script>

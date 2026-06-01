@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input %}
+{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input, button, link_button %}
 {% block content %}
 
 {% call page_header('Balance', kicker='Overview', description='Track current cashflow balance, adjustments, and recent history.') %}
-    <a class="btn btn-outline-primary" href="{{ url_for('balance_analytics') }}">Balance Analytics</a>
-    <a class="btn btn-outline-secondary" href="{{ url_for('transactions') }}">View Transactions</a>
+    {{ link_button(url_for('balance_analytics'), 'Balance Analytics', kind='primary', outline=true) }}
+    {{ link_button(url_for('transactions'), 'View Transactions', kind='secondary', outline=true) }}
 {% endcall %}
 
 <div class="row g-3">
@@ -16,15 +16,15 @@
             </div>
             <small class="text-muted" id="balanceTimestamp">-</small>
             <hr>
-            <button id="refreshBtn" class="btn btn-primary w-100 btn-sm">Refresh</button>
+            {{ button('Refresh', kind='primary', size='sm', extra_class='w-100', type='button', id='refreshBtn') }}
         {% endcall %}
 
         {% if not session.get('view_only') %}
         {% call card(extra_class='mb-3') %}
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
             <div class="d-flex flex-column gap-2">
-                <button class="btn btn-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#addBalanceModal">Add Manual Entry</button>
-                <button class="btn btn-outline-primary w-100 btn-sm" data-bs-toggle="modal" data-bs-target="#syncBalanceModal">Sync Absolute Balance</button>
+                {{ button('Add Manual Entry', kind='primary', size='sm', extra_class='w-100', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addBalanceModal'}) }}
+                {{ button('Sync Absolute Balance', kind='primary', outline=true, size='sm', extra_class='w-100', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#syncBalanceModal'}) }}
             </div>
         {% endcall %}
         {% else %}
@@ -66,7 +66,7 @@
     <div class="form-text small text-muted mb-3 mt-n3">Use positive values to add, negative values to subtract.</div>
     {{ form_input('addNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
     <div class="mt-4">
-        <button id="addBtn" type="button" class="btn btn-primary w-100">Save Entry</button>
+        {{ button('Save Entry', kind='primary', extra_class='w-100', type='button', id='addBtn') }}
     </div>
 {% endcall %}
 
@@ -76,7 +76,7 @@
     <div class="form-text small text-muted mb-3 mt-n3">Set the exact current balance amount.</div>
     {{ form_input('syncNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
     <div class="mt-4">
-        <button id="syncBtn" type="button" class="btn btn-primary w-100">Sync Balance</button>
+        {{ button('Sync Balance', kind='primary', extra_class='w-100', type='button', id='syncBtn') }}
     </div>
 {% endcall %}
 {% endif %}

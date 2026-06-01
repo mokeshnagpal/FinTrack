@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, offline_notice, modal, form_field, form_input, form_select %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, offline_notice, modal, form_field, form_input, form_select, form_textarea, button, link_button, card %}
 {% block content %}
 
 {% set header_desc = 'Review travel itineraries, photos, and live cost distributions in read-only mode.' if session.get('view_only') else 'Plan your trips, manage photo albums, and track approximate fixed budgets or split-spend bills.' %}
 {% if not session.get('view_only') %}
     {% call page_header('My Trips', kicker='Travel Planning', description=header_desc) %}
-        <button class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#newTripModal">
+        {% call button(kind='primary', type='button', extra_class='shadow-sm', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newTripModal'}) %}
             <svg width="18" height="18" viewBox="0 0 24 24" class="me-1" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             New Trip
-        </button>
+        {% endcall %}
     {% endcall %}
 {% else %}
     {{ page_header('My Trips', kicker='Travel Planning', description=header_desc) }}
@@ -23,7 +23,7 @@
     {% for trip in trips %}
     {% set tid = trip.id or trip._id %}
     <div class="col-12 col-md-6 col-lg-4 trip-card-wrapper" data-trip-id="{{ tid }}">
-        <div class="card trip-card h-100 shadow-sm position-relative">
+        {% call card(extra_class='trip-card h-100 shadow-sm position-relative', no_body=true) %}
             <div class="card-body d-flex flex-column p-4">
                 <div class="d-flex justify-content-between align-items-start mb-3">
                     <h3 class="h5 card-title text-primary fw-bold mb-0">{{ trip.name }}</h3>
@@ -59,13 +59,7 @@
 
                 {% if trip.photo_link %}
                 <div class="mb-3">
-                    <a href="{{ trip.photo_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                            <circle cx="12" cy="13" r="4"></circle>
-                        </svg>
-                        Photos Album
-                    </a>
+                    {{ link_button(trip.photo_link, 'Photos Album', kind='primary', outline=true, size='sm', extra_class='d-inline-flex align-items-center gap-1', target='_blank', rel='noopener noreferrer') }}
                 </div>
                 {% endif %}
 
@@ -73,9 +67,9 @@
                 <div class="mb-4 small d-flex justify-content-between align-items-center border-top pt-3 border-opacity-10">
                     <span class="text-muted">Connected Split:</span>
                     <div class="d-flex align-items-center gap-2">
-                        <a href="{{ url_for('split_detail', split_id=trip.split_id) }}" class="btn btn-sm btn-link p-0 text-decoration-none fw-semibold">View Split</a>
+                        {{ link_button(url_for('split_detail', split_id=trip.split_id), 'View Split', kind='link', size='sm', extra_class='p-0 text-decoration-none fw-semibold') }}
                         {% if not session.get('view_only') %}
-                        <button type="button" class="btn btn-sm btn-outline-warning btn-compact" data-bs-toggle="modal" data-bs-target="#disconnectModal{{ tid }}">Disconnect</button>
+                        {{ button('Disconnect', kind='warning', outline=true, size='sm', extra_class='btn-compact', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#disconnectModal' ~ tid}) }}
                         {% endif %}
                     </div>
                 </div>
@@ -83,15 +77,15 @@
 
                 {% if not session.get('view_only') %}
                 <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
-                    <button class="btn btn-sm btn-outline-primary flex-grow-1" data-bs-toggle="modal" data-bs-target="#editTripModal{{ tid }}">Edit</button>
+                    {{ button('Edit', kind='primary', outline=true, size='sm', extra_class='flex-grow-1', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editTripModal' ~ tid}) }}
                     <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-offline-queue="trip-delete" data-trip-id="{{ tid }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn btn-sm btn-outline-danger w-100" onclick="return confirm('Delete this trip?')">Delete</button>
+                        {{ button('Delete', kind='danger', size='sm', extra_class='w-100', type='submit', onclick="return confirm('Delete this trip?')") }}
                     </form>
                 </div>
                 {% endif %}
             </div>
-        </div>
+        {% endcall %}
 
         {% if not session.get('view_only') %}
         <!-- Edit Trip Modal -->
@@ -110,10 +104,7 @@
                     </div>
                 </div>
 
-                <div class="mb-3">
-                    <label class="form-label" for="description{{ tid }}">Description</label>
-                    <textarea class="form-control" id="description{{ tid }}" name="description" rows="3" maxlength="500" placeholder="Brief details about the trip...">{{ trip.description or "" }}</textarea>
-                </div>
+                {{ form_textarea('description' ~ tid, 'Description', 'description', rows=3, value=trip.description or '', placeholder='Brief details about the trip...', max_length=500) }}
 
                 {{ form_input('photo_link' ~ tid, 'Photos Link (URL)', 'photo_link', type='url', placeholder='https://photos.app.goo.gl/...', value=trip.photo_link or '') }}
 
@@ -145,7 +136,7 @@
                     ✓ Cost is automatically calculated from split entries per participant
                 </div>
 
-                <button type="submit" class="btn btn-primary w-100">Update Trip</button>
+                {{ button('Update Trip', kind='primary', extra_class='w-100', type='submit') }}
             </form>
         {% endcall %}
 
@@ -159,7 +150,7 @@
                 {{ choice_panel('disconnectKeep' ~ tid, 'keep', 'Just Disconnect', 'Keep the Split Bill account as a standalone split so its transaction ledger is preserved.', checked=true) }}
                 {{ choice_panel('disconnectDelete' ~ tid, 'delete', 'Delete the connected Split Account', 'Permanently delete the Split Bill account and all of its expense ledger entries from Firestore.', danger=true) }}
 
-                <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
+                {{ button('Confirm Action', kind='warning', extra_class='w-100 shadow-sm', type='submit') }}
             </form>
         {% endcall %}
         {% endif %}
@@ -216,7 +207,7 @@
             ✓ Cost is automatically calculated from split entries per participant, and a split account will be created automatically.
         </div>
 
-        <button type="submit" class="btn btn-primary w-100">Save Trip</button>
+        {{ button('Save Trip', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
 {% endif %}
@@ -271,7 +262,51 @@
             window.FinTrak.cache.refreshSnapshot().catch(() => {});
         }
 
-        // Offline Fallback Rendering logic
+        function buildButton(options) {
+            const classes = ['btn'];
+            if (options.size === 'sm') classes.push('btn-sm');
+            if (options.size === 'lg') classes.push('btn-lg');
+            if (options.kind === 'link') classes.push('btn-link');
+            else if (options.outline) classes.push('btn-outline-' + (options.kind || 'primary'));
+            else classes.push('btn-' + (options.kind || 'primary'));
+            if (options.extraClass) classes.push(...options.extraClass.split(' ').filter(Boolean));
+
+            const attrs = [];
+            if (options.tag === 'a') {
+                attrs.push(`href="${escapeHtml(options.href || '#')}"`);
+                attrs.push('role="button"');
+            } else {
+                attrs.push(`type="${escapeHtml(options.type || 'button')}"`);
+            }
+            if (options.title) attrs.push(`title="${escapeHtml(options.title)}"`);
+            if (options.disabled) attrs.push('disabled');
+            Object.entries(options.attrs || {}).forEach(([key, value]) => {
+                attrs.push(`${key}="${escapeHtml(value)}"`);
+            });
+
+            return `<${options.tag || 'button'} class="${classes.join(' ')}" ${attrs.join(' ')}>${escapeHtml(options.text)}</${options.tag || 'button'}>`;
+        }
+
+        function buildLinkButton(href, text, kind, outline, size, extraClass, attrs = {}) {
+            return buildButton({
+                tag: 'a',
+                href,
+                text,
+                kind,
+                outline,
+                size,
+                extraClass,
+                attrs
+            });
+        }
+
+        function buildBadge(text, tone, extraClass) {
+            const classes = ['badge', 'badge-compact'];
+            if (tone) classes.push('badge-' + tone);
+            if (extraClass) classes.push(...extraClass.split(' ').filter(Boolean));
+            return `<span class="${classes.join(' ')}">${escapeHtml(text)}</span>`;
+        }
+
         function runOfflineFallback() {
             const snapshot = window.FinTrak?.cache?.readSnapshot?.();
             const trips = snapshot?.trips || [];
@@ -293,21 +328,21 @@
                 const isSplit = trip.cost_type === 'split';
                 const photosLink = trip.photo_link ? `
                     <div class="mb-3">
-                        <a href="${escapeHtml(trip.photo_link)}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1">
-                            Photos Album
-                        </a>
+                        ${buildLinkButton(trip.photo_link, 'Photos Album', 'primary', true, 'sm', 'd-inline-flex align-items-center gap-1', { target: '_blank', rel: 'noopener' })}
                     </div>` : '';
 
                 const connectedSplit = (isSplit && trip.split_id) ? `
                     <div class="mb-4 small d-flex justify-content-between align-items-center border-top pt-3 border-opacity-10">
                         <span class="text-muted">Connected Split:</span>
-                        <a href="/splits/${encodeURIComponent(trip.split_id)}" class="btn btn-sm btn-link p-0 text-decoration-none fw-semibold">View Split</a>
+                        <div class="d-flex align-items-center gap-2">
+                            ${buildLinkButton('/splits/' + encodeURIComponent(trip.split_id), 'View Split', 'link', false, 'sm', 'p-0 text-decoration-none fw-semibold')}
+                        </div>
                     </div>` : '';
 
                 const actionButtons = viewOnly ? '' : `
                     <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
-                        <button class="btn btn-sm btn-outline-primary flex-grow-1" disabled title="Offline mode">Edit</button>
-                        <button class="btn btn-sm btn-outline-danger flex-grow-1" disabled title="Offline mode">Delete</button>
+                        ${buildButton({ text: 'Edit', kind: 'primary', outline: true, size: 'sm', extraClass: 'flex-grow-1', title: 'Offline mode', disabled: true })}
+                        ${buildButton({ text: 'Delete', kind: 'danger', outline: true, size: 'sm', extraClass: 'flex-grow-1', title: 'Offline mode', disabled: true })}
                     </div>`;
 
                 return `
@@ -316,9 +351,7 @@
                         <div class="card-body d-flex flex-column p-4">
                             <div class="d-flex justify-content-between align-items-start mb-3">
                                 <h3 class="h5 card-title text-primary fw-bold mb-0">${escapeHtml(trip.name)}</h3>
-                                <span class="badge badge-compact ${isSplit ? 'badge-split' : 'badge-fixed'}">
-                                    ${isSplit ? 'Split Bill' : 'Fixed Budget'}
-                                </span>
+                                ${buildBadge(isSplit ? 'Split Bill' : 'Fixed Budget', isSplit ? 'split' : 'fixed', '')}
                             </div>
 
                             <div class="trip-dates mb-3 text-muted small">

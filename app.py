@@ -497,14 +497,37 @@ def is_view_only_password_configured():
 def default_categories():
     return [label for _, label in CATEGORY_CHOICES]
 
+def normalize_text(value):
+    return ' '.join(str(value or '').strip().split())
+
+def normalize_text_key(value):
+    return normalize_text(value).lower()
+
+def item_exists(items, name, normalizer=normalize_text):
+    target = normalize_text_key(name)
+    if not target:
+        return False
+    return any(normalize_text_key(normalizer(item)) == target for item in items)
+
+def unique_normalized_items(items, normalizer=normalize_text):
+    cleaned = []
+    seen = set()
+    for item in items:
+        normalized = normalizer(item)
+        key = normalized.lower()
+        if normalized and key not in seen:
+            cleaned.append(normalized)
+            seen.add(key)
+    return cleaned
+
 def normalize_category_name(name):
-    return ' '.join(str(name or '').strip().split())
+    return normalize_text(name)
 
 def category_key(name):
-    return normalize_category_name(name).lower()
+    return normalize_text_key(name)
 
 def category_exists(categories, name):
-    return category_key(name) in {category_key(item) for item in categories}
+    return item_exists(categories, name, normalize_category_name)
 
 def get_categories():
     cached_categories = cache_get('categories')
@@ -523,21 +546,14 @@ def get_categories():
         return categories
     except Exception:
         app.logger.exception("Failed to load category settings")
-    
+
     categories = default_categories()
     if not category_exists(categories, 'Trip'):
         categories.append('Trip')
     return list(cache_set('categories', categories))
 
 def save_categories(categories, updated_by=None):
-    clean_categories = []
-    seen = set()
-    for item in categories:
-        name = normalize_category_name(item)
-        key = name.lower()
-        if name and key not in seen:
-            clean_categories.append(name)
-            seen.add(key)
+    clean_categories = unique_normalized_items(categories, normalize_category_name)
 
     if not clean_categories:
         clean_categories = ['Other']
@@ -554,13 +570,13 @@ def default_split_people():
     return ['Me']
 
 def normalize_person_name(name):
-    return ' '.join(str(name or '').strip().split())
+    return normalize_text(name)
 
 def person_key(name):
-    return normalize_person_name(name).lower()
+    return normalize_text_key(name)
 
 def person_exists(people, name):
-    return person_key(name) in {person_key(item) for item in people}
+    return item_exists(people, name, normalize_person_name)
 
 def load_split_people_from_store():
     people = []
@@ -570,8 +586,7 @@ def load_split_people_from_store():
     )
     if doc.exists:
         raw_people = (doc.to_dict() or {}).get('items') or []
-        people = [normalize_person_name(item) for item in raw_people]
-        people = [item for item in people if item]
+        people = unique_normalized_items(raw_people, normalize_person_name)
     if not people:
         people = default_split_people()
     return list(cache_set('split_people', people))
@@ -588,14 +603,7 @@ def get_split_people():
     return list(cache_set('split_people', default_split_people()))
 
 def save_split_people(people, updated_by=None):
-    clean_people = []
-    seen = set()
-    for item in people:
-        name = normalize_person_name(item)
-        key = name.lower()
-        if name and key not in seen:
-            clean_people.append(name)
-            seen.add(key)
+    clean_people = unique_normalized_items(people, normalize_person_name)
 
     if not clean_people:
         clean_people = default_split_people()
@@ -614,7 +622,7 @@ def apply_category_choices(form, include=None):
     if include_name and not category_exists(categories, include_name):
         categories.append(include_name)
     form.category.choices = [(item, item) for item in categories]
-    
+
     default_cat = get_default_category()
     if default_cat and category_exists(categories, default_cat):
         form.category.default = default_cat
@@ -1818,6 +1826,48 @@ def transactions():
     if page > 2:
         prev_cursor = cursor_history.get(str(page - 1), '')
 
+    page_cursor_map = {1: ''}
+    for cursor_page, cursor_value in cursor_history.items():
+        try:
+            page_cursor_map[int(cursor_page)] = cursor_value
+        except (TypeError, ValueError):
+            continue
+    if current_cursor:
+        page_cursor_map[page] = current_cursor
+    if next_cursor:
+        page_cursor_map[page + 1] = next_cursor
+
+    candidate_pages = {1, page}
+    if has_prev:
+        candidate_pages.add(page - 1)
+    if page > 2:
+        candidate_pages.add(page - 2)
+    if has_next:
+        candidate_pages.add(page + 1)
+    for known_page in page_cursor_map:
+        if abs(known_page - page) <= 2:
+            candidate_pages.add(known_page)
+
+    page_links = []
+    previous_page = None
+    for page_num in sorted(candidate_pages):
+        if page_num < 1:
+            continue
+        cursor_value = page_cursor_map.get(page_num)
+        if page_num != page and cursor_value is None:
+            continue
+        if previous_page is not None and page_num - previous_page > 1:
+            page_links.append({'ellipsis': True})
+        page_links.append({
+            'page': page_num,
+            'cursor': cursor_value or '',
+            'active': page_num == page,
+        })
+        previous_page = page_num
+
+    if has_next and page_links and not page_links[-1].get('ellipsis') and page_links[-1].get('page') == page + 1:
+        page_links.append({'ellipsis': True})
+
     paginate_obj = SimpleNamespace(
         items=txns_list,
         page=page,
@@ -1829,6 +1879,7 @@ def transactions():
         next_cursor=next_cursor,
         prev_cursor=prev_cursor,
         current_cursor=current_cursor,
+        page_links=page_links,
         search=search,
         sort=sort_field,
         direction=sort_dir,

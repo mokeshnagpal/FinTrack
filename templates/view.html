@@ -1,5 +1,5 @@
 <!doctype html>
-{% from "macros/ui.html" import auth_layout %}
+{% from "macros/ui.html" import auth_layout, button, form_input %}
 <html lang="en" data-theme="light">
 
 <head>
@@ -15,19 +15,11 @@
     {% call auth_layout('FinTrak', 'Open view-only for a user', messages=messages) %}
         <form method="post" action="{{ url_for('view_login') }}" novalidate>
             {{ form.hidden_tag() }}
-            <div class="stack">
-                <label class="kicker" for="username">Username</label>
-                <input id="username" name="username" class="form-control" type="email" placeholder="email"
-                    maxlength="120"
-                    value="{{ request.form.username or '' }}" autocomplete="username" autofocus />
-
-                <label class="kicker" for="password">Password</label>
-                <input id="password" name="password" class="form-control" type="password"
-                    placeholder="View-only password" autocomplete="current-password" maxlength="128" />
-            </div>
+            {{ form_input('username', 'Username', 'username', type='email', placeholder='email', maxlength='120', value=request.form.username or '', autocomplete='username', autofocus='autofocus') }}
+            {{ form_input('password', 'Password', 'password', type='password', placeholder='View-only password', autocomplete='current-password', maxlength='128') }}
 
             <div class="form-foot">
-                <button type="submit" class="btn btn-primary">Open view</button>
+                {{ button('Open view', kind='primary', type='submit') }}
                 <a href="{{ url_for('login') }}" class="small-muted">Admin Mode</a>
             </div>
         </form>

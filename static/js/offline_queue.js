@@ -129,8 +129,8 @@
   }
 
   function notify(message, type = 'info') {
-    if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
-      window.FinTrak.showFlash(message, type);
+    if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
+      window.FinTrak.showToast(message, type);
       return;
     }
 

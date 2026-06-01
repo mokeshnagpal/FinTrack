@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, table_shell, modal, form_field, form_input, form_select %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, edit_button, delete_button %}
 {% block content %}
 
 {% set header_desc = 'Open shared-spend bill splits and review live split totals in read-only mode.' if session.get('view_only') else 'Create trip or shared-spend bill splits, and open each split to manage entries.' %}
 {% if not session.get('view_only') %}
     {% call page_header('Split Bills', kicker='Shared Bills', description=header_desc) %}
-        <a class="btn btn-outline-primary" href="{{ url_for('management') }}">People</a>
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newSplitModal">New Split</button>
+        {{ link_button(url_for('management'), 'People', kind='primary', outline=true) }}
+        {{ button('New Split', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newSplitModal'}) }}
     {% endcall %}
 {% else %}
     {{ page_header('Split Bills', kicker='Shared Bills', description=header_desc) }}
@@ -20,7 +20,7 @@
                 <span class="kicker">Live split</span>
                 <strong>{{ live_split.title or 'Untitled split' }}</strong>
             </div>
-            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=live_split.id) }}">Open</a>
+            {{ link_button(url_for('split_detail', split_id=live_split.id), 'Open', kind='primary', outline=true, size='sm') }}
         </div>
         {% endif %}
 
@@ -46,12 +46,10 @@
                     <td data-label="Connected Trip">
                         {% set connected_trip = trip_map.get(sid) %}
                         {% if connected_trip %}
-                        <div class="d-flex align-items-center gap-2">
+                        <div class="split-trip-cell">
                             {{ compact_badge(connected_trip.name, 'trip') }}
                             {% if not session.get('view_only') %}
-                            <button type="button" class="btn btn-sm btn-link btn-compact p-0 text-warning text-decoration-none" data-bs-toggle="modal" data-bs-target="#disconnectTripModal{{ sid }}">
-                                Disconnect
-                            </button>
+                            {{ button('Disconnect', kind='link', outline=true, size='sm', extra_class='split-inline-action text-warning text-decoration-none', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#disconnectTripModal' ~ sid}) }}
                             {% endif %}
                         </div>
 
@@ -65,7 +63,7 @@
                                 {{ choice_panel('disconnectTripKeep' ~ sid, 'keep', 'Just Disconnect', 'Keep the Trip as a regular fixed-budget trip so its itinerary is preserved.', checked=true) }}
                                 {{ choice_panel('disconnectTripDelete' ~ sid, 'delete', 'Delete the connected Trip', 'Permanently delete the Trip itinerary entirely from Firestore.', danger=true) }}
 
-                                <button type="submit" class="btn btn-warning w-100 shadow-sm">Confirm Action</button>
+                                {{ button('Confirm Action', kind='warning', extra_class='w-100 shadow-sm', type='submit') }}
                             </form>
                         {% endcall %}
                         {% endif %}
@@ -83,52 +81,23 @@
                         </small>
                     </td>
                     <td data-label="Actions" class="text-end">
-                        <div class="table-actions">
-                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('split_detail', split_id=sid) }}">Open</a>
+                        <div class="table-actions split-row-actions">
+                            {{ link_button(url_for('split_detail', split_id=sid), 'Open', kind='primary', outline=true, size='sm') }}
                             {% if not session.get('view_only') %}
                             {% if not split.is_live %}
                             <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-live" data-split-id="{{ sid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-outline-success">Make Live</button>
+                                {{ button('Make Live', kind='success', outline=true, size='sm', type='submit') }}
                             </form>
                             {% else %}
                             <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline" data-offline-queue="split-unlive" data-split-id="{{ sid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-outline-warning">Remove Live</button>
+                                {{ button('Remove Live', kind='warning', outline=true, size='sm', type='submit') }}
                             </form>
                             {% endif %}
 
-                            {% if split.transaction_id %}
-                            <button type="button" class="btn btn-sm btn-outline-info record-share-btn"
-                                data-split-id="{{ sid }}"
-                                data-txn-id="{{ split.transaction_id }}"
-                                data-recorded-amount="{{ '%.2f' | format(split.recorded_amount or 0.0) }}"
-                                data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
-                                data-split-title="{{ split.title or 'Untitled split' }}">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                                </svg>
-                                Re-add Share
-                            </button>
-                            {% else %}
-                            <button type="button" class="btn btn-sm btn-outline-success record-share-btn"
-                                data-split-id="{{ sid }}"
-                                data-share-amount="{{ '%.2f' | format(split.share_amount or 0.0) }}"
-                                data-split-title="{{ split.title or 'Untitled split' }}">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                                </svg>
-                                Add Share
-                            </button>
-                            {% endif %}
-
-                            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSplitModal{{ sid }}">Edit</button>
-                            <form method="post" action="{{ url_for('split_delete', split_id=sid) }}"
-                                data-confirm="Delete this split and its entries?" class="d-inline" data-offline-queue="split-delete" data-split-id="{{ sid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-danger">Delete</button>
-                            </form>
+                            {{ edit_button('editSplitModal' ~ sid, size='sm', outline=true) }}
+                            {{ delete_button(url_for('split_delete', split_id=sid), 'Delete this split and its entries?', offline_queue='split-delete', extra_attrs={'split-id': sid}) }}
                             {% endif %}
                         </div>
 
@@ -144,7 +113,7 @@
                                     <label class="form-label d-block text-muted">Members Included</label>
                                     {{ people_picker(all_people, 'editSplitPerson' ~ sid ~ '_', checked_people=split.get('people'), checked_by_default=false) }}
                                 </div>
-                                <button type="submit" class="btn btn-primary w-100">Update Split</button>
+                                {{ button('Update Split', kind='primary', extra_class='w-100', type='submit') }}
                             </form>
                         {% endcall %}
                         {% endif %}
@@ -173,7 +142,7 @@
         <div class="form-text small text-muted mb-3">
             ✓ New split will be set as live by default
         </div>
-        <button class="btn btn-primary w-100">Save Split</button>
+        {{ button('Save Split', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
 {% endif %}
@@ -213,11 +182,11 @@
                 </p>
             </div>
             <div class="modal-footer d-flex justify-content-end gap-2 border-top-0 pt-0">
-                <button type="button" class="btn btn-outline-secondary px-4" data-bs-dismiss="modal">Cancel</button>
+                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
                 <form id="recordShareConfirmForm" method="post" action="">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="overwrite" value="true">
-                    <button type="submit" class="btn btn-warning px-4 fw-semibold text-dark">Confirm & Overwrite</button>
+                    {{ button('Confirm & Overwrite', kind='warning', extra_class='px-4 fw-semibold text-dark', type='submit') }}
                 </form>
             </div>
         </div>

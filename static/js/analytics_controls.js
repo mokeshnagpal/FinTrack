@@ -8,10 +8,8 @@
 
   function buildParams(elements) {
     const periodSelect = document.getElementById('periodSelect');
-    const customPeriodSelect = document.getElementById('customPeriodSelect');
-    const periodVal = (customPeriodSelect && customPeriodSelect.value) || (periodSelect && periodSelect.value) || 'daily';
     return {
-      period: periodVal,
+      period: (periodSelect && periodSelect.value) || 'daily',
       count: 30,
       from: elements.fromDate.value || '',
       to: elements.toDate.value || '',
@@ -22,7 +20,9 @@
     const today = new Date();
     const from = new Date(today);
 
-    if (range === '90d') {
+    if (range === '60d') {
+      from.setDate(today.getDate() - 59);
+    } else if (range === '90d') {
       from.setDate(today.getDate() - 89);
     } else if (range === '12m') {
       from.setMonth(today.getMonth() - 11);
@@ -75,22 +75,6 @@
     });
 
     const periodSelect = document.getElementById('periodSelect');
-    const customPeriodSelect = document.getElementById('customPeriodSelect');
-
-    if (periodSelect && customPeriodSelect) {
-      periodSelect.addEventListener('change', () => {
-        if (customPeriodSelect.value !== periodSelect.value) {
-          customPeriodSelect.value = periodSelect.value;
-          customPeriodSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      });
-      customPeriodSelect.addEventListener('change', () => {
-        if (periodSelect.value !== customPeriodSelect.value) {
-          periodSelect.value = customPeriodSelect.value;
-          periodSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      });
-    }
 
     if (elements.applyBtn && onRefresh) {
       elements.applyBtn.addEventListener('click', onRefresh);
@@ -99,9 +83,6 @@
     if (autoRefreshOnChange && onRefresh) {
       if (periodSelect) {
         periodSelect.addEventListener('change', onRefresh);
-      }
-      if (customPeriodSelect) {
-        customPeriodSelect.addEventListener('change', onRefresh);
       }
       elements.fromDate.addEventListener('change', () => {
         clearPresetActive(elements);

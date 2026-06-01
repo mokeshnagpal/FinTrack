@@ -43,19 +43,8 @@ const elements = {
 let mainChart = null;
 let sideChart = null;
 
-function escapeHtml(unsafe) {
-  if (unsafe === null || unsafe === undefined) return '';
-  return String(unsafe).replace(/[&<>"'`=/]/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-    '/': '&#x2F;',
-    '`': '&#x60;',
-    '=': '&#x3D;',
-  })[char]);
-}
+// Use centralized function from utils.js
+const escapeHtml = (v) => window.FinTrak.escapeHtml(v);
 
 const controls = window.FinTrak?.analyticsControls;
 let controlApi = null;
