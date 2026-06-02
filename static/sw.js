@@ -1,6 +1,7 @@
 const CACHE_NAME = 'fintrak-shell-v1';
 const NAVIGATION_FALLBACK = '/login';
 const SHELL_URLS = [
+  '/',
   '/login',
   '/view-login',
   '/static/css/styles.css',
@@ -13,6 +14,21 @@ const SHELL_URLS = [
   '/static/icons/favicon-32x32.png',
   '/static/icons/favicon-16x16.png',
 ];
+
+async function isValidAppNavigationResponse(response) {
+  if (!response || !response.ok) return false;
+  const contentType = String(response.headers.get('Content-Type') || '');
+  if (!contentType.includes('text/html')) return true;
+
+  const text = await response.clone().text();
+  const isFinTrakPage = /<title>.*FinTrak.*<\/title>/i.test(text) || text.includes('class="auth-brand">FT') || text.includes('FinTrak');
+  if (isFinTrakPage) return true;
+
+  const isRenderPlaceholder = /render.*(wake|waking|sleep|asleep|loading)/i.test(text);
+  if (isRenderPlaceholder) return false;
+
+  return true;
+}
 
 async function cacheShell() {
   const cache = await caches.open(CACHE_NAME);
@@ -161,6 +177,9 @@ self.addEventListener('fetch', (event) => {
       });
       const network = fetch(request)
         .then(async (response) => {
+          if (!(await isValidAppNavigationResponse(response))) {
+            throw new Error('Invalid app navigation response');
+          }
           if (response.ok) {
             await cache.put(request, response.clone());
             if (url.pathname === '/' || url.pathname === '/login' || url.pathname === '/view-login') {
