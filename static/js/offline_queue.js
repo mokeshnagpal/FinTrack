@@ -391,6 +391,10 @@
       queue.push(action);
     }
     writeQueue(queue);
+    // Notify caller that the action was queued unless explicitly suppressed.
+    if (options.toast !== false && action.type !== 'cache_refresh') {
+      notify('Saved locally. Will sync when the service wakes.', 'success');
+    }
   }
 
   function enqueueAction(type, payload, endpoint = '', options = {}) {
@@ -406,6 +410,17 @@
     enqueue(action, options);
     if (!options.skipSync) syncQueue({ quiet: true });
     return action;
+  }
+
+  function actionRelatesToCurrentPage(action) {
+    const path = window.location.pathname;
+    if (path.startsWith('/transactions') && action.type.startsWith('transaction')) return true;
+    if (path.startsWith('/splits') && action.type.startsWith('split_')) return true;
+    if (path.startsWith('/recurring') && action.type.startsWith('recurring')) return true;
+    if (path.startsWith('/management') && (action.type.startsWith('category') || action.type.startsWith('person'))) return true;
+    if (path.startsWith('/trips') && action.type.startsWith('trip')) return true;
+    if (path.startsWith('/balance') && action.type.startsWith('balance')) return true;
+    return false;
   }
 
   async function refreshCaches(action) {
@@ -494,6 +509,7 @@
     let synced = 0;
     let failed = 0;
     let remainingCount = readQueue().length;
+    let reloadPage = false;
 
     try {
       while (readQueue().length > 0) {
@@ -506,6 +522,7 @@
           }
           await postAction(action);
           const updatedQueue = removeQueuedAction(action);
+          if (actionRelatesToCurrentPage(action)) reloadPage = true;
           synced += 1;
           remainingCount = updatedQueue.length;
           if (action.type !== 'cache_refresh') {
@@ -533,10 +550,18 @@
       refreshSnapshotQuietly('after queued sync');
     }
 
-    if (!options.quiet && synced > 0) {
-      notify(`${synced} pending action${synced === 1 ? '' : 's'} synced.`, 'success');
-    } else if (!options.quiet && failed > 0 && remainingCount > 0) {
-      notify('Saved locally. Will sync when the server responds.', 'info');
+    if (!options.quiet) {
+      if (reloadPage) {
+        notify('Related changes were synced. Reloading this page to show the latest data.', 'success');
+      } else if (synced > 0) {
+        notify(`${synced} pending action${synced === 1 ? '' : 's'} synced.`, 'success');
+      } else if (failed > 0 && remainingCount > 0) {
+        notify('Saved locally. Will sync when the server responds.', 'info');
+      }
+    }
+
+    if (reloadPage) {
+      setTimeout(() => window.location.reload(), 1200);
     }
 
     return { synced, failed, remaining: remainingCount, skipped: false };
