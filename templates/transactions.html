@@ -1,116 +1,115 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input, form_select, button, link_button, badge %}
+{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input,
+form_select, button, link_button, badge, csrf_form, confirm_actions %}
 {% block content %}
 {% if not session.get('view_only') %}
-    {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
-        {{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addTransactionModal'}) }}
-    {% endcall %}
+{% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
+{{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target':
+'#addTransactionModal'}) }}
+{% endcall %}
 {% else %}
-    {{ page_header('Transaction History', kicker='Records', description='Review recent spending activity.') }}
+{{ page_header('Transaction History', kicker='Records', description='Review recent spending activity.') }}
 {% endif %}
 
 <form class="transaction-toolbar" method="get" action="{{ url_for('transactions') }}">
     <input type="hidden" name="sort" value="{{ txns.sort }}">
     <input type="hidden" name="dir" value="{{ txns.direction }}">
-    {{ form_input('transactionSearch', 'Search transactions', 'q', type='search', value=txns.search, placeholder='Search description, category, amount, or date', label_class='visually-hidden') }}
+    {{ form_input('transactionSearch', 'Search transactions', 'q', type='search', value=txns.search, placeholder='Search
+    description, category, amount, or date', label_class='visually-hidden') }}
     {{ button('Search', kind='primary', type='submit') }}
     {% if txns.search %}
-    {{ link_button(url_for('transactions', sort=txns.sort, dir=txns.direction), 'Clear', kind='secondary', outline=true) }}
+    {{ link_button(url_for('transactions', sort=txns.sort, dir=txns.direction), 'Clear', kind='secondary', outline=true)
+    }}
     {% endif %}
 </form>
 
 {% macro sort_link(label, field, align='') -%}
-    {% set active = txns.sort == field %}
-    {% set next_dir = 'asc' if not active or txns.direction == 'desc' else 'desc' %}
-    <a class="sortable-header {{ 'active' if active else '' }} {{ align }}"
-        href="{{ url_for('transactions', sort=field, dir=next_dir, q=txns.search) }}"
-        title="Sort by {{ label }}">
-        <span>{{ label }}</span>
-        <span class="sort-icon">
-            {% if active and txns.direction == 'asc' %}&uarr;{% elif active %}&darr;{% else %}&#8597;{% endif %}
-        </span>
-    </a>
+{% set active = txns.sort == field %}
+{% set next_dir = 'asc' if not active or txns.direction == 'desc' else 'desc' %}
+<a class="sortable-header {{ 'active' if active else '' }} {{ align }}"
+    href="{{ url_for('transactions', sort=field, dir=next_dir, q=txns.search) }}" title="Sort by {{ label }}">
+    <span>{{ label }}</span>
+    <span class="sort-icon">
+        {% if active and txns.direction == 'asc' %}&uarr;{% elif active %}&darr;{% else %}&#8597;{% endif %}
+    </span>
+</a>
 {%- endmacro %}
 
 {% call table_shell(extra_class='table-striped server-sorted') %}
-    <thead>
-        <tr>
-            <th>{{ sort_link('Date', 'timestamp') }}</th>
-            <th>{{ sort_link('Description', 'description') }}</th>
-            <th>{{ sort_link('Category', 'category') }}</th>
-            <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
-            <th class="text-end">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for txn in txns.items %}
-        {% set can_manage_txn = not session.get('view_only') %}
-        <tr>
-            <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
-            <td data-label="Description"><small>{{ txn.description }}</small></td>
-            <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
-            <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
-            <td data-label="Actions" class="text-end">
-                {% if can_manage_txn %}
-                <div class="table-actions">
-                    {{ edit_button('editTransactionModal' ~ txn.id) }}
-                    <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
-                        class="delete-form d-inline"
-                        data-offline-queue="transaction-delete"
-                        data-transaction-id="{{ txn.id }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        {{ button('Delete', kind='danger', size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#deleteModal' ~ txn.id}) }}
+<thead>
+    <tr>
+        <th>{{ sort_link('Date', 'timestamp') }}</th>
+        <th>{{ sort_link('Description', 'description') }}</th>
+        <th>{{ sort_link('Category', 'category') }}</th>
+        <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
+        <th class="text-end">Actions</th>
+    </tr>
+</thead>
+<tbody>
+    {% for txn in txns.items %}
+    {% set can_manage_txn = not session.get('view_only') %}
+    <tr>
+        <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+        <td data-label="Description"><small>{{ txn.description }}</small></td>
+        <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
+        <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
+        <td data-label="Actions" class="text-end">
+            {% if can_manage_txn %}
+            <div class="table-actions">
+                {{ edit_button('editTransactionModal' ~ txn.id) }}
+                {% call csrf_form(url_for('delete', tx_id=txn.id), extra_class='delete-form d-inline',
+                attrs={'data-transaction-id': txn.id}) %}
+                {{ button('Delete', kind='danger', size='sm', type='button', attrs={'data-bs-toggle': 'modal',
+                'data-bs-target': '#deleteModal' ~ txn.id}) }}
 
-                        <!-- Delete Confirmation Modal -->
-                        {% call modal('deleteModal' ~ txn.id, 'Confirm Deletion', text_start=false) %}
-                            <div class="text-center">
-                                <p class="fw-semibold mb-1">Delete this transaction?</p>
-                                <p class="text-muted small mb-3">This action cannot be undone.</p>
-                                <div class="d-flex justify-content-center gap-2">
-                                    {{ button('Cancel', kind='secondary', extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
-                                    {{ button('Delete', kind='danger', extra_class='px-4', type='submit') }}
-                                </div>
-                            </div>
-                        {% endcall %}
-                    </form>
+                <!-- Delete Confirmation Modal -->
+                {% call modal('deleteModal' ~ txn.id, 'Confirm Deletion', text_start=false) %}
+                <div class="text-center">
+                    <p class="fw-semibold mb-1">Delete this transaction?</p>
+                    <p class="text-muted small mb-3">This action cannot be undone.</p>
+                    {{ confirm_actions('Delete', 'danger') }}
                 </div>
-
-                <!-- Edit Transaction Modal -->
-                {% call modal('editTransactionModal' ~ txn.id, 'Edit Transaction') %}
-                    <form method="post" action="{{ url_for('edit_transaction', tx_id=txn.id) }}"
-                        data-offline-queue="transaction-edit"
-                        data-transaction-id="{{ txn.id }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        
-                        {{ form_input('amount' ~ txn.id, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(txn.amount), step='0.01', min='0.01', required=true) }}
-                        {{ form_input('description' ~ txn.id, 'What was it for?', 'description', placeholder='e.g. Grocery shopping', maxlength='120', value=txn.description, required=true) }}
-                        {{ form_select('category' ~ txn.id, 'Category', 'category', form.category.choices, selected_value=txn.category) }}
-                        
-                        <div class="row g-2">
-                            <div class="col-sm-6">
-                                {{ form_input('date' ~ txn.id, 'Date (IST)', 'date', type='date', value=txn.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
-                            </div>
-                            <div class="col-sm-6">
-                                {{ form_input('time' ~ txn.id, 'Time (IST)', 'time', type='time', value=txn.timestamp|ist_datetime('%H:%M'), required=true) }}
-                            </div>
-                        </div>
-                        
-                        <div class="mt-4">
-                            {{ button('Update Transaction', kind='primary', extra_class='w-100', type='submit') }}
-                        </div>
-                    </form>
                 {% endcall %}
-                {% else %}
-                {{ badge('Read only') }}
-                {% endif %}
-            </td>
-        </tr>
-        {% else %}
-        <tr>
-            <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
-        </tr>
-        {% endfor %}
-    </tbody>
+                {% endcall %}
+            </div>
+
+            <!-- Edit Transaction Modal -->
+            {% call modal('editTransactionModal' ~ txn.id, 'Edit Transaction') %}
+            {% call csrf_form(url_for('edit_transaction', tx_id=txn.id), attrs={'data-transaction-id': txn.id}) %}
+            {{ form_input('amount' ~ txn.id, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(txn.amount),
+            step='0.01', min='0.01', required=true) }}
+            {{ form_input('description' ~ txn.id, 'What was it for?', 'description', placeholder='e.g. Grocery
+            shopping', maxlength='120', value=txn.description, required=true) }}
+            {{ form_select('category' ~ txn.id, 'Category', 'category', form.category.choices,
+            selected_value=txn.category) }}
+
+            <div class="row g-2">
+                <div class="col-sm-6">
+                    {{ form_input('date' ~ txn.id, 'Date (IST)', 'date', type='date',
+                    value=txn.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
+                </div>
+                <div class="col-sm-6">
+                    {{ form_input('time' ~ txn.id, 'Time (IST)', 'time', type='time',
+                    value=txn.timestamp|ist_datetime('%H:%M'), required=true) }}
+                </div>
+            </div>
+
+            <div class="mt-4">
+                {{ button('Update Transaction', kind='primary', extra_class='w-100', type='submit') }}
+            </div>
+            {% endcall %}
+            {% endcall %}
+            {% else %}
+            {{ badge('Read only') }}
+            {% endif %}
+        </td>
+    </tr>
+    {% else %}
+    <tr>
+        <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
+    </tr>
+    {% endfor %}
+</tbody>
 {% endcall %}
 
 {{ pager(txns, 'transactions', extra_params={'q': txns.search, 'sort': txns.sort, 'dir': txns.direction}) }}
@@ -118,23 +117,23 @@
 <!-- Add Transaction Modal -->
 {% if not session.get('view_only') %}
 {% call modal('addTransactionModal', 'Record Spending') %}
-    <form method="post" action="{{ url_for('add') }}" data-offline-queue="transaction-create">
-        {{ form.hidden_tag() }}
-        {{ form_field(form.amount, step="0.01", min="0.01") }}
-        {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
-        {{ form_field(form.category) }}
-        <div class="row g-2">
-            <div class="col-sm-6">
-                {{ form_field(form.date, type="date") }}
-            </div>
-            <div class="col-sm-6">
-                {{ form_field(form.time, type="time") }}
-            </div>
+<form method="post" action="{{ url_for('add') }}">
+    {{ form.hidden_tag() }}
+    {{ form_field(form.amount, step="0.01", min="0.01") }}
+    {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
+    {{ form_field(form.category) }}
+    <div class="row g-2">
+        <div class="col-sm-6">
+            {{ form_field(form.date, type="date") }}
         </div>
-        <div class="mt-4">
-            {{ button('Save Transaction', kind='primary', extra_class='w-100', type='submit') }}
+        <div class="col-sm-6">
+            {{ form_field(form.time, type="time") }}
         </div>
-    </form>
+    </div>
+    <div class="mt-4">
+        {{ button('Save Transaction', kind='primary', extra_class='w-100', type='submit') }}
+    </div>
+</form>
 {% endcall %}
 {% endif %}
 

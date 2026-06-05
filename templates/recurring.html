@@ -1,106 +1,115 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge,
+csrf_form %}
 {% block content %}
 
 {% if not session.get('view_only') %}
-    {% call page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules and scheduled balance additions.') %}
-        {{ button('Set Expense Rule', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newExpenseModal'}) }}
-        {{ button('Set Balance Rule', kind='primary', outline=true, type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#newBalanceModal'}) }}
-    {% endcall %}
+{% call page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules
+and scheduled balance additions.') %}
+{{ button('Set Expense Rule', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target':
+'#newExpenseModal'}) }}
+{{ button('Set Balance Rule', kind='primary', outline=true, type='button', attrs={'data-bs-toggle': 'modal',
+'data-bs-target': '#newBalanceModal'}) }}
+{% endcall %}
 {% else %}
-    {{ page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules and scheduled balance additions.') }}
+{{ page_header('Recurring Bills', kicker='Schedules', description='Create, edit, and remove recurring expense rules and
+scheduled balance additions.') }}
 {% endif %}
 
 <div class="row g-3 mb-5">
     <div class="col-12">
         <h4 class="page-title mb-3">Recurring Expenses</h4>
         {% call table_shell() %}
-            <thead>
-                <tr>
-                    <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Description <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Last Applied <span class="sort-icon">&#8597;</span></th>
-                    <th class="text-end">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in recs %}
-                {% set rid = (r.id or r._id) %}
-                <tr>
-                    <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
-                    <td data-label="Description"><small>{{ r.description }}</small></td>
-                    <td data-label="Start">
-                        <small>
-                            {% if r.start_datetime %}
-                            <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
-                    <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                    <td data-label="Last Applied">
-                        <small>
-                            {% if r.last_applied %}
-                            <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
-                    <td data-label="Actions" class="text-end">
-                        {% if rid %}
-                        <div class="table-actions">
-                            {% if not session.get('view_only') %}
-                            {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editExpenseModal' ~ rid}) }}
-                            <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
-                                data-confirm="Delete recurring expense rule?" class="d-inline" data-offline-queue="recurring-delete" data-recurring-id="{{ rid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                {{ button('Delete', kind='danger', size='sm', type='submit') }}
-                            </form>
-                            {% else %}
-                            {{ badge('Read only') }}
-                            {% endif %}
-                        </div>
-
-                        {% if not session.get('view_only') %}
-                        <!-- Edit Expense Rule Modal -->
-                        {% call modal('editExpenseModal' ~ rid, 'Edit Expense Rule') %}
-                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}" data-offline-queue="recurring-edit" data-recurring-id="{{ rid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                
-                                {{ form_input('amount' ~ rid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
-                                {{ form_input('description' ~ rid, 'Description', 'description', value=r.description, maxlength=120, required=true) }}
-                                {{ form_select('category' ~ rid, 'Category', 'category', form.category.choices, selected_value=r.category) }}
-
-                                <div class="row g-2">
-                                    <div class="col-sm-6">
-                                        {{ form_input('start_date' ~ rid, 'Start Date (IST)', 'start_date', type='date', value=r.start_datetime|ist_datetime('%Y-%m-%d'), required=true) }}
-                                    </div>
-                                    <div class="col-sm-6">
-                                        {{ form_input('start_time' ~ rid, 'Start Time (IST)', 'start_time', type='time', value=r.start_datetime|ist_datetime('%H:%M'), required=true) }}
-                                    </div>
-                                </div>
-
-                                {{ form_select('frequency' ~ rid, 'Frequency', 'frequency', form.frequency.choices, selected_value=r.frequency) }}
-
-                                {{ button('Update Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
-                            </form>
-                        {% endcall %}
-                        {% endif %}
+        <thead>
+            <tr>
+                <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Description <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Last Applied <span class="sort-icon">&#8597;</span></th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in recs %}
+            {% set rid = (r.id or r._id) %}
+            <tr>
+                <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                <td data-label="Description"><small>{{ r.description }}</small></td>
+                <td data-label="Start">
+                    <small>
+                        {% if r.start_datetime %}
+                        <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
                         {% else %}
-                        <em class="small">missing id</em>
+                        -
                         {% endif %}
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="6" class="text-center text-muted py-4">No recurring expense rules found.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
+                    </small>
+                </td>
+                <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                <td data-label="Last Applied">
+                    <small>
+                        {% if r.last_applied %}
+                        <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </small>
+                </td>
+                <td data-label="Actions" class="text-end">
+                    {% if rid %}
+                    <div class="table-actions">
+                        {% if not session.get('view_only') %}
+                        {{ button('Edit', kind='primary', outline=true, size='sm', type='button',
+                        attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editExpenseModal' ~ rid}) }}
+                        {% call csrf_form(url_for('recurring_delete', r_id=rid), extra_class='d-inline',
+                        attrs={'data-confirm': 'Delete recurring expense rule?', 'data-recurring-id': rid}) %}
+                        {{ button('Delete', kind='danger', size='sm', type='submit') }}
+                        {% endcall %}
+                        {% else %}
+                        {{ badge('Read only') }}
+                        {% endif %}
+                    </div>
+
+                    {% if not session.get('view_only') %}
+                    <!-- Edit Expense Rule Modal -->
+                    {% call modal('editExpenseModal' ~ rid, 'Edit Expense Rule') %}
+                    {% call csrf_form(url_for('recurring_edit', r_id=rid), attrs={'data-recurring-id': rid}) %}
+                    {{ form_input('amount' ~ rid, 'Amount (Rs.)', 'amount', type='number',
+                    value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
+                    {{ form_input('description' ~ rid, 'Description', 'description', value=r.description, maxlength=120,
+                    required=true) }}
+                    {{ form_select('category' ~ rid, 'Category', 'category', form.category.choices,
+                    selected_value=r.category) }}
+
+                    <div class="row g-2">
+                        <div class="col-sm-6">
+                            {{ form_input('start_date' ~ rid, 'Start Date (IST)', 'start_date', type='date',
+                            value=r.start_datetime|ist_datetime('%Y-%m-%d'), required=true) }}
+                        </div>
+                        <div class="col-sm-6">
+                            {{ form_input('start_time' ~ rid, 'Start Time (IST)', 'start_time', type='time',
+                            value=r.start_datetime|ist_datetime('%H:%M'), required=true) }}
+                        </div>
+                    </div>
+
+                    {{ form_select('frequency' ~ rid, 'Frequency', 'frequency', form.frequency.choices,
+                    selected_value=r.frequency) }}
+
+                    {{ button('Update Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
+                    {% endcall %}
+                    {% endcall %}
+                    {% endif %}
+                    {% else %}
+                    <em class="small">missing id</em>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="text-center text-muted py-4">No recurring expense rules found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
         {% endcall %}
     </div>
 </div>
@@ -109,91 +118,94 @@
     <div class="col-12">
         <h4 class="page-title mb-3">Recurring Balance Adds</h4>
         {% call table_shell() %}
-            <thead>
-                <tr>
-                    <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Note <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Last Added <span class="sort-icon">&#8597;</span></th>
-                    <th class="text-end">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in balance_recs %}
-                {% set rid = (r.id or r._id) %}
-                <tr>
-                    <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
-                    <td data-label="Note"><small>{{ r.description }}</small></td>
-                    <td data-label="Start">
-                        <small>
-                            {% if r.start_datetime %}
-                            <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
-                    <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                    <td data-label="Last Added">
-                        <small>
-                            {% if r.last_applied %}
-                            <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
-                    <td data-label="Actions" class="text-end">
-                        {% if rid %}
-                        <div class="table-actions">
-                            {% if not session.get('view_only') %}
-                            {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editBalanceModal' ~ rid}) }}
-                            <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
-                                data-confirm="Delete recurring balance rule?" class="d-inline" data-offline-queue="recurring-balance-delete" data-recurring-id="{{ rid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                {{ button('Delete', kind='danger', size='sm', type='submit') }}
-                            </form>
-                            {% else %}
-                            {{ badge('Read only') }}
-                            {% endif %}
-                        </div>
-
-                        {% if not session.get('view_only') %}
-                        <!-- Edit Balance Rule Modal -->
-                        {% call modal('editBalanceModal' ~ rid, 'Edit Balance Rule') %}
-                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}" data-offline-queue="recurring-balance-edit" data-recurring-id="{{ rid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                
-                                {{ form_input('bal_amount' ~ rid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
-                                {{ form_input('bal_description' ~ rid, 'Note', 'description', value=r.description, maxlength=120, required=true) }}
-
-                                <div class="row g-2">
-                                    <div class="col-sm-6">
-                                        {{ form_input('bal_start_date' ~ rid, 'Start Date (IST)', 'start_date', type='date', value=r.start_datetime|ist_datetime('%Y-%m-%d'), required=true) }}
-                                    </div>
-                                    <div class="col-sm-6">
-                                        {{ form_input('bal_start_time' ~ rid, 'Start Time (IST)', 'start_time', type='time', value=r.start_datetime|ist_datetime('%H:%M'), required=true) }}
-                                    </div>
-                                </div>
-
-                                {{ form_select('bal_frequency' ~ rid, 'Frequency', 'frequency', balance_form.frequency.choices, selected_value=r.frequency) }}
-
-                                {{ button('Update Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
-                            </form>
-                        {% endcall %}
-                        {% endif %}
+        <thead>
+            <tr>
+                <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Note <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
+                <th class="sortable-header">Last Added <span class="sort-icon">&#8597;</span></th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in balance_recs %}
+            {% set rid = (r.id or r._id) %}
+            <tr>
+                <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
+                <td data-label="Note"><small>{{ r.description }}</small></td>
+                <td data-label="Start">
+                    <small>
+                        {% if r.start_datetime %}
+                        <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
                         {% else %}
-                        <em class="small">missing id</em>
+                        -
                         {% endif %}
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="6" class="text-center text-muted py-4">No recurring balance rules found.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
+                    </small>
+                </td>
+                <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
+                <td data-label="Last Added">
+                    <small>
+                        {% if r.last_applied %}
+                        <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </small>
+                </td>
+                <td data-label="Actions" class="text-end">
+                    {% if rid %}
+                    <div class="table-actions">
+                        {% if not session.get('view_only') %}
+                        {{ button('Edit', kind='primary', outline=true, size='sm', type='button',
+                        attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editBalanceModal' ~ rid}) }}
+                        {% call csrf_form(url_for('recurring_balance_delete', r_id=rid), extra_class='d-inline',
+                        attrs={'data-confirm': 'Delete recurring balance rule?', 'data-recurring-id': rid}) %}
+                        {{ button('Delete', kind='danger', size='sm', type='submit') }}
+                        {% endcall %}
+                        {% else %}
+                        {{ badge('Read only') }}
+                        {% endif %}
+                    </div>
+
+                    {% if not session.get('view_only') %}
+                    <!-- Edit Balance Rule Modal -->
+                    {% call modal('editBalanceModal' ~ rid, 'Edit Balance Rule') %}
+                    {% call csrf_form(url_for('recurring_balance_edit', r_id=rid), attrs={'data-recurring-id': rid}) %}
+                    {{ form_input('bal_amount' ~ rid, 'Amount (Rs.)', 'amount', type='number',
+                    value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
+                    {{ form_input('bal_description' ~ rid, 'Note', 'description', value=r.description, maxlength=120,
+                    required=true) }}
+
+                    <div class="row g-2">
+                        <div class="col-sm-6">
+                            {{ form_input('bal_start_date' ~ rid, 'Start Date (IST)', 'start_date', type='date',
+                            value=r.start_datetime|ist_datetime('%Y-%m-%d'), required=true) }}
+                        </div>
+                        <div class="col-sm-6">
+                            {{ form_input('bal_start_time' ~ rid, 'Start Time (IST)', 'start_time', type='time',
+                            value=r.start_datetime|ist_datetime('%H:%M'), required=true) }}
+                        </div>
+                    </div>
+
+                    {{ form_select('bal_frequency' ~ rid, 'Frequency', 'frequency', balance_form.frequency.choices,
+                    selected_value=r.frequency) }}
+
+                    {{ button('Update Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
+                    {% endcall %}
+                    {% endcall %}
+                    {% endif %}
+                    {% else %}
+                    <em class="small">missing id</em>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="text-center text-muted py-4">No recurring balance rules found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
         {% endcall %}
     </div>
 </div>
@@ -201,41 +213,41 @@
 <!-- New Expense Modal -->
 {% if not session.get('view_only') %}
 {% call modal('newExpenseModal', 'Set Expense Rule') %}
-    <form method="post" action="{{ url_for('recurring') }}" data-offline-queue="recurring-create">
-        {{ form.hidden_tag() }}
-        {{ form_field(form.amount, step="0.01", min="0.01") }}
-        {{ form_field(form.description, maxlength="120") }}
-        {{ form_field(form.category) }}
-        <div class="row g-2">
-            <div class="col-sm-6">
-                {{ form_field(form.start_date, type="date") }}
-            </div>
-            <div class="col-sm-6">
-                {{ form_field(form.start_time, type="time") }}
-            </div>
+<form method="post" action="{{ url_for('recurring') }}">
+    {{ form.hidden_tag() }}
+    {{ form_field(form.amount, step="0.01", min="0.01") }}
+    {{ form_field(form.description, maxlength="120") }}
+    {{ form_field(form.category) }}
+    <div class="row g-2">
+        <div class="col-sm-6">
+            {{ form_field(form.start_date, type="date") }}
         </div>
-        {{ form_field(form.frequency) }}
-        {{ button('Save Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
-    </form>
+        <div class="col-sm-6">
+            {{ form_field(form.start_time, type="time") }}
+        </div>
+    </div>
+    {{ form_field(form.frequency) }}
+    {{ button('Save Expense Rule', kind='primary', extra_class='w-100', type='submit') }}
+</form>
 {% endcall %}
 
 <!-- New Balance Modal -->
 {% call modal('newBalanceModal', 'Set Balance Rule') %}
-    <form method="post" action="{{ url_for('recurring_balance') }}" data-offline-queue="recurring-balance-create">
-        {{ balance_form.hidden_tag() }}
-        {{ form_field(balance_form.amount, step="0.01", min="0.01") }}
-        {{ form_field(balance_form.description, maxlength="120") }}
-        <div class="row g-2">
-            <div class="col-sm-6">
-                {{ form_field(balance_form.start_date, type="date") }}
-            </div>
-            <div class="col-sm-6">
-                {{ form_field(balance_form.start_time, type="time") }}
-            </div>
+<form method="post" action="{{ url_for('recurring_balance') }}">
+    {{ balance_form.hidden_tag() }}
+    {{ form_field(balance_form.amount, step="0.01", min="0.01") }}
+    {{ form_field(balance_form.description, maxlength="120") }}
+    <div class="row g-2">
+        <div class="col-sm-6">
+            {{ form_field(balance_form.start_date, type="date") }}
         </div>
-        {{ form_field(balance_form.frequency) }}
-        {{ button('Save Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
-    </form>
+        <div class="col-sm-6">
+            {{ form_field(balance_form.start_time, type="time") }}
+        </div>
+    </div>
+    {{ form_field(balance_form.frequency) }}
+    {{ button('Save Balance Rule', kind='primary', extra_class='w-100', type='submit') }}
+</form>
 {% endcall %}
 {% endif %}
 

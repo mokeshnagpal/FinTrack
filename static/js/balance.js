@@ -1,23 +1,5 @@
 const HISTORY_DISPLAY_LIMIT = Number(window.FinTrakConstants?.balance_history_table_limit || 12);
 
-async function fetchJSON(url, params = {}, opts = {}) {
-  const query = new URLSearchParams(params).toString();
-  const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-  const headers = { ...(opts.headers || {}) };
-
-  if (opts.method && opts.method.toUpperCase() !== 'GET' && token) {
-    headers['X-CSRFToken'] = token;
-  }
-
-  const response = await fetch(url + (query ? `?${query}` : ''), { ...opts, headers });
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || `Request failed (${response.status})`);
-  }
-  return data;
-}
-
 function formatNumber(value) {
   return window.FinTrak.formatNumber(value);
 }
@@ -39,25 +21,11 @@ function formatDisplayNote(note) {
     : note;
 }
 
-function normalizeBalanceMode(entry) {
-  const mode = String(entry?.balance_mode || '').toLowerCase();
-  if (mode === 'sync' || mode === 'add') return mode;
-  return String(entry?.type || '').toLowerCase() === 'sync' ? 'sync' : 'add';
-}
-
-function modeLabel(mode) {
-  return mode === 'sync' ? 'Sync' : 'Add';
-}
-
 function closeModal(id) {
   const el = document.getElementById(id);
   if (el && window.FinTrak?.hideModal) {
     window.FinTrak.hideModal(el);
   }
-}
-
-function escapeHtml(unsafe) {
-  return window.FinTrak.escapeHtml(unsafe);
 }
 
 function escapeAttr(value) {
@@ -72,73 +40,157 @@ function noteError(value) {
   return String(value || '').trim().length > 120 ? 'Use 120 characters or fewer for the note.' : '';
 }
 
+function buildTransactionSearchQuery(entry) {
+  const description = String(entry.description || '').trim();
+  const category = String(entry.category || '').trim();
+  if (description) return description;
+  if (category && category !== 'Uncategorized') return category;
+  if (entry.id) return String(entry.id);
+  return '';
+}
+
+function openTransactionsForEntry(entry) {
+  const q = buildTransactionSearchQuery(entry);
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  const query = params.toString();
+  window.location.href = query ? `/transactions?${query}` : '/transactions';
+}
+
 
 
 async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
-  let data;
-  let offline = false;
-  try {
-    data = await fetchJSON('/api/balance_current');
-    if (window.FinTrak?.cache?.refreshSnapshot) {
-      window.FinTrak.cache.refreshSnapshot().catch(() => {});
-    }
-  } catch (error) {
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    if (!snapshot?.balance) throw error;
-    data = snapshot.balance;
-    offline = true;
-  }
+  const data = await window.FinTrak.fetchJSON('/api/balance_current');
   const current = data.current || { balance: 0.0, timestamp: null };
 
   if (currentBalanceEl) currentBalanceEl.innerText = formatNumber(current.balance);
   if (balanceTimestampEl) {
     const label = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
-    balanceTimestampEl.innerHTML = offline ? `${label} (cached)` : label;
+    balanceTimestampEl.innerHTML = label;
   }
 
   if (!historyBody) return;
   historyBody.innerHTML = '';
 
-  const manualHistory = (data.history || []).filter((entry) => {
-    const type = String(entry.type || '').toLowerCase();
-    return type === 'add' || type === 'sync';
+  const hideTransactionsCheckbox = document.getElementById('hideTransactions');
+  const hideTxns = hideTransactionsCheckbox ? hideTransactionsCheckbox.checked : false;
+  if (hideTransactionsCheckbox && !hideTransactionsCheckbox.dataset.listenerBound) {
+    hideTransactionsCheckbox.dataset.listenerBound = 'true';
+    hideTransactionsCheckbox.addEventListener('change', () => {
+      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+    });
+  }
+  const history = (data.history || []).filter(entry => {
+    if (hideTxns && entry.source === 'transaction') {
+      return false;
+    }
+    return true;
   });
+  const viewOnly = document.body.dataset.viewOnly === 'true';
 
-  manualHistory.forEach((entry) => {
+  history.forEach((entry) => {
     const tr = document.createElement('tr');
-    const type = String(entry.type || '').toLowerCase();
-    const mode = normalizeBalanceMode(entry);
-    const viewOnly = document.body.dataset.viewOnly === 'true';
-    const hasActions = !viewOnly;
+    const source = entry.source || '';
+    const isTransaction = source === 'transaction';
+    const isBalance = source === 'balance';
+    
+    // Determine row class
+    let rowClass = '';
+    if (isTransaction) {
+      rowClass = 'row-transaction';
+    } else if (isBalance) {
+      const type = String(entry.type || '').replace('balance_', '').toLowerCase();
+      rowClass = type === 'sync' ? 'row-balance-sync' : 'row-balance-add';
+    }
+    
+    if (rowClass) {
+      tr.className = rowClass;
+      tr.style.cursor = isTransaction ? 'pointer' : 'default';
+    }
 
-    const actionButtons = hasActions
-      ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
-            data-id="${escapeAttr(entry.id || '')}"
-            data-type="${escapeAttr(type)}"
-            data-mode="${escapeAttr(mode)}"
-            data-delta="${escapeAttr(entry.delta)}"
-            data-balance="${escapeAttr(entry.balance)}"
-            data-note="${escapeAttr(entry.note || '')}">
-            Edit
-         </button>
-         <button class="btn btn-sm btn-outline-danger balance-delete-btn"
-            data-id="${escapeAttr(entry.id || '')}"
-            data-type="${escapeAttr(type)}"
-            data-mode="${escapeAttr(mode)}"
-            data-delta="${escapeAttr(entry.delta)}"
-            data-balance="${escapeAttr(entry.balance)}"
-            data-note="${escapeAttr(entry.note || '')}">
-            Delete
-         </button>`
-      : `<span class="text-muted small">View-only</span>`;
+    // Build type badge
+    const typeLabel = entry.type_label || 'Unknown';
+    let typeBadge = `<span class="badge badge-compact badge-default">${window.FinTrak.escapeHtml(typeLabel)}</span>`;
+    
+    if (isBalance) {
+      const type = String(entry.type || '').replace('balance_', '').toLowerCase();
+      const badgeClass = type === 'sync' ? 'badge-sync' : 'badge-add';
+      typeBadge = `<span class="badge badge-compact ${badgeClass}">${window.FinTrak.escapeHtml(typeLabel)}</span>`;
+    } else if (isTransaction) {
+      typeBadge = `<span class="badge badge-compact badge-transaction">Transaction</span>`;
+    }
 
-    tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
-                    <td data-label="Source">${escapeHtml(entry.type || '')}</td>
-                    <td data-label="Mode"><span class="badge badge-compact ${mode === 'sync' ? 'badge-sync' : 'badge-add'}">${modeLabel(mode)}</span></td>
-                    <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
-                    <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
-                    <td data-label="Note">${escapeHtml(formatDisplayNote(entry.note || ''))}</td>
-                    <td data-label="Actions" class="text-end"><div class="table-actions">${actionButtons}</div></td>`;
+    // Build details
+    let details = '';
+    if (isTransaction) {
+      const description = String(entry.description || '').trim();
+      const category = String(entry.category || '').trim();
+      const noteValue = String(entry.note || '').trim();
+      const escapedDescription = window.FinTrak.escapeHtml(description);
+      const escapedCategory = window.FinTrak.escapeHtml(category || 'Uncategorized');
+      const escapedNote = window.FinTrak.escapeHtml(noteValue);
+
+      if (description && category) {
+        details = `<small>${escapedDescription} (${escapedCategory})</small>`;
+      } else if (description) {
+        details = `<small>${escapedDescription}</small>`;
+      } else if (category) {
+        details = `<small>${escapedCategory}</small>`;
+      } else if (noteValue) {
+        details = `<small>${escapedNote}</small>`;
+      } else {
+        details = `<small>Transaction</small>`;
+      }
+    } else if (isBalance) {
+      details = `<small>${window.FinTrak.escapeHtml(formatDisplayNote(entry.note || ''))}</small>`;
+    }
+
+    // Build actions for balance entries
+    let actionHTML = '';
+    if (isBalance && !viewOnly) {
+      const type = String(entry.type || '').replace('balance_', '').toLowerCase();
+      const mode = type === 'sync' ? 'sync' : 'add';
+      actionHTML = `
+        <div class="table-actions">
+          <button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
+              data-id="${escapeAttr(entry.id || '')}"
+              data-type="${escapeAttr(type)}"
+              data-mode="${escapeAttr(mode)}"
+              data-delta="${escapeAttr(entry.delta)}"
+              data-balance="${escapeAttr(entry.balance)}"
+              data-note="${escapeAttr(entry.note || '')}">
+              Edit
+          </button>
+          <button class="btn btn-sm btn-outline-danger balance-delete-btn"
+              data-id="${escapeAttr(entry.id || '')}"
+              data-type="${escapeAttr(type)}"
+              data-mode="${escapeAttr(mode)}"
+              data-delta="${escapeAttr(entry.delta)}"
+              data-balance="${escapeAttr(entry.balance)}"
+              data-note="${escapeAttr(entry.note || '')}">
+              Delete
+          </button>
+        </div>`;
+    } else if (isTransaction) {
+      actionHTML = '<small class="text-muted">View in transactions →</small>';
+    } else {
+      actionHTML = '<span class="text-muted small">View-only</span>';
+    }
+
+    tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp_str || '')}</td>
+                    <td data-label="Type">${typeBadge}</td>
+                    <td data-label="Detail">${details}</td>
+                    <td data-label="Amount" class="text-end">${formatNumber(entry.delta)}</td>
+                    <td data-label="Balance" class="text-end">${entry.balance !== null ? formatNumber(entry.balance) : '—'}</td>
+                    <td data-label="Actions" class="text-end">${actionHTML}</td>`;
+    
+    // Make transaction rows clickable
+    if (isTransaction) {
+      tr.addEventListener('click', () => {
+        openTransactionsForEntry(entry);
+      });
+    }
+    
     historyBody.appendChild(tr);
   });
 
@@ -290,7 +342,7 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) 
 
   const payload = mode === 'sync' ? { mode, balance: value, note } : { mode, delta: value, note };
   try {
-    await fetchJSON(`/api/balance/${encodeURIComponent(id)}/update`, {}, {
+    await window.FinTrak.fetchJSON(`/api/balance/${encodeURIComponent(id)}/update`, {}, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -319,24 +371,14 @@ async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, 
   if (!confirmed) return;
 
   try {
-    await fetchJSON(`/api/balance/${encodeURIComponent(id)}/delete`, {}, {
+    await window.FinTrak.fetchJSON(`/api/balance/${encodeURIComponent(id)}/delete`, {}, {
       method: 'POST'
     });
     showToast('Balance entry deleted', 'success');
     await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
   } catch (error) {
     console.error('Balance entry deletion failed', error);
-    if (window.FinTrak?.enqueueOfflineAction) {
-      window.FinTrak.enqueueOfflineAction(
-        'balance_delete',
-        { id },
-        `/api/balance/${encodeURIComponent(id)}/delete`
-      );
-      showToast('Delete saved locally', 'success', 'It will sync when the service wakes.');
-      await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
-    } else {
-      showToast('Deletion failed', 'danger', error.message);
-    }
+    showToast('Deletion failed', 'danger', error.message);
   }
 }
 
@@ -371,7 +413,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       try {
-        const result = await fetchJSON('/api/balance/add', {}, {
+        const result = await window.FinTrak.fetchJSON('/api/balance/add', {}, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ amount, note: addNote ? addNote.value || '' : '' }),
@@ -383,15 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
       } catch (error) {
         console.error('add failed', error);
-        if (window.FinTrak?.enqueueOfflineAction) {
-          window.FinTrak.enqueueOfflineAction('balance_add', { amount, note: addNote ? addNote.value || '' : '' });
-          showToast('Add saved locally', 'success', 'It will sync when the service wakes.');
-          addAmount.value = '';
-          if (addNote) addNote.value = '';
-          closeModal('addBalanceModal');
-        } else {
-          showToast('Add failed', 'danger', error.message);
-        }
+        showToast('Add failed', 'danger', error.message);
       }
     });
   }
@@ -415,7 +449,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       try {
-        const result = await fetchJSON('/api/balance/sync', {}, {
+        const result = await window.FinTrak.fetchJSON('/api/balance/sync', {}, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ balance, note: syncNote ? syncNote.value || '' : '' }),
@@ -427,15 +461,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
       } catch (error) {
         console.error('sync failed', error);
-        if (window.FinTrak?.enqueueOfflineAction) {
-          window.FinTrak.enqueueOfflineAction('balance_sync', { balance, note: syncNote ? syncNote.value || '' : '' });
-          showToast('Sync saved locally', 'success', 'It will sync when the service wakes.');
-          syncAmount.value = '';
-          if (syncNote) syncNote.value = '';
-          closeModal('syncBalanceModal');
-        } else {
-          showToast('Sync failed', 'danger', error.message);
-        }
+        showToast('Sync failed', 'danger', error.message);
       }
     });
   }

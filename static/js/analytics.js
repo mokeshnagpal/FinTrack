@@ -1,13 +1,6 @@
-async function fetchJSON(url, params = {}) {
-  const query = new URLSearchParams(params).toString();
-  const response = await fetch(url + (query ? `?${query}` : ''));
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || `Request failed (${response.status})`);
-  }
-  return data;
-}
+// Use centralized functions from utils.js
+const fetchJSON = (url, params = {}) => window.FinTrak.fetchJSON(url, params);
+const escapeHtml = (v) => window.FinTrak.escapeHtml(v);
 
 const elements = {
   applyBtn: document.getElementById('applyBtn'),
@@ -42,9 +35,6 @@ const elements = {
 
 let mainChart = null;
 let sideChart = null;
-
-// Use centralized function from utils.js
-const escapeHtml = (v) => window.FinTrak.escapeHtml(v);
 
 const controls = window.FinTrak?.analyticsControls;
 let controlApi = null;

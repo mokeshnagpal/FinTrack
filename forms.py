@@ -64,32 +64,28 @@ class LoginForm(FlaskForm):
 
 
 class ViewPasswordForm(FlaskForm):
+    current_password = PasswordField(
+        'Current view-only password',
+        validators=[
+            DataRequired(message='Current password is required'),
+            Length(max=128, message='Password is too long'),
+        ],
+    )
     password = PasswordField(
         'New view-only password',
         validators=[
-            DataRequired(message='Password is required'),
+            DataRequired(message='New password is required'),
             Regexp(STRONG_PASSWORD_PATTERN, message=STRONG_PASSWORD_MESSAGE),
         ],
     )
     confirm_password = PasswordField(
-        'Confirm password',
+        'Confirm new password',
         validators=[
             DataRequired(message='Please confirm the password'),
             EqualTo('password', message='Passwords must match'),
         ],
     )
     submit = SubmitField('Update View-only Password')
-
-
-class ViewPasswordRevealForm(FlaskForm):
-    current_password = PasswordField(
-        'Type current view-only password',
-        validators=[
-            DataRequired(message='Current view-only password is required'),
-            Length(max=128, message='Password is too long'),
-        ],
-    )
-    submit = SubmitField('Show Password')
 
 
 class CategoryForm(FlaskForm):
@@ -342,7 +338,7 @@ class TripForm(FlaskForm):
     )
     cost_type = SelectField(
         'Cost Option',
-        choices=[('fixed', 'Approx Cost (Fixed)'), ('split', 'Split Account (Variable)')],
+        choices=[('fixed', 'Approx cost'), ('split', 'Create a split account')],
         default='fixed',
     )
     approx_cost = DecimalField(

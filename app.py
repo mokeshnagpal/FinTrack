@@ -20,24 +20,23 @@ from forms import (
     TransactionForm,
     TripForm,
     ViewPasswordForm,
-    ViewPasswordRevealForm,
 )
 from constants import (
     BALANCE_HISTORY_TABLE_LIMIT,
-    BROWSER_CACHE_BALANCE_HISTORY,
-    BROWSER_CACHE_RECENT_TRANSACTIONS,
-    BROWSER_CACHE_TTL_SECONDS,
-    DEFAULT_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_CACHE_TTL_SECONDS,
     DEFAULT_RECURRING_THROTTLE_SECONDS,
-    DEFAULT_WAKE_REFRESH_IDLE_SECONDS,
-    RECENT_TRANSACTIONS_CACHE_LIMIT,
     RECURRING_RULE_TABLE_LIMIT,
     SPLIT_DOCUMENT_TABLE_LIMIT,
     SPLIT_ENTRY_TABLE_LIMIT,
-    SYNC_STATUS_POLL_SECONDS,
     TRANSACTION_PAGE_SIZE,
     TRIP_TABLE_LIMIT,
+)
+from pagination import ELLIPSIS, build_page_items
+from ledger import (
+    delete_spend_balance_delta,
+    edit_spend_balance_delta,
+    normalize_spend_amount,
+    split_balance,
+    split_share,
 )
 import os
 import io
@@ -134,18 +133,12 @@ VIEW_ONLY_SETTINGS_DOC = "view_only_access"
 CATEGORIES_SETTINGS_DOC = "categories"
 SPLIT_PEOPLE_SETTINGS_DOC = "split_people"
 CLIENT_ACTIONS_COL = "client_actions"
-CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', DEFAULT_CACHE_TTL_SECONDS)
-AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', DEFAULT_AUTH_CACHE_TTL_SECONDS)
-WAKE_REFRESH_IDLE_SECONDS = env_int('WAKE_REFRESH_IDLE_SECONDS', DEFAULT_WAKE_REFRESH_IDLE_SECONDS)
 RECURRING_THROTTLE_SECONDS = env_int('RECURRING_THROTTLE_SECONDS', DEFAULT_RECURRING_THROTTLE_SECONDS)
 FIRESTORE_TIMEOUT_SECONDS = env_int('FIRESTORE_TIMEOUT_SECONDS', 8)
 ENABLE_DEBUG_ROUTES = env_bool('ENABLE_DEBUG_ROUTES', False)
 MAX_MONEY_AMOUNT = 999999999
 MAX_DESCRIPTION_LENGTH = 120
 MAX_NOTE_LENGTH = 120
-_APP_CACHE = {}
-_LAST_REQUEST_MONOTONIC = time.monotonic()
-_LAST_CACHE_REFRESH_RESULT = None
 
 # ---------------------------------------------------------------------
 # Flask App Configuration
@@ -184,14 +177,9 @@ def client_constants_context():
     return {
         'client_constants': {
             'balance_history_table_limit': BALANCE_HISTORY_TABLE_LIMIT,
-            'browser_cache_balance_history': BROWSER_CACHE_BALANCE_HISTORY,
-            'browser_cache_recent_transactions': RECENT_TRANSACTIONS_CACHE_LIMIT,
-            'browser_cache_refresh_timeout_ms': 8000,
-            'browser_cache_ttl_seconds': BROWSER_CACHE_TTL_SECONDS,
             'recurring_rule_table_limit': RECURRING_RULE_TABLE_LIMIT,
             'split_document_table_limit': SPLIT_DOCUMENT_TABLE_LIMIT,
             'split_entry_table_limit': SPLIT_ENTRY_TABLE_LIMIT,
-            'sync_status_poll_seconds': SYNC_STATUS_POLL_SECONDS,
             'transaction_page_size': TRANSACTION_PAGE_SIZE,
         }
     }
@@ -220,11 +208,9 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/api/balance_series',
     '/api/balance_analytics',
     '/api/splits',
-    '/api/cache_snapshot',
     '/api/totals',
     '/api/category_breakdown',
     '/api/transactions_range',
-    '/api/render_status',
     '/export/transactions_csv',
     '/export/balances_csv',
     '/export/all_data_zip',
@@ -277,6 +263,14 @@ def user_doc_ref(username=None):
 def tx_collection(username=None):
     return user_doc_ref(username).collection('transactions')
 
+def count_user_transactions(username=None):
+    try:
+        result = tx_collection(username).count().get()
+        return int(result[0][0].value)
+    except Exception as exc:
+        app.logger.warning("Transaction count failed: %s", exc)
+        return None
+
 def rec_collection(username=None):
     return user_doc_ref(username).collection('recurring')
 
@@ -307,26 +301,6 @@ def categories_settings_ref():
 def split_people_settings_ref():
     return fs.collection(SETTINGS_COL).document(SPLIT_PEOPLE_SETTINGS_DOC)
 
-def cache_get(key):
-    cached = _APP_CACHE.get(key)
-    if not cached:
-        return None
-    expires_at, value = cached
-    if expires_at <= time.monotonic():
-        _APP_CACHE.pop(key, None)
-        return None
-    return value
-
-def cache_set(key, value, ttl=CACHE_TTL_SECONDS):
-    _APP_CACHE[key] = (time.monotonic() + ttl, value)
-    return value
-
-def cache_delete(key):
-    _APP_CACHE.pop(key, None)
-
-def cache_clear():
-    _APP_CACHE.clear()
-
 def load_view_only_password_hash_from_store():
     doc = view_only_settings_ref().get(
         retry=None,
@@ -335,7 +309,7 @@ def load_view_only_password_hash_from_store():
     password_hash = ''
     if doc.exists:
         password_hash = (doc.to_dict() or {}).get('password_hash') or ''
-    return cache_set('view_only_password_hash', password_hash)
+    return password_hash
 
 def load_categories_from_store():
     categories = []
@@ -352,18 +326,19 @@ def load_categories_from_store():
         default_cat = data.get('default_category') or 'Other'
     if not categories:
         categories = default_categories()
-    cache_set('default_category', default_cat)
-    return list(cache_set('categories', categories))
+    return categories
 
 def get_default_category():
-    cached_default = cache_get('default_category')
-    if cached_default is not None:
-        return cached_default
     try:
-        load_categories_from_store()
-        return cache_get('default_category') or 'Other'
+        doc = categories_settings_ref().get(
+            retry=None,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+        if doc.exists:
+            return (doc.to_dict() or {}).get('default_category') or 'Other'
     except Exception:
-        return 'Other'
+        app.logger.exception("Failed to load default category")
+    return 'Other'
 
 def load_user_auth_from_store(username):
     normalized_username = normalize_username(username)
@@ -378,71 +353,10 @@ def load_user_auth_from_store(username):
         'exists': doc.exists,
         'data': (doc.to_dict() or {}) if doc.exists else {},
     }
-    if entry['exists']:
-        cache_user_auth(normalized_username, entry['data'], exists=True)
-    else:
-        forget_user_auth_cache(normalized_username)
     return freeze_user_auth_entry(entry)
-
-def refresh_cache_job(username=None, reason='manual'):
-    global _LAST_CACHE_REFRESH_RESULT
-
-    result = {
-        'ok': True,
-        'reason': reason,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'updated': [],
-        'errors': [],
-    }
-
-    jobs = (
-        ('view_only_password', lambda: load_view_only_password_hash_from_store()),
-        ('categories', load_categories_from_store),
-        ('split_people', load_split_people_from_store),
-    )
-    for name, loader in jobs:
-        try:
-            loader()
-            result['updated'].append(name)
-        except Exception as exc:
-            result['ok'] = False
-            result['errors'].append(name)
-            app.logger.exception("Cache refresh job failed for %s: %s", name, exc)
-
-    normalized_username = normalize_username(username)
-    if normalized_username:
-        try:
-            load_user_auth_from_store(normalized_username)
-            result['updated'].append('user_auth')
-        except Exception as exc:
-            result['ok'] = False
-            result['errors'].append('user_auth')
-            app.logger.exception("Cache refresh job failed for user_auth user=%s: %s", normalized_username, exc)
-
-    _LAST_CACHE_REFRESH_RESULT = dict(result)
-    return result
-
-def refresh_cache_after_wake():
-    global _LAST_REQUEST_MONOTONIC
-
-    now_monotonic = time.monotonic()
-    idle_seconds = now_monotonic - _LAST_REQUEST_MONOTONIC
-    _LAST_REQUEST_MONOTONIC = now_monotonic
-
-    if idle_seconds >= WAKE_REFRESH_IDLE_SECONDS:
-        result = refresh_cache_job(get_current_username(), reason='wake')
-        app.logger.info(
-            "Ran cache refresh job after %.1fs idle/wake pause ok=%s updated=%s",
-            idle_seconds,
-            result['ok'],
-            ','.join(result['updated']),
-        )
 
 def normalize_username(username):
     return str(username or '').strip().lower()
-
-def auth_cache_key(username):
-    return f"user_auth:{normalize_username(username)}"
 
 def freeze_user_auth_entry(entry):
     return {
@@ -450,24 +364,10 @@ def freeze_user_auth_entry(entry):
         'data': dict(entry.get('data') or {}),
     }
 
-def cache_user_auth(username, user_data=None, exists=True):
-    entry = {
-        'exists': bool(exists),
-        'data': dict(user_data or {}),
-    }
-    return cache_set(auth_cache_key(username), entry, AUTH_CACHE_TTL_SECONDS)
-
-def forget_user_auth_cache(username):
-    cache_delete(auth_cache_key(username))
-
 def get_user_auth_entry(username):
     normalized_username = normalize_username(username)
     if not normalized_username:
         return {'exists': False, 'data': {}}
-
-    cached_entry = cache_get(auth_cache_key(normalized_username))
-    if cached_entry is not None:
-        return freeze_user_auth_entry(cached_entry)
 
     return load_user_auth_from_store(normalized_username)
 
@@ -476,23 +376,9 @@ def get_user_auth_for_login(username):
     if not normalized_username:
         return {'exists': False, 'data': {}}, 'none'
 
-    try:
-        return load_user_auth_from_store(normalized_username), 'firestore'
-    except Exception:
-        cached_entry = cache_get(auth_cache_key(normalized_username))
-        if cached_entry is not None:
-            app.logger.warning(
-                "Using cached auth hash for login because Firestore is unavailable user=%s",
-                normalized_username,
-            )
-            return freeze_user_auth_entry(cached_entry), 'cache'
-        raise
+    return load_user_auth_from_store(normalized_username), 'firestore'
 
 def get_view_only_password_hash():
-    cached_hash = cache_get('view_only_password_hash')
-    if cached_hash is not None:
-        return cached_hash
-
     try:
         return load_view_only_password_hash_from_store()
     except Exception:
@@ -538,14 +424,6 @@ def category_exists(categories, name):
     return item_exists(categories, name, normalize_category_name)
 
 def get_categories():
-    cached_categories = cache_get('categories')
-    if cached_categories is not None:
-        categories = list(cached_categories)
-        if not category_exists(categories, 'Trip'):
-            categories.append('Trip')
-            cache_set('categories', categories)
-        return categories
-
     try:
         categories = load_categories_from_store()
         if not category_exists(categories, 'Trip'):
@@ -558,7 +436,7 @@ def get_categories():
     categories = default_categories()
     if not category_exists(categories, 'Trip'):
         categories.append('Trip')
-    return list(cache_set('categories', categories))
+    return categories
 
 def save_categories(categories, updated_by=None):
     clean_categories = unique_normalized_items(categories, normalize_category_name)
@@ -571,7 +449,6 @@ def save_categories(categories, updated_by=None):
         'updated_at': datetime.now(UTC),
         'updated_by': updated_by,
     }, merge=True)
-    cache_set('categories', clean_categories)
     return clean_categories
 
 def default_split_people():
@@ -597,18 +474,14 @@ def load_split_people_from_store():
         people = unique_normalized_items(raw_people, normalize_person_name)
     if not people:
         people = default_split_people()
-    return list(cache_set('split_people', people))
+    return people
 
 def get_split_people():
-    cached_people = cache_get('split_people')
-    if cached_people is not None:
-        return list(cached_people)
-
     try:
         return load_split_people_from_store()
     except Exception:
         app.logger.exception("Failed to load split people settings")
-    return list(cache_set('split_people', default_split_people()))
+    return default_split_people()
 
 def save_split_people(people, updated_by=None):
     clean_people = unique_normalized_items(people, normalize_person_name)
@@ -621,7 +494,6 @@ def save_split_people(people, updated_by=None):
         'updated_at': datetime.now(UTC),
         'updated_by': updated_by,
     }, merge=True)
-    cache_set('split_people', clean_people)
     return clean_people
 
 def apply_category_choices(form, include=None):
@@ -646,13 +518,12 @@ def apply_split_entry_choices(form, person_include=None, category_include=None, 
     form.person.choices = [(item, item) for item in people]
 
 def view_password_status_context():
+    username = require_user()
     has_db_password = bool(get_view_only_password_hash())
-    can_copy_current_view_password = bool(HW_PASSWORD and not has_db_password)
+    is_new_user = (username.lower() in ADMIN_USERS) and not get_user_auth_doc(username).exists
     return {
         'has_db_password': has_db_password,
-        'has_env_fallback': bool(HW_PASSWORD),
-        'can_copy_current_view_password': can_copy_current_view_password,
-        'current_view_password': HW_PASSWORD if can_copy_current_view_password else '',
+        'is_new_user': is_new_user,
     }
 
 def render_management(
@@ -660,8 +531,8 @@ def render_management(
     categories=None,
     editing_category=None,
     view_form=None,
-    reveal_form=None,
     revealed_current_view_password='',
+    revealed_current_password='',
     username_form=None,
     password_form=None,
     split_person_form=None,
@@ -671,8 +542,8 @@ def render_management(
     return render_template(
         'management.html',
         form=view_form or ViewPasswordForm(prefix='view_password'),
-        reveal_form=reveal_form or ViewPasswordRevealForm(prefix='reveal_view_password'),
         revealed_current_view_password=revealed_current_view_password,
+        revealed_current_password=revealed_current_password,
         username_form=username_form or ChangeUsernameForm(prefix='account_username'),
         password_form=password_form or ChangePasswordForm(prefix='account_password'),
         current_username=get_current_username() or '',
@@ -1105,8 +976,6 @@ def apply_recurring_balances_up_to_today():
 # Run before every request (minimal safe throttling)
 @app.before_request
 def ensure_recurring_applied():
-    refresh_cache_after_wake()
-
     # Only try to run for logged-in full users
     if not session.get('logged_in'):
         return
@@ -1121,7 +990,6 @@ def ensure_recurring_applied():
         '/static/',
         '/favicon.ico',
         '/export/',
-        '/sync-status',
         '/debug/recurring_run',
         '/api/',
         '/login',
@@ -1248,153 +1116,6 @@ def debug_recurring_run():
 def index():
     return render_template('index.html')
 
-@app.route('/sync-status')
-@login_required
-def sync_status():
-    if session.get('view_only'):
-        abort(403, description="Full authentication required")
-    return render_template('sync_status.html')
-
-@app.route('/api/render_status')
-@login_required
-def api_render_status():
-    cache_refresh = _LAST_CACHE_REFRESH_RESULT
-    if request.args.get('refresh_cache') == '1':
-        cache_refresh = refresh_cache_job(get_current_username(), reason='render_status')
-
-    return jsonify({
-        'ok': True,
-        'awake': True,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'cache_refresh': cache_refresh,
-    })
-
-@app.route('/api/login_wake_status')
-def api_login_wake_status():
-    cache_refresh = _LAST_CACHE_REFRESH_RESULT
-    if request.args.get('refresh_cache') == '1':
-        cache_refresh = refresh_cache_job(reason='login_wake')
-
-    return jsonify({
-        'ok': True,
-        'awake': True,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'cache_refresh': cache_refresh,
-    })
-
-@app.route('/api/login_password_cache_status')
-def api_login_password_cache_status():
-    username = normalize_username(request.args.get('username'))
-    cache_available = bool(username and cache_get(auth_cache_key(username)) is not None)
-    return jsonify({
-        'ok': True,
-        'cache_available': cache_available,
-        'checked_at': datetime.now(UTC).isoformat(),
-    })
-
-def serialize_transaction_for_cache(txn):
-    return {
-        'id': txn.get('_id') or txn.get('id'),
-        'timestamp': format_ist(txn.get('timestamp')) if txn.get('timestamp') else None,
-        'description': txn.get('description') or '',
-        'category': txn.get('category') or 'Uncategorized',
-        'amount': round(float(txn.get('amount', 0.0)), 2),
-    }
-
-def serialize_balance_for_cache(entry):
-    return {
-        'id': entry.get('_id') or entry.get('id'),
-        'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
-        'balance': round(float(entry.get('balance', 0.0)), 2),
-        'type': entry.get('type'),
-        'delta': round(float(entry.get('delta', 0.0)), 2),
-        'note': entry.get('note', ''),
-    }
-
-def serialize_recurring_for_cache(rule):
-    return {
-        'id': rule.get('_id') or rule.get('id'),
-        'amount': round(float(rule.get('amount', 0.0)), 2),
-        'description': rule.get('description') or '',
-        'frequency': rule.get('frequency') or 'monthly',
-        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
-        'category': rule.get('category') or 'Uncategorized',
-    }
-
-def serialize_recurring_balance_for_cache(rule):
-    return {
-        'id': rule.get('_id') or rule.get('id'),
-        'balance': round(float(rule.get('balance', 0.0)), 2),
-        'frequency': rule.get('frequency') or 'monthly',
-        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
-        'note': rule.get('note') or '',
-    }
-
-def serialize_split_doc_for_cache(doc):
-    return {
-        'id': doc.get('_id') or doc.get('id'),
-        'title': doc.get('title') or '',
-        'created_at': format_ist(doc.get('created_at')) if doc.get('created_at') else None,
-        'updated_at': format_ist(doc.get('updated_at')) if doc.get('updated_at') else None,
-        'is_live': bool(doc.get('is_live')),
-    }
-
-@app.route('/api/cache_snapshot')
-@login_required
-def api_cache_snapshot():
-    username = require_user()
-    latest_balance = get_latest_balance(username=username)
-    balance_docs_raw = [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            bal_collection(username)
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(100)
-        )
-    ]
-    balance_docs = [d for d in balance_docs_raw if d.get('type') not in ('txn', 'transaction')][:BROWSER_CACHE_BALANCE_HISTORY]
-    txn_docs = [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            tx_collection(username)
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(BROWSER_CACHE_RECENT_TRANSACTIONS)
-        )
-    ]
-    live_split = get_live_split(username=username)
-    recurring_docs = get_recurring_rules_for_page(username)
-    recurring_balance_docs = get_recurring_balance_rules_for_page(username)
-    splits_docs = get_split_documents(username)
-    trips_docs = get_trip_documents(username)
-
-    return jsonify({
-        'ok': True,
-        'cached_at': datetime.now(UTC).isoformat(),
-        'limits': {
-            'recent_transactions': BROWSER_CACHE_RECENT_TRANSACTIONS,
-            'balance_history': BROWSER_CACHE_BALANCE_HISTORY,
-            'split_entries': SPLIT_ENTRY_TABLE_LIMIT,
-            'recurring_rules': RECURRING_RULE_TABLE_LIMIT,
-            'splits': SPLIT_DOCUMENT_TABLE_LIMIT,
-            'trips': TRIP_TABLE_LIMIT,
-        },
-        'categories': get_categories(),
-        'split_people': get_split_people(),
-        'balance': {
-            'current': {
-                'balance': round(float(latest_balance.get('balance', 0.0)), 2) if latest_balance else 0.0,
-                'timestamp': format_ist(latest_balance.get('timestamp')) if latest_balance and latest_balance.get('timestamp') else None,
-            },
-            'history': [serialize_balance_for_cache(entry) for entry in balance_docs],
-        },
-        'transactions': [serialize_transaction_for_cache(txn) for txn in txn_docs],
-        'live_split': build_split_summary(live_split, username=username),
-        'recurring_rules': [serialize_recurring_for_cache(r) for r in recurring_docs],
-        'recurring_balance_rules': [serialize_recurring_balance_for_cache(r) for r in recurring_balance_docs],
-        'splits': [serialize_split_doc_for_cache(d) for d in splits_docs],
-        'trips': [serialize_trip_for_cache(t) for t in trips_docs],
-    })
-
 def build_transaction_doc(form):
     txn_datetime = local_datetime_to_utc(
         form.date.data or now_ist().date(),
@@ -1500,61 +1221,6 @@ def create_transaction(username, txn_doc, client_action_id=None):
         }, merge=True)
 
     return txn_id, False
-
-
-def get_latest_transaction_id(username=None):
-    if username is None:
-        username = require_user()
-    docs = list(
-        stream_with_timeout(
-            tx_collection(username)
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(1)
-        )
-    )
-    return docs[0].id if docs else None
-
-
-def is_latest_transaction(tx_id, username=None):
-    latest_id = get_latest_transaction_id(username=username)
-    return bool(latest_id and str(latest_id) == str(tx_id))
-
-
-def has_newer_transaction_after_edit(tx_id, new_timestamp, username=None):
-    if username is None:
-        username = require_user()
-    docs = stream_with_timeout(
-        tx_collection(username)
-        .where('timestamp', '>', new_timestamp)
-        .order_by('timestamp', direction=firestore.Query.DESCENDING)
-        .limit(2)
-    )
-    return any(str(doc.id) != str(tx_id) for doc in docs)
-
-
-def latest_transaction_error_response(tx_id=None, username=None, action='mutation'):
-    app.logger.warning(
-        "Latest-only transaction guard blocked action=%s tx_id=%s user=%s",
-        action,
-        tx_id,
-        username,
-    )
-    return jsonify({
-        'ok': False,
-        'error': 'Only the latest transaction can be edited or deleted. Delete the latest transaction first to unlock the previous one.',
-    }), 400
-
-
-def transaction_must_remain_latest_response(tx_id=None, username=None):
-    app.logger.warning(
-        "Latest transaction edit would no longer remain latest tx_id=%s user=%s",
-        tx_id,
-        username,
-    )
-    return jsonify({
-        'ok': False,
-        'error': 'The edited transaction must remain the latest transaction. Keep its date/time after all previous transactions.',
-    }), 400
 
 
 def populate_transaction_form(form, transaction):
@@ -1748,6 +1414,7 @@ def edit_transaction(tx_id):
             doc_ref.update(updated_doc)
             if balance_delta:
                 append_balance(balance_delta, 'txn_edit', note=f"edit_txn:{tx_id}", username=username)
+                recalculate_balance_entries(username=username)
             app.logger.info(
                 "Transaction updated id=%s user=%s old_amount=%.2f new_amount=%.2f",
                 tx_id,
@@ -1783,20 +1450,13 @@ def transactions():
     )
     sort_dir = sanitize_sort(request.args.get('dir'), {'asc', 'desc'}, 'desc')
     direction = firestore.Query.ASCENDING if sort_dir == 'asc' else firestore.Query.DESCENDING
-    cursor_id = (request.args.get('cursor') or '').strip()
-
     username = require_user()
     base_query = tx_collection(username).order_by(sort_field, direction=direction)
-    if cursor_id:
-        cursor_doc = tx_collection(username).document(cursor_id).get()
-        if cursor_doc.exists:
-            base_query = base_query.start_after(cursor_doc)
-
-    scan_limit = 150 if search else per + 1
-    docs = list(stream_with_timeout(base_query.limit(scan_limit)))
 
     if search:
         search_key = search.lower()
+        scan_limit = 500
+        docs = list(stream_with_timeout(base_query.limit(scan_limit)))
         filtered_docs = []
         for doc in docs:
             data = doc.to_dict() or {}
@@ -1808,78 +1468,50 @@ def transactions():
             ]).lower()
             if search_key in haystack:
                 filtered_docs.append(doc)
-            if len(filtered_docs) > per:
-                break
-        page_docs = filtered_docs[:per]
-        has_next = len(filtered_docs) > per or len(docs) == scan_limit
+
+        total_count = len(filtered_docs)
+        total_pages = max(1, math.ceil(total_count / per)) if total_count else 1
+        page = max(1, min(page, total_pages))
+        start_idx = (page - 1) * per
+        page_docs = filtered_docs[start_idx:start_idx + per]
+        has_next = start_idx + per < total_count
+        has_prev = page > 1
+        next_cursor = ''
+        prev_cursor = ''
+        current_cursor = ''
     else:
+        total_count = count_user_transactions(username)
+        if total_count is None:
+            total_count = 0
+        total_pages = max(1, math.ceil(total_count / per)) if total_count else 1
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * per
+        docs = list(stream_with_timeout(base_query.offset(offset).limit(per + 1)))
         page_docs = docs[:per]
-        has_next = len(docs) > per
+        has_next = page < total_pages
+        has_prev = page > 1
+        next_cursor = ''
+        prev_cursor = ''
+        current_cursor = ''
 
     txns_list = [doc_to_txn(doc) for doc in page_docs]
-    has_prev = page > 1
-    next_cursor = page_docs[-1].id if page_docs and has_next else None
-    current_cursor = cursor_id
-
-    prev_cursor = ''
-    cursor_history_key = f"txn_cursors:{username}:{sort_field}:{sort_dir}:{search}"
-    cursor_history = session.get(cursor_history_key, {})
-    if next_cursor:
-        cursor_history[str(page + 1)] = next_cursor
-        cursor_history = {
-            key: cursor_history[key]
-            for key in sorted(cursor_history, key=lambda item: int(item))[-20:]
-        }
-        session[cursor_history_key] = cursor_history
-    if page > 2:
-        prev_cursor = cursor_history.get(str(page - 1), '')
-
-    page_cursor_map = {1: ''}
-    for cursor_page, cursor_value in cursor_history.items():
-        try:
-            page_cursor_map[int(cursor_page)] = cursor_value
-        except (TypeError, ValueError):
-            continue
-    if current_cursor:
-        page_cursor_map[page] = current_cursor
-    if next_cursor:
-        page_cursor_map[page + 1] = next_cursor
-
-    candidate_pages = {1, page}
-    if has_prev:
-        candidate_pages.add(page - 1)
-    if page > 2:
-        candidate_pages.add(page - 2)
-    if has_next:
-        candidate_pages.add(page + 1)
-    for known_page in page_cursor_map:
-        if abs(known_page - page) <= 2:
-            candidate_pages.add(known_page)
 
     page_links = []
-    previous_page = None
-    for page_num in sorted(candidate_pages):
-        if page_num < 1:
-            continue
-        cursor_value = page_cursor_map.get(page_num)
-        if page_num != page and cursor_value is None:
-            continue
-        if previous_page is not None and page_num - previous_page > 1:
+    for item in build_page_items(page, total_pages):
+        if item == ELLIPSIS:
             page_links.append({'ellipsis': True})
+            continue
         page_links.append({
-            'page': page_num,
-            'cursor': cursor_value or '',
-            'active': page_num == page,
+            'page': item,
+            'cursor': '',
+            'active': item == page,
         })
-        previous_page = page_num
-
-    if has_next and page_links and not page_links[-1].get('ellipsis') and page_links[-1].get('page') == page + 1:
-        page_links.append({'ellipsis': True})
 
     paginate_obj = SimpleNamespace(
         items=txns_list,
         page=page,
         per_page=per,
+        total_pages=total_pages,
         has_next=has_next,
         has_prev=has_prev,
         next_num=page + 1 if has_next else None,
@@ -1891,7 +1523,6 @@ def transactions():
         search=search,
         sort=sort_field,
         direction=sort_dir,
-        latest_transaction_id=get_latest_transaction_id(username=username),
     )
 
     form = TransactionForm()
@@ -1911,9 +1542,10 @@ def delete(tx_id):
 
     try:
         txn = doc_to_txn(doc)
-        amt = float(txn.get('amount', 0.0))
+        amt = delete_spend_balance_delta(txn.get('amount', 0.0))
         doc_ref.delete()
         append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}", username=username)
+        recalculate_balance_entries(username=username)
         flash('Transaction deleted.', 'info')
     except Exception as e:
         app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
@@ -2324,19 +1956,6 @@ def populate_split_entry_form(form, entry):
     form.date.data = entry_time.date()
     form.time.data = entry_time.time().replace(second=0, microsecond=0, tzinfo=None)
 
-def serialize_trip_for_cache(t):
-    return {
-        'id': t.get('_id') or t.get('id'),
-        'name': t.get('name') or '',
-        'start_date': format_ist(t.get('start_date'), "'%y-%m-%d") if t.get('start_date') else None,
-        'end_date': format_ist(t.get('end_date'), "'%y-%m-%d") if t.get('end_date') else None,
-        'description': t.get('description') or '',
-        'photo_link': t.get('photo_link') or '',
-        'cost_type': t.get('cost_type') or 'fixed',
-        'approx_cost': round(float(t.get('approx_cost') or 0.0), 2),
-        'split_id': t.get('split_id') or None,
-    }
-
 def get_trip_documents(username=None):
     if username is None:
         username = require_user()
@@ -2426,6 +2045,49 @@ def get_split_totals(split_id, username=None):
         totals[person] = round(totals.get(person, 0.0) + float(entry.get('amount', 0.0)), 2)
     return totals
 
+def build_split_math(split_doc, totals):
+    people = []
+    seen = set()
+    for person in split_doc.get('people', []) or []:
+        clean = normalize_person_name(person)
+        if clean and clean.lower() not in seen:
+            people.append(clean)
+            seen.add(clean.lower())
+
+    for person in sorted(totals):
+        clean = normalize_person_name(person)
+        if clean and clean.lower() not in seen:
+            people.append(clean)
+            seen.add(clean.lower())
+
+    total_spent = round(sum(float(amount or 0.0) for amount in totals.values()), 2)
+    num_people = len(people) or len(totals)
+    share_amount = split_share(total_spent, num_people) if num_people > 0 else 0.0
+    settlements = []
+    for person in people:
+        amount = round(float(totals.get(person, 0.0)), 2)
+        balance = split_balance(amount, share_amount)
+        if balance > 0:
+            status = 'receive'
+        elif balance < 0:
+            status = 'give'
+        else:
+            status = 'settled'
+        settlements.append({
+            'person': person,
+            'amount': amount,
+            'share_amount': share_amount,
+            'balance': balance,
+            'balance_abs': abs(balance),
+            'status': status,
+        })
+    return {
+        'total_spent': total_spent,
+        'num_people': num_people,
+        'share_amount': share_amount,
+        'settlements': settlements,
+    }
+
 def serialize_split_entry(entry):
     return {
         'id': entry.get('_id') or entry.get('id'),
@@ -2442,12 +2104,17 @@ def build_split_summary(split_doc, username=None):
     split_id = split_doc.get('_id') or split_doc.get('id')
     totals = get_split_totals(split_id, username=username)
     entries = get_split_entries(split_id, username=username, limit=SPLIT_ENTRY_TABLE_LIMIT)
+    split_math = build_split_math(split_doc, totals)
     return {
         'id': split_id,
         'title': split_doc.get('title') or 'Untitled split',
         'is_live': bool(split_doc.get('is_live')),
         'updated_at': format_ist(split_doc.get('updated_at')) if split_doc.get('updated_at') else None,
         'totals': [{'person': person, 'amount': amount} for person, amount in sorted(totals.items())],
+        'total_spent': split_math['total_spent'],
+        'num_people': split_math['num_people'],
+        'share_amount': split_math['share_amount'],
+        'settlements': split_math['settlements'],
         'entries': [serialize_split_entry(entry) for entry in entries],
     }
 
@@ -2533,9 +2200,8 @@ def splits():
     for s in splits_list:
         sid = s.get('_id') or s.get('id')
         totals = get_split_totals(sid, username=username)
-        total_spent = sum(totals.values())
-        num_people = len(s.get('people', [])) or len(totals)
-        s['share_amount'] = round(total_spent / num_people, 2) if num_people > 0 else 0.0
+        split_math = build_split_math(s, totals)
+        s['share_amount'] = split_math['share_amount']
 
     return render_template(
         'splits.html',
@@ -2561,6 +2227,12 @@ def split_detail(split_id):
         return redirect(url_for('splits'))
 
     split_data = doc_to_txn(split_doc)
+    totals = get_split_totals(split_id, username=username)
+    split_math = build_split_math(split_data, totals)
+    split_data['total_spent'] = split_math['total_spent']
+    split_data['num_people'] = split_math['num_people']
+    split_data['share_amount'] = split_math['share_amount']
+    split_data['settlements'] = split_math['settlements']
     entry_form = SplitEntryForm()
     apply_split_entry_choices(entry_form, split_people_override=split_data.get('people'))
     return render_template(
@@ -2568,7 +2240,7 @@ def split_detail(split_id):
         split_doc=split_data,
         entry_form=entry_form,
         entries=get_split_entries(split_id, username=username),
-        totals=get_split_totals(split_id, username=username),
+        totals=totals,
         editing_entry=False,
         entry_id=None,
     )
@@ -3015,62 +2687,64 @@ def split_record_txn(split_id):
         flash('No participants found to calculate share.', 'warning')
         return redirect(url_for('splits'))
 
-    share_amount = round(total_spent / num_people, 2)
-    txn_amount = -share_amount
+    share_amount = split_share(total_spent, num_people)
+    if share_amount <= 0:
+        flash('Split total is zero; add entries before recording a share.', 'warning')
+        return redirect(url_for('splits'))
 
     overwrite = request.form.get('overwrite') == 'true'
     existing_txn_id = split_data.get('transaction_id')
 
-    txns_col = tx_collection(username)
-    txn_id = existing_txn_id
+    if existing_txn_id and not overwrite:
+        flash(
+            'A transaction for this split already exists. Confirm overwrite to update the amount.',
+            'warning',
+        )
+        return redirect(url_for('splits'))
 
-    if txn_id and overwrite:
-        txn_ref = txns_col.document(txn_id)
+    txns_col = tx_collection(username)
+
+    if existing_txn_id and overwrite:
+        txn_ref = txns_col.document(existing_txn_id)
         if txn_ref.get().exists:
             existing_txn = doc_to_txn(txn_ref.get())
-            old_amount = float(existing_txn.get('amount', 0.0))
-            new_amount = float(txn_amount)
-            balance_delta = round(old_amount - new_amount, 2)
-            balance_note = f"edit_txn:{txn_id}"
+            balance_delta = edit_spend_balance_delta(
+                existing_txn.get('amount', 0.0),
+                share_amount,
+            )
 
-            if balance_delta and not balance_note_exists(username, balance_note):
-                append_balance(balance_delta, 'txn_edit', note=balance_note, username=username)
+            if balance_delta:
+                append_balance(balance_delta, 'txn_edit', note=f"edit_txn:{existing_txn_id}", username=username)
+                recalculate_balance_entries(username=username)
 
             txn_ref.update({
-                'amount': float(txn_amount),
+                'amount': float(share_amount),
                 'description': f"Split share: {split_data.get('title')}",
                 'category': 'Trip',
-                'updated_at': datetime.now(UTC)
+                'updated_at': datetime.now(UTC),
             })
             split_ref.update({
                 'recorded_amount': float(share_amount),
-                'updated_at': datetime.now(UTC)
+                'updated_at': datetime.now(UTC),
             })
             flash(f"Successfully re-synced split share of Rs. {share_amount} in transactions!", 'success')
             return redirect(url_for('splits'))
-        else:
-            txn_id = None
 
-    if not txn_id or not overwrite:
-        # Create a new transaction
-        txn_doc = {
-            'amount': float(txn_amount),
-            'description': f"Split share: {split_data.get('title')}",
-            'category': 'Trip',
-            'timestamp': datetime.now(UTC),
-            'created_at': datetime.now(UTC),
-            'updated_at': datetime.now(UTC)
-        }
-
-        # We call create_transaction helper to add and adjust balance
-        txn_id, _ = create_transaction(username, txn_doc)
-        split_ref.update({
-            'transaction_id': txn_id,
-            'recorded_amount': float(share_amount),
-            'updated_at': datetime.now(UTC)
-        })
-        flash(f"Successfully recorded split share of Rs. {share_amount} as a Trip Expense!", 'success')
-
+    txn_doc = {
+        'amount': float(share_amount),
+        'description': f"Split share: {split_data.get('title')}",
+        'category': 'Trip',
+        'timestamp': datetime.now(UTC),
+        'created_at': datetime.now(UTC),
+        'updated_at': datetime.now(UTC),
+    }
+    txn_id, _ = create_transaction(username, txn_doc)
+    split_ref.update({
+        'transaction_id': txn_id,
+        'recorded_amount': float(share_amount),
+        'updated_at': datetime.now(UTC),
+    })
+    flash(f"Successfully recorded split share of Rs. {share_amount} as a Trip Expense!", 'success')
     return redirect(url_for('splits'))
 
 
@@ -3090,7 +2764,7 @@ def trips():
         form = TripForm(formdata=None)
 
     if not session.get('view_only') and request.method == 'POST':
-        # JSON API payload check (offline sync)
+        # JSON API payload check
         if request.is_json:
             payload = request.get_json(silent=True) or {}
             name = validate_short_text(payload.get('name'), 'Trip Name')
@@ -3489,19 +3163,28 @@ def make_password_hash(password: str) -> str:
     """
     return generate_password_hash(password)  # e.g. "pbkdf2:sha256:260000$..."
 
-def verify_view_only_password(provided_pw):
+def verify_view_only_password(provided_pw, allow_new_user_default=False):
     """
     Verify the view-only password against Firestore settings first.
     VIEW_PASS remains a fallback so existing deployments continue to work.
+    For new users (admin but no DB entry), allow the default password.
     """
     if not provided_pw:
         return False
 
     stored_hash = get_view_only_password_hash()
-    if stored_hash:
-        return verify_password(stored_hash, provided_pw)
+    if stored_hash and verify_password(stored_hash, provided_pw):
+        return True
 
-    return bool(HW_PASSWORD and provided_pw == HW_PASSWORD)
+    # Allow environment fallback if configured
+    if HW_PASSWORD and provided_pw == HW_PASSWORD:
+        return True
+    
+    # For new users, allow the default password regardless of global view-only configuration
+    if allow_new_user_default and provided_pw == 'Mokesh87654321':
+        return True
+    
+    return False
 
 
 def get_user_auth_doc(username):
@@ -3512,16 +3195,21 @@ def get_user_auth_doc(username):
     )
 
 
-def verify_current_user_password(username, password):
+def verify_current_user_password(username, password, allow_new_user_default=False):
     user_entry = load_user_auth_from_store(username)
-    if not user_entry['exists']:
-        return False, None
-
-    user_data = user_entry['data']
-    if not verify_password(user_data.get('password'), password):
-        return False, user_data
-
-    return True, user_data
+    
+    # If user exists in DB, verify against stored password
+    if user_entry['exists']:
+        user_data = user_entry['data']
+        if not verify_password(user_data.get('password'), password):
+            return False, user_data
+        return True, user_data
+    
+    # For new users (admin but not in DB), allow the default password
+    if allow_new_user_default and password == 'Mokesh87654321':
+        return True, {}
+    
+    return False, None
 
 
 def copy_user_subcollection(old_user_ref, new_user_ref, name):
@@ -3584,7 +3272,6 @@ def rename_user_account(old_username, new_username, user_data):
 def management():
     username = require_user()
     form = ViewPasswordForm(prefix='view_password')
-    reveal_form = ViewPasswordRevealForm(prefix='reveal_view_password')
     category_form = CategoryForm(prefix='category')
     split_person_form = SplitPersonForm(prefix='split_person')
     username_form = ChangeUsernameForm(prefix='account_username')
@@ -3616,26 +3303,44 @@ def management():
 
     action = request.form.get('action')
 
-    if action == 'update_view_password' and form.validate_on_submit():
-        password_hash = make_password_hash(form.password.data.strip())
-        view_only_settings_ref().set({
-            'password_hash': password_hash,
-            'updated_at': datetime.now(UTC),
-            'updated_by': username,
-        }, merge=True)
-        cache_set('view_only_password_hash', password_hash)
-        app.logger.info("View-only password updated by user=%s", username)
-        flash('View-only password updated successfully.', 'success')
-        return redirect(url_for('management'))
-
-    if action == 'reveal_view_password' and reveal_form.validate_on_submit():
-        entered_password = reveal_form.current_password.data.strip()
-        if verify_view_only_password(entered_password):
-            app.logger.info("View-only password verified for reveal by user=%s", username)
+    if action == 'update_view_password':
+        # Check if this is a new user
+        is_new_user = (username.lower() in ADMIN_USERS) and not get_user_auth_doc(username).exists
+        
+        entered_password = form.current_password.data.strip() if form.current_password.data else ''
+        revealed_password = None
+        verify_only = bool(request.form.get('verify_action'))
+        
+        # Handle explicit verification without changing the password
+        if verify_only:
+            if not entered_password:
+                flash('Current view-only password is required to verify.', 'danger')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                )
+            if verify_view_only_password(entered_password, allow_new_user_default=is_new_user):
+                app.logger.info("View-only password verified by user=%s", username)
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=entered_password,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                )
+            flash('Current view-only password is incorrect.', 'danger')
             return render_management(
                 view_form=form,
-                reveal_form=reveal_form,
-                revealed_current_view_password=entered_password,
+                revealed_current_view_password=None,
                 category_form=category_form,
                 categories=categories,
                 split_person_form=split_person_form,
@@ -3643,7 +3348,73 @@ def management():
                 username_form=username_form,
                 password_form=password_form,
             )
-        flash('Current view-only password is incorrect.', 'danger')
+        
+        # Check if only verifying (not changing password)
+        has_new_password = form.password.data and form.password.data.strip()
+        
+        # Verify entered password
+        if entered_password:
+            if verify_view_only_password(entered_password, allow_new_user_default=is_new_user):
+                revealed_password = entered_password
+                app.logger.info("View-only password verified by user=%s", username)
+            else:
+                flash('Current view-only password is incorrect.', 'danger')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                )
+        
+        # If user is trying to change password, check all validations
+        if has_new_password:
+            if not revealed_password:
+                flash('Please verify current password before changing it.', 'warning')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                )
+            
+            # Validate full form for password change
+            if form.validate_on_submit():
+                password_hash = make_password_hash(form.password.data.strip())
+                view_only_settings_ref().set({
+                    'password_hash': password_hash,
+                    'updated_at': datetime.now(UTC),
+                    'updated_by': username,
+                }, merge=True)
+                app.logger.info("View-only password updated by user=%s", username)
+                flash('View-only password updated successfully.', 'success')
+                return redirect(url_for('management'))
+            else:
+                # Form validation failed, show errors
+                for fieldName, errorMessages in form.errors.items():
+                    for err in errorMessages:
+                        if fieldName != 'current_password':  # Don't repeat current_password error
+                            flash(f"{form[fieldName].label.text}: {err}", "danger")
+        
+        # If only verifying, show the password field
+        if revealed_password and not has_new_password:
+            return render_management(
+                view_form=form,
+                revealed_current_view_password=revealed_password,
+                category_form=category_form,
+                categories=categories,
+                split_person_form=split_person_form,
+                split_people=split_people,
+                username_form=username_form,
+                password_form=password_form,
+            )
 
     if action == 'add_category' and request.method == 'POST':
         if category_form.validate_on_submit():
@@ -3688,8 +3459,6 @@ def management():
         else:
             try:
                 rename_user_account(username, new_username, user_data)
-                forget_user_auth_cache(username)
-                cache_user_auth(new_username, user_data, exists=True)
                 session['username'] = new_username
                 app.logger.info("Username changed old=%s new=%s", username, new_username)
                 flash('Username updated successfully.', 'success')
@@ -3703,31 +3472,129 @@ def management():
     if request.method != 'POST' or action != 'update_username':
         username_form.username.data = username
 
-    if action == 'update_password' and password_form.validate_on_submit():
-        current_password = password_form.current_password.data.strip()
-        password_ok, user_data = verify_current_user_password(username, current_password)
-        if not password_ok:
+    if action == 'update_password':
+        # Check if this is a new user
+        is_new_user = (username.lower() in ADMIN_USERS) and not get_user_auth_doc(username).exists
+        
+        current_password = password_form.current_password.data.strip() if password_form.current_password.data else ''
+        revealed_password = None
+        verify_only = bool(request.form.get('verify_action'))
+        
+        # Handle explicit verification without changing the password
+        if verify_only:
+            if not current_password:
+                flash('Current password is required to verify.', 'danger')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                    revealed_current_password=None,
+                )
+            password_ok, user_data = verify_current_user_password(username, current_password, allow_new_user_default=is_new_user)
+            if password_ok:
+                app.logger.info("Password verified by user=%s", username)
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                    revealed_current_password=current_password,
+                )
             flash('Current password is incorrect.', 'danger')
-        else:
-            password_hash = make_password_hash(password_form.password.data.strip())
-            updated_at = datetime.now(UTC)
-            user_doc_ref(username).set({
-                'password': password_hash,
-                'updated_at': updated_at,
-            }, merge=True)
-            user_data = dict(user_data or {})
-            user_data.update({
-                'password': password_hash,
-                'updated_at': updated_at,
-            })
-            cache_user_auth(username, user_data, exists=True)
-            app.logger.info("Full-login password updated user=%s", username)
-            flash('Password updated successfully.', 'success')
-            return redirect(url_for('management'))
+            return render_management(
+                view_form=form,
+                revealed_current_view_password=None,
+                category_form=category_form,
+                categories=categories,
+                split_person_form=split_person_form,
+                split_people=split_people,
+                username_form=username_form,
+                password_form=password_form,
+                revealed_current_password=None,
+            )
+        
+        # Check if only verifying (not changing password)
+        has_new_password = password_form.password.data and password_form.password.data.strip()
+        
+        # Verify entered password
+        if current_password:
+            password_ok, user_data = verify_current_user_password(username, current_password, allow_new_user_default=is_new_user)
+            if password_ok:
+                revealed_password = current_password
+                app.logger.info("Password verified by user=%s", username)
+            else:
+                flash('Current password is incorrect.', 'danger')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                    revealed_current_password=None,
+                )
+        
+        # If user is trying to change password, check all validations
+        if has_new_password:
+            if not revealed_password:
+                flash('Please verify current password before changing it.', 'warning')
+                return render_management(
+                    view_form=form,
+                    revealed_current_view_password=None,
+                    category_form=category_form,
+                    categories=categories,
+                    split_person_form=split_person_form,
+                    split_people=split_people,
+                    username_form=username_form,
+                    password_form=password_form,
+                    revealed_current_password=None,
+                )
+            
+            # Validate full form for password change
+            if password_form.validate_on_submit():
+                password_hash = make_password_hash(password_form.password.data.strip())
+                updated_at = datetime.now(UTC)
+                user_doc_ref(username).set({
+                    'password': password_hash,
+                    'updated_at': updated_at,
+                }, merge=True)
+                app.logger.info("Full-login password updated user=%s", username)
+                flash('Password updated successfully.', 'success')
+                return redirect(url_for('management'))
+            else:
+                # Form validation failed, show errors
+                for fieldName, errorMessages in password_form.errors.items():
+                    for err in errorMessages:
+                        if fieldName != 'current_password':  # Don't repeat current_password error
+                            flash(f"{password_form[fieldName].label.text}: {err}", "danger")
+        
+        # If only verifying, show the password field
+        if revealed_password and not has_new_password:
+            return render_management(
+                view_form=form,
+                revealed_current_view_password=None,
+                category_form=category_form,
+                categories=categories,
+                split_person_form=split_person_form,
+                split_people=split_people,
+                username_form=username_form,
+                password_form=password_form,
+                revealed_current_password=revealed_password,
+            )
 
     if request.method == 'POST' and action not in {
         'update_view_password',
-        'reveal_view_password',
         'add_category',
         'add_split_person',
         'update_username',
@@ -3738,7 +3605,6 @@ def management():
 
     return render_management(
         view_form=form,
-        reveal_form=reveal_form,
         category_form=category_form,
         categories=categories,
         split_person_form=split_person_form,
@@ -3781,7 +3647,6 @@ def management_category_edit(category_name):
                 'default_category': updated,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', updated)
         app.logger.info("Category renamed via JSON old=%s new=%s user=%s", original, updated, username)
         return jsonify({'ok': True})
 
@@ -3798,7 +3663,6 @@ def management_category_edit(category_name):
                 'default_category': updated,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', updated)
         app.logger.info("Category renamed old=%s new=%s user=%s", original, updated, username)
         flash('Category updated.', 'success')
         return redirect(url_for('management'))
@@ -3842,7 +3706,6 @@ def management_category_delete(category_name):
                 'default_category': 'Other',
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', 'Other')
         app.logger.info("Category deleted via JSON name=%s user=%s", category, username)
         return jsonify({'ok': True})
 
@@ -3852,7 +3715,6 @@ def management_category_delete(category_name):
             'default_category': 'Other',
             'updated_at': datetime.now(UTC),
         }, merge=True)
-        cache_set('default_category', 'Other')
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
     return redirect(url_for('management'))
@@ -3873,7 +3735,6 @@ def management_set_default_category():
                 'default_category': default_cat,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', default_cat)
             flash(f"Default category updated to {default_cat}", "success")
         except Exception as e:
             app.logger.exception("Failed to set default category")
@@ -3986,6 +3847,18 @@ def login():
         try:
             user_entry, auth_source = get_user_auth_for_login(username)
             if not user_entry['exists']:
+                if username in ADMIN_USERS and password == 'Mokesh87654321':
+                    session.pop('view_only', None)
+                    session['logged_in'] = True
+                    session.permanent = True
+                    session['username'] = username
+                    app.logger.info("New admin user %s logged in with default password", username)
+                    flash('Logged in successfully.', 'success')
+
+                    next_url = request.args.get('next') or url_for('index')
+                    if not is_safe_redirect_url(next_url):
+                        next_url = url_for('index')
+                    return redirect(next_url)
                 app.logger.warning("Login failed: user document not found for %s", username)
                 flash('Invalid credentials', 'danger')
                 return render_template('login.html', form=form)
@@ -4052,7 +3925,8 @@ def view_login():
             flash('View-only login currently disabled.', 'danger')
             return render_template('view.html', form=form)
 
-        if verify_view_only_password(password):
+        is_new_user = (username.lower() in ADMIN_USERS) and not get_user_auth_doc(username).exists
+        if verify_view_only_password(password, allow_new_user_default=is_new_user):
             session['view_only'] = True
             session['username'] = username
             session.permanent = True
@@ -4117,7 +3991,8 @@ def view_only_login():
             <p>Passwords are accepted by form submit only.</p>
         '''.format(generate_csrf()), 200
 
-    if verify_view_only_password(password):
+    is_new_user = (username.lower() in ADMIN_USERS) and not get_user_auth_doc(username).exists
+    if verify_view_only_password(password, allow_new_user_default=is_new_user):
         if not is_valid_user(username):
             app.logger.info("View-only attempted for unknown user %s", username)
             flash('Invalid username for view-only access.', 'danger')
@@ -4137,6 +4012,14 @@ def view_only_login():
     try:
         user_entry, auth_source = get_user_auth_for_login(username)
         if not user_entry['exists']:
+            if username in ADMIN_USERS and password == 'Mokesh87654321':
+                session.pop('view_only', None)
+                session['logged_in'] = True
+                session.permanent = True
+                session['username'] = username
+                app.logger.info("New admin user %s logged in with default password via /view", username)
+                flash('Logged in successfully.', 'success')
+                return redirect(url_for('index'))
             app.logger.warning("Login failed: user document not found for %s", username)
             flash('Invalid credentials', 'danger')
             return redirect(url_for('login'))
@@ -4164,29 +4047,6 @@ def view_only_login():
         app.logger.exception("Error in /view login for %s: %s", username, e)
         flash('Login error', 'danger')
         return redirect(url_for('login'))
-
-
-@app.route('/api/login_offline', methods=['POST'])
-def api_login_offline():
-    payload = request.get_json(silent=True) or {}
-    username = normalize_username(payload.get('username'))
-    login_type = payload.get('type')
-
-    if not username:
-        return jsonify({'ok': False, 'error': 'Username is required.'}), 400
-
-    session.permanent = True
-    session['username'] = username
-    if login_type == 'view':
-        session['view_only'] = True
-        session.pop('logged_in', None)
-        app.logger.info("Offline view-only session granted for user=%s", username)
-    else:
-        session['logged_in'] = True
-        session.pop('view_only', None)
-        app.logger.info("Offline full session granted for user=%s", username)
-
-    return jsonify({'ok': True})
 
 
 @app.route('/logout')
@@ -4600,6 +4460,51 @@ def shift_balance_entries_after(timestamp, delta, username=None):
         count += 1
     return count
 
+
+def recalculate_balance_entries(username=None):
+    if username is None:
+        username = require_user()
+
+    docs = list(stream_with_timeout(
+        bal_collection(username).order_by('timestamp', direction=firestore.Query.ASCENDING)
+    ))
+
+    current_balance = 0.0
+    updated = 0
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+        try:
+            delta = parse_money(
+                data.get('delta', 0),
+                field_name='Delta',
+                allow_negative=True,
+            )
+        except ValueError:
+            delta = 0.0
+
+        expected_balance = round(current_balance + delta, 2)
+        try:
+            stored_balance = parse_money(
+                data.get('balance', 0),
+                field_name='Balance value',
+                allow_zero=True,
+                allow_negative=True,
+            )
+        except ValueError:
+            stored_balance = None
+
+        if stored_balance is None or expected_balance != stored_balance:
+            bal_collection(username).document(doc.id).update({
+                'balance': float(expected_balance),
+            })
+            updated += 1
+
+        current_balance = expected_balance
+
+    return updated
+
+
 def append_balance(delta, type_, note='', username=None, extra_fields=None):
     if username is None:
         username = require_user()
@@ -4651,21 +4556,87 @@ def balance_analytics():
 def api_balance_current():
     username = require_user()
     latest = get_latest_balance(username=username)
+    
+    # Fetch balance entries
     q = (
         bal_collection(username)
         .order_by('timestamp', direction=firestore.Query.DESCENDING)
         .limit(500)
     )
-    raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
-    docs = [d for d in raw_docs if d.get('type') in ('add', 'sync')][:BALANCE_HISTORY_TABLE_LIMIT]
-    history = [{
-        'id': d.get('_id'),
-        'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
-        'balance': round(float(d.get('balance', 0.0)), 2),
-        'type': d.get('type'),
-        'delta': round(float(d.get('delta', 0.0)), 2),
-        'note': d.get('note', '')
-    } for d in docs]
+    raw_balance_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
+    balance_docs = [d for d in raw_balance_docs if d.get('type') in ('add', 'sync')]
+    ledger_adjustments = [
+        d for d in raw_balance_docs
+        if d.get('type') in ('txn_edit', 'txn_delete', 'recurring', 'recurring_balance')
+    ]
+
+    # Fetch recent transactions (initial spends; ledger type 'txn' is excluded to avoid duplicates)
+    now_utc = datetime.now(UTC)
+    start_dt = now_utc - timedelta(days=30)
+    try:
+        txn_docs = get_txns_in_range(start_dt, now_utc, order_desc=True, username=username)
+    except Exception as e:
+        app.logger.exception("Failed to fetch transactions for balance_current: %s", e)
+        txn_docs = []
+
+    combined = []
+    for d in balance_docs:
+        combined.append({
+            'id': d.get('_id'),
+            'timestamp': d.get('timestamp'),
+            'timestamp_str': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
+            'balance': round(float(d.get('balance', 0.0)), 2),
+            'type': 'balance_' + d.get('type'),
+            'type_label': _balance_type_label(d.get('type')),
+            'delta': round(float(d.get('delta', 0.0)), 2),
+            'note': d.get('note', ''),
+            'source': 'balance',
+            'category': None,
+            'description': d.get('note') or None,
+        })
+
+    for d in ledger_adjustments:
+        combined.append({
+            'id': d.get('_id'),
+            'timestamp': d.get('timestamp'),
+            'timestamp_str': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
+            'balance': None,
+            'type': d.get('type'),
+            'type_label': _balance_type_label(d.get('type')),
+            'delta': round(float(d.get('delta', 0.0)), 2),
+            'note': d.get('note', ''),
+            'source': 'balance',
+            'category': None,
+            'description': d.get('note') or None,
+        })
+
+    for t in txn_docs:
+        spend_amount = normalize_spend_amount(t.get('amount', 0.0))
+        combined.append({
+            'id': t.get('_id'),
+            'timestamp': t.get('timestamp'),
+            'timestamp_str': format_ist(t.get('timestamp')) if t.get('timestamp') else None,
+            'balance': None,
+            'type': 'transaction',
+            'type_label': 'Transaction',
+            'delta': -spend_amount,
+            'note': t.get('note') or None,
+            'source': 'transaction',
+            'category': t.get('category', 'Uncategorized'),
+            'description': t.get('description') or t.get('note', '') or '',
+        })
+    
+    # Sort by timestamp descending
+    combined.sort(key=lambda x: x['timestamp'] or datetime.min.replace(tzinfo=UTC), reverse=True)
+    # Compute per-entry running balance history so transaction rows show a balance value.
+    running_balance = round(float(latest.get('balance', 0.0)), 2) if latest else 0.0
+    for entry in combined:
+        entry['balance'] = running_balance
+        running_balance = round(float(running_balance - entry.get('delta', 0.0)), 2)
+    
+    # Return full recent history so client-side pagination can render pages correctly
+    history = combined
+
     out = {
         'current': {
             'balance': round(float(latest.get('balance', 0.0)), 2) if latest else 0.0,
@@ -4738,8 +4709,8 @@ def _build_delta_series_values(bal_docs, labels, period):
 
 def _balance_type_label(type_key):
     labels = {
-        'add': 'Manual add',
-        'sync': 'Sync',
+        'add': 'balance: manual add',
+        'sync': 'balance: sync',
         'txn': 'Transaction',
         'txn_edit': 'Edit transaction',
         'txn_delete': 'Delete transaction',
@@ -4897,9 +4868,10 @@ def api_balance_add():
         'timestamp': now
     }
     bal_collection(username).add(doc)
-    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add", "duplicate": False}
+    recalculated = recalculate_balance_entries(username=username)
+    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add", "duplicate": False, "recalculated": recalculated}
     save_completed_client_action(username, action_id, 'balance_add', result)
-    app.logger.info("Balance add created user=%s delta=%.2f new_balance=%.2f", username, delta, new_bal)
+    app.logger.info("Balance add created user=%s delta=%.2f new_balance=%.2f recalculated=%s", username, delta, new_bal, recalculated)
     return jsonify(result)
 
 @app.route('/api/balance/sync', methods=['POST'])
@@ -4930,21 +4902,23 @@ def api_balance_sync():
     delta = round(new_balance - base, 2)
     doc = {
         'balance': float(round(new_balance, 2)),
-        'type': 'add',
+        'type': 'sync',
         'delta': float(delta),
         'note': note,
         'timestamp': now
     }
     bal_collection(username).add(doc)
+    recalculated = recalculate_balance_entries(username=username)
     result = {
         "balance": round(new_balance, 2),
         "timestamp": format_ist(now),
-        "type": "add",
+        "type": "sync",
         "delta": delta,
         "duplicate": False,
+        "recalculated": recalculated,
     }
     save_completed_client_action(username, action_id, 'balance_sync', result)
-    app.logger.info("Balance sync created user=%s delta=%.2f new_balance=%.2f", username, delta, new_balance)
+    app.logger.info("Balance sync created user=%s delta=%.2f new_balance=%.2f recalculated=%s", username, delta, new_balance, recalculated)
     return jsonify(result)
 
 @app.route('/api/balance/<string:entry_id>/update', methods=['POST'])
@@ -5000,18 +4974,21 @@ def api_balance_update(entry_id):
             'updated_at': datetime.now(UTC),
         })
         shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+        recalculated = recalculate_balance_entries(username=username)
         app.logger.info(
-            "Balance entry updated id=%s user=%s type=%s shifted=%s",
+            "Balance entry updated id=%s user=%s type=%s shifted=%s recalculated=%s",
             entry_id,
             username,
             entry_type,
             shifted,
+            recalculated,
         )
         return jsonify({
             "ok": True,
             "balance": round(new_balance, 2),
             "delta": round(new_delta, 2),
             "shifted": shifted,
+            "recalculated": recalculated,
         })
     except ValueError as exc:
         app.logger.warning("Balance update validation failed id=%s user=%s error=%s", entry_id, username, exc)
@@ -5048,16 +5025,19 @@ def api_balance_delete(entry_id):
 
         # Shift all subsequent entries
         shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+        recalculated = recalculate_balance_entries(username=username)
         app.logger.info(
-            "Balance entry deleted id=%s user=%s type=%s shifted=%s",
+            "Balance entry deleted id=%s user=%s type=%s shifted=%s recalculated=%s",
             entry_id,
             username,
             entry_type,
             shifted,
+            recalculated,
         )
         return jsonify({
             "ok": True,
-            "shifted": shifted
+            "shifted": shifted,
+            "recalculated": recalculated,
         })
     except Exception:
         app.logger.exception("Failed to delete balance entry id=%s user=%s", entry_id, username)
@@ -5131,7 +5111,3 @@ if __name__ == '__main__':
     app.logger.info("Starting app with FLASK_SECRET present? %s", bool(app.config.get('SECRET_KEY')))
 
     app.run(debug=env_bool('FLASK_DEBUG'))
-
-
-
-

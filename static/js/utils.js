@@ -76,5 +76,49 @@
       return defaultValue;
     }
   };
+  /**
+   * Unified JSON fetch with automatic CSRF token handling
+   * Supports both GET with params and POST with request body
+   * @param {string} url - API endpoint
+   * @param {Object} params - Query parameters (for GET)
+   * @param {Object} opts - Fetch options (method, headers, body, etc.)
+   * @returns {Promise<Object>} Parsed JSON response
+   */
+  /**
+   * Builds pagination window items (1, 2, 3, ..., n) always including the last page.
+   */
+  window.FinTrak.buildPageItems = function (currentPage, totalPages) {
+    const total = Math.max(0, Number(totalPages) || 0);
+    const current = Math.max(1, Math.min(Number(currentPage) || 1, total || 1));
+    if (total <= 0) return [];
+    if (total === 1) return [1];
+    if (total <= 5) {
+      return Array.from({ length: total }, (_, index) => index + 1);
+    }
+    if (current <= 3) {
+      return [1, 2, 3, '...', total];
+    }
+    if (current >= total - 2) {
+      return [1, '...', total - 2, total - 1, total];
+    }
+    return [1, '...', current - 1, current, current + 1, '...', total];
+  };
 
+  window.FinTrak.fetchJSON = async function (url, params = {}, opts = {}) {
+    const query = new URLSearchParams(params).toString();
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const headers = { ...(opts.headers || {}) };
+
+    if (opts.method && opts.method.toUpperCase() !== 'GET' && token) {
+      headers['X-CSRFToken'] = token;
+    }
+
+    const response = await fetch(url + (query ? `?${query}` : ''), { ...opts, headers });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+    return data;
+  };
 })();

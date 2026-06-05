@@ -52,23 +52,6 @@
         });
     }
 
-    function registerServiceWorker() {
-        if (!('serviceWorker' in navigator)) return;
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js').catch((error) => {
-                console.warn('FinTrak service worker registration failed', error);
-            });
-        });
-    }
-
-    function refreshSnapshotAfterAuthenticatedLoad() {
-        const path = window.location.pathname;
-        if (path === '/login' || path === '/view-login') return;
-        window.FinTrak?.cache?.refreshSnapshot?.().catch((error) => {
-            console.warn('FinTrak browser snapshot refresh failed after page load', error);
-        });
-    }
-
     function ordinal(day) {
         if (day > 10 && day < 20) return `${day}th`;
         const last = day % 10;
@@ -305,7 +288,6 @@
 
     function initModalFormDismiss() {
         document.querySelectorAll('.modal form').forEach((form) => {
-            if (form.dataset.offlineQueue) return;
             form.addEventListener('submit', () => {
                 hideModal(form);
             });
@@ -755,7 +737,7 @@
         });
 
         // 2. Client-Side Pagination Setup
-        const itemsPerPage = options.pageSize || 10;
+        const itemsPerPage = options.pageSize || 12;
         let currentPage = 1;
 
         // Dynamic pagination container
@@ -806,18 +788,31 @@
             const showingStart = startIdx + 1;
             const showingEnd = Math.min(endIdx, totalRows);
             
+            const buildPageItems = window.FinTrak?.buildPageItems || ((current, total) => {
+                if (total <= 5) return Array.from({ length: total }, (_, index) => index + 1);
+                if (current <= 3) return [1, 2, 3, '...', total];
+                if (current >= total - 2) return [1, '...', total - 2, total - 1, total];
+                return [1, '...', current - 1, current, current + 1, '...', total];
+            });
+            const pageItems = buildPageItems(currentPage, totalPages);
+
             pagContainer.innerHTML = `
-                <div class="text-muted small">Showing <strong>${showingStart}</strong> to <strong>${showingEnd}</strong> of <strong>${totalRows}</strong> entries</div>
+                <div class="text-muted small showing-text">Showing <strong>${showingStart}</strong> to <strong>${showingEnd}</strong> of <strong>${totalRows}</strong> entries · page ${currentPage} of ${totalPages}</div>
                 <ul class="pagination pagination-sm mb-0">
-                    <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <li class="page-item nav-btn ${currentPage === 1 ? 'disabled' : ''}">
                         <a class="page-link" href="#" data-page="${currentPage - 1}">Previous</a>
                     </li>
-                    ${Array.from({ length: totalPages }, (_, i) => i + 1).map(p => `
-                        <li class="page-item ${currentPage === p ? 'active' : ''}">
-                            <a class="page-link" href="#" data-page="${p}">${p}</a>
-                        </li>
-                    `).join('')}
-                    <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    ${pageItems.map(p => {
+                        if (p === '...') {
+                            return `<li class="page-item ellipsis"><span class="page-link">...</span></li>`;
+                        }
+                        return `
+                            <li class="page-item ${currentPage === p ? 'active' : ''}">
+                                <a class="page-link" href="#" data-page="${p}">${p}</a>
+                            </li>
+                        `;
+                    }).join('')}
+                    <li class="page-item nav-btn ${currentPage === totalPages ? 'disabled' : ''}">
                         <a class="page-link" href="#" data-page="${currentPage + 1}">Next</a>
                     </li>
                 </ul>
@@ -992,30 +987,57 @@
     function initParticipantChecklistValidation() {
         document.addEventListener('submit', (event) => {
             const form = event.target;
-            const queueType = form.dataset.offlineQueue;
+            const action = form.getAttribute('action') || '';
+            const isSplitForm = action.includes('/splits');
+            const isTripForm = action.includes('/trips');
             
-            if (queueType === 'split-create' || queueType === 'split-edit') {
+            if (isSplitForm && form.querySelector('input[name="people"]')) {
                 const checked = form.querySelectorAll('input[name="people"]:checked');
                 if (checked.length === 0) {
                     event.preventDefault();
                     event.stopPropagation();
-                    showFlash('At least 1 participant must be selected.', 'warning');
+                    showToast('At least 1 participant must be selected.', 'warning');
                     return false;
                 }
             }
             
-            if (queueType === 'trip-create' || queueType === 'trip-edit') {
+            if (isTripForm) {
                 const costTypeSelect = form.querySelector('[name="cost_type"]');
                 if (costTypeSelect && costTypeSelect.value === 'split') {
                     const checked = form.querySelectorAll('input[name="people"]:checked');
                     if (checked.length === 0) {
                         event.preventDefault();
                         event.stopPropagation();
-                        showFlash('At least 1 participant must be selected for the Split Account.', 'warning');
+                        showToast('At least 1 participant must be selected for the Split Account.', 'warning');
                         return false;
                     }
                 }
             }
+        }, true);
+    }
+
+    function initFormValidation() {
+        document.addEventListener('submit', (event) => {
+            const form = event.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            if (!form.hasAttribute('novalidate')) return;
+
+            if (form.checkValidity()) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const firstInvalid = form.querySelector(':invalid');
+            if (firstInvalid) {
+                const fieldLabel = firstInvalid.getAttribute('aria-label') || firstInvalid.name || firstInvalid.id || 'This field';
+                const message = firstInvalid.validationMessage || `Please complete ${fieldLabel}.`;
+                showToast(message, 'warning');
+                firstInvalid.focus();
+            } else {
+                showToast('Please complete all required fields before continuing.', 'warning');
+            }
+
+            return false;
         }, true);
     }
 
@@ -1031,9 +1053,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-        registerServiceWorker();
-        window.FinTrak?.cache?.commitCredentials?.();
-        refreshSnapshotAfterAuthenticatedLoad();
         formatDateElements();
         initCopyButtons();
         initConfirmForms();
@@ -1044,6 +1063,7 @@
         initClientTableSorting();
         initQueryParamModals();
         initParticipantChecklistValidation();
+        initFormValidation();
         autoDismissInlineAlerts();
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');

@@ -19,20 +19,91 @@
     }
   }
 
-  function renderTotals(totals) {
+  function initRecordShareButtons() {
+    const recordButtons = document.querySelectorAll('.record-share-btn');
+    if (!recordButtons.length) return;
+
+    const confirmModalEl = document.getElementById('recordShareConfirmModal');
+    const confirmModal = confirmModalEl && typeof bootstrap !== 'undefined' ? new bootstrap.Modal(confirmModalEl) : null;
+    const confirmForm = document.getElementById('recordShareConfirmForm');
+    const directForm = document.getElementById('recordShareDirectForm');
+    const confirmSplitTitle = document.getElementById('confirmSplitTitle');
+    const confirmOldAmount = document.getElementById('confirmOldAmount');
+    const confirmNewAmount = document.getElementById('confirmNewAmount');
+
+    recordButtons.forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        const splitId = btn.getAttribute('data-split-id');
+        const txnId = btn.getAttribute('data-txn-id');
+        const recordedAmount = btn.getAttribute('data-recorded-amount') || '0.00';
+        const shareAmount = Number(btn.getAttribute('data-share-amount') || 0);
+        const splitTitle = btn.getAttribute('data-split-title') || 'Untitled split';
+
+        if (!splitId) {
+          showNotice('Split is missing. Refresh the page and try again.', 'warning');
+          return;
+        }
+
+        if (!Number.isFinite(shareAmount) || shareAmount <= 0) {
+          showNotice('Split total is zero. Add entries before adding this to transactions.', 'warning');
+          return;
+        }
+
+        const recordUrl = `/splits/${encodeURIComponent(splitId)}/record_txn`;
+        if (txnId) {
+          if (confirmSplitTitle) confirmSplitTitle.textContent = splitTitle;
+          if (confirmOldAmount) confirmOldAmount.textContent = `Rs. ${recordedAmount}`;
+          if (confirmNewAmount) confirmNewAmount.textContent = `Rs. ${formatNumber(shareAmount)}`;
+          if (confirmForm) confirmForm.setAttribute('action', recordUrl);
+          if (confirmModal) confirmModal.show();
+          return;
+        }
+
+        if (directForm) {
+          directForm.setAttribute('action', recordUrl);
+          directForm.submit();
+        }
+      });
+    });
+  }
+
+  function renderTotals(split) {
     const target = document.getElementById('splitTotals');
     if (!target) return;
-    const rows = Array.isArray(totals) ? totals : [];
+    const rows = Array.isArray(split?.settlements) ? split.settlements : [];
     if (!rows.length) {
       target.innerHTML = '<div class="split-total-card split-total-empty"><span>No entries yet</span><strong>Rs. 0.00</strong></div>';
       return;
     }
-    target.innerHTML = rows.map((item) => `
+    const shareAmount = Number(split?.share_amount || 0);
+    const totalSpent = Number(split?.total_spent || 0);
+    const numPeople = Number(split?.num_people || rows.length || 0);
+    const shareCard = numPeople > 0 ? `
+      <div class="split-total-card split-share-card">
+        <span>Each share</span>
+        <strong>Rs. ${formatNumber(shareAmount)}</strong>
+        <small>Total Rs. ${formatNumber(totalSpent)} / ${numPeople} people</small>
+      </div>
+    ` : '';
+    target.innerHTML = shareCard + rows.map((item) => {
+      const status = item.status || 'settled';
+      const balanceAbs = Math.abs(Number(item.balance_abs ?? item.balance ?? 0));
+      const settlementClass = status === 'receive'
+        ? 'split-settlement-receive'
+        : (status === 'give' ? 'split-settlement-give' : 'split-settlement-even');
+      const settlementText = status === 'receive'
+        ? `Receive Rs. ${formatNumber(balanceAbs)}`
+        : (status === 'give' ? `Give Rs. ${formatNumber(balanceAbs)}` : 'Settled');
+      return `
       <div class="split-total-card">
         <span>${escapeHtml(item.person || 'Unknown')}</span>
         <strong>Rs. ${formatNumber(item.amount)}</strong>
+        <small>Spent - share: Rs. ${formatNumber(item.amount)} - Rs. ${formatNumber(item.share_amount)}</small>
+        <em class="split-settlement ${settlementClass}">${settlementText}</em>
       </div>
-    `).join('');
+    `;
+    }).join('');
   }
 
   function renderEntries(entries, readOnly) {
@@ -51,23 +122,22 @@
         <td data-label="Category"><small>${escapeHtml(entry.category || 'Uncategorized')}</small></td>
         <td data-label="Amount" class="text-end"><small>${formatNumber(entry.amount)}</small></td>
         <td data-label="Actions" class="text-end">
-          <span class="badge">${readOnly ? 'Cached' : 'Reload'}</span>
+          <span class="badge">${readOnly ? 'Read only' : 'Reload'}</span>
         </td>
       </tr>
     `).join('');
   }
 
-  function cachedLiveSplit(splitId) {
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    const liveSplit = snapshot?.live_split;
-    return liveSplit && String(liveSplit.id) === String(splitId) ? liveSplit : null;
+  function updateRecordShareButtons(split) {
+    document.querySelectorAll('.record-share-btn').forEach((btn) => {
+      btn.setAttribute('data-share-amount', Number(split?.share_amount || 0).toFixed(2));
+    });
   }
 
   async function refreshSplit() {
     const header = document.querySelector('.split-detail-header[data-split-id]');
     if (!header) return;
     const splitId = header.dataset.splitId;
-    const isLive = header.dataset.splitLive === 'true';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), refreshTimeoutMs);
 
@@ -81,26 +151,20 @@
       if (!response.ok || data.ok === false) {
         throw new Error(data.error || `Split refresh failed (${response.status})`);
       }
-      renderTotals(data.split?.totals || []);
+      renderTotals(data.split || {});
+      updateRecordShareButtons(data.split || {});
       if (document.body.dataset.viewOnly === 'true') {
         renderEntries(data.split?.entries || [], true);
       }
-      if (window.FinTrak?.cache?.refreshSnapshot) {
-        window.FinTrak.cache.refreshSnapshot().catch(() => {});
-      }
     } catch (error) {
-      const liveSplit = isLive ? cachedLiveSplit(splitId) : null;
-      if (liveSplit) {
-        renderTotals(liveSplit.totals || []);
-        renderEntries(liveSplit.entries || [], true);
-        showNotice('Render is not awake. Showing cached live split values only.', 'warning');
-        return;
-      }
-      showNotice('Render is not awake. This saved split needs the service online to show or edit current data.', 'warning');
+      showNotice('Could not refresh split details. Try again after the service responds.', 'warning');
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  document.addEventListener('DOMContentLoaded', refreshSplit);
+  document.addEventListener('DOMContentLoaded', () => {
+    initRecordShareButtons();
+    refreshSplit();
+  });
 }());
