@@ -15,6 +15,20 @@ FinTrak is intentionally online-only:
 - The server does not keep an in-memory application data cache.
 - There is no service worker, Cache API usage, PWA manifest, background sync, or offline login flow.
 
+## Cleanup & Simplification
+
+**Removed offline/PWA functionality to streamline to core online-only features:**
+
+- Removed service worker (`sw.js`) and offline action queue system
+- Removed PWA manifest (`site.webmanifest`) and icon metadata
+- Removed offline sync status UI components (`sync_status.html`, `sync_status.js`)
+- Removed browser cache persistence utilities (`browser_cache.js`)
+- Removed auth status tracking system (`auth_status.js`)
+- Removed offline queue management (`offline_queue.js`)
+- Removed test runner script (`run_tests.py`)
+
+The application now focuses exclusively on core features: transactions, balances, recurring rules, splits, trips, and analytics—all backed by real-time Firestore data with no offline caching or background sync.
+
 ## Main Features
 
 | Area | What the code supports |
