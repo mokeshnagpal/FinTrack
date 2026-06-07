@@ -1,39 +1,65 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, offline_notice, table_shell, modal, form_field, form_input, form_select, button, link_button, badge, card %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, badge, card, delete_button, friendly_date %}
 {% block content %}
 {% set split_id = split_doc.id or split_doc._id %}
 
-{% set header_desc = 'Live split bill. Cached totals and latest entries remain available.' if split_doc.is_live else 'Saved split bill. Full data available when backend responds.' %}
+{% set header_desc = 'Live split bill. Track and manage shared expenses.' if split_doc.is_live else 'Saved split bill. View detailed breakdown.' %}
 {% call page_header(split_doc.title or 'Untitled split', kicker='Shared Bills', description=header_desc, extra_class='split-detail-header', attrs={'data-split-id': split_id, 'data-split-live': 'true' if split_doc.is_live else 'false'}) %}
     {{ link_button(url_for('splits'), 'Back', kind='secondary', outline=true) }}
     {% if not session.get('view_only') %}
     {% if split_doc.transaction_id %}
-    {% call button(kind='info', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-txn-id': split_doc.transaction_id, 'data-recorded-amount': '%.2f' | format(split_doc.recorded_amount or 0.0), 'data-share-amount': '%.2f' | format(split_doc.share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
+    {% call button(kind='info', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-txn-id': split_doc.transaction_id, 'data-recorded-amount': '%.2f' | format(split_doc.recorded_amount or 0.0), 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
         </svg>
-        Re-add Share
+        Update in Transactions
     {% endcall %}
     {% else %}
-    {% call button(kind='success', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-share-amount': '%.2f' | format(split_doc.share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
+    {% call button(kind='success', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
-        Add Share
+        Add to Transactions
     {% endcall %}
     {% endif %}
-    {% call button('New Entry', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addEntryModal'}) %}{% endcall %}
+    {{ button('New Entry', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addEntryModal'}) }}
     {% endif %}
 {% endcall %}
 
-{{ offline_notice('splitOfflineNotice') }}
+<!-- Split Share Calculation Info Box -->
+<div class="premium-split-info-card mb-4">
+    <div class="split-info-formula-side">
+        <div class="split-info-pill-item">
+            <span class="label">Total Spent</span>
+            <strong class="value text-success">Rs. <span id="summaryTotalSpent">{{ '%.2f'|format(total_spent or 0.0) }}</span></strong>
+        </div>
+        <div class="split-info-operator">/</div>
+        <div class="split-info-pill-item">
+            <span class="label">Total People</span>
+            <strong class="value text-info"><span id="summaryNumPeople">{{ num_people or 0 }}</span></strong>
+        </div>
+    </div>
+
+    <div class="split-info-result-side">
+        <span class="result-title">Split Share Per Person</span>
+        <strong class="result-value" id="summaryShareAmount">Rs. {{ '%.2f'|format(share_amount or 0.0) }}</strong>
+    </div>
+</div>
 
 <div class="split-total-grid" id="splitTotals">
     {% for person, amount in totals|dictsort %}
+    {% set diff = amount - (share_amount or 0.0) %}
     <div class="split-total-card">
         <span>{{ person }}</span>
         <strong>Rs. {{ '%.2f'|format(amount) }}</strong>
+        {% if diff > 0 %}
+        <div class="small text-success mt-2 fw-semibold">Receives: Rs. {{ '%.2f'|format(diff) }}</div>
+        {% elif diff < 0 %}
+        <div class="small text-danger mt-2 fw-semibold">Gives: Rs. {{ '%.2f'|format(-diff) }}</div>
+        {% else %}
+        <div class="small text-muted mt-2 fw-semibold">Settled</div>
+        {% endif %}
     </div>
     {% else %}
     <div class="split-total-card split-total-empty">
@@ -63,7 +89,7 @@
                         {% for entry in entries %}
                         {% set eid = entry.id or entry._id %}
                         <tr>
-                            <td data-label="When"><small data-format-date>{{ entry.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                            <td data-label="When"><small>{{ friendly_date(entry.timestamp) }}</small></td>
                             <td data-label="Person"><small>{{ entry.person }}</small></td>
                             <td data-label="For"><small>{{ entry.description }}</small></td>
                             <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
@@ -72,21 +98,13 @@
                                 {% if not session.get('view_only') %}
                                 <div class="table-actions">
                                     {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editEntryModal' ~ eid}) }}
-                                    <form method="post" action="{{ url_for('split_entry_delete', split_id=split_id, entry_id=eid) }}"
-                                        data-offline-queue="split-entry-delete"
-                                        data-split-id="{{ split_id }}"
-                                        data-split-entry-id="{{ eid }}"
-                                        data-confirm="Delete this split entry?" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        {{ button('Delete', kind='danger', size='sm', type='submit') }}
-                                    </form>
+                                    {{ delete_button(url_for('split_entry_delete', split_id=split_id, entry_id=eid), 'Delete this split entry?') }}
                                 </div>
 
                                 <!-- Edit Entry Modal -->
                                 {% call modal('editEntryModal' ~ eid, 'Edit Entry') %}
                                     <form method="post"
                                         action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}"
-                                        data-offline-queue="split-entry-edit"
                                         data-split-id="{{ split_id }}"
                                         data-split-entry-id="{{ eid }}"
                                         data-return-url="{{ url_for('split_detail', split_id=split_id) }}"
@@ -132,7 +150,6 @@
 {% call modal('addEntryModal', 'Add Entry') %}
     <form method="post"
         action="{{ url_for('split_entry_add', split_id=split_id) }}"
-        data-offline-queue="split-entry-create"
         data-split-id="{{ split_id }}"
         novalidate>
         {{ entry_form.hidden_tag() }}
@@ -154,9 +171,161 @@
         {{ button('Save Entry', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
+<!-- Record Share Overwrite Confirmation Modal -->
+{% if not session.get('view_only') %}
+<div class="modal fade" id="recordShareConfirmModal" tabindex="-1" aria-labelledby="recordShareConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0">
+            <div class="modal-header modal-header-warning">
+                <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="recordShareConfirmModalLabel">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                    Overwrite Existing Transaction?
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-start py-4">
+                <p class="mb-3 text-muted">
+                    A transaction for the split <strong id="confirmSplitTitle" class="text-info"></strong> has already been saved.
+                </p>
+                <div class="p-3 rounded mb-3 border border-secondary border-opacity-25 bg-dark bg-opacity-50">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Previous saved amount:</span>
+                        <span class="fw-bold text-warning" id="confirmOldAmount"></span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted">New calculated amount:</span>
+                        <span class="fw-bold text-success" id="confirmNewAmount"></span>
+                    </div>
+                </div>
+                <p class="text-muted small mb-0">
+                    Would you like to overwrite the existing transaction with the new amount? The balance adjustments will be calculated and updated automatically.
+                </p>
+            </div>
+            <div class="modal-footer d-flex justify-content-end gap-2 border-top-0 pt-0">
+                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                <form id="recordShareConfirmForm" method="post" action="">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="overwrite" value="true">
+                    {{ button('Confirm & Overwrite', kind='primary', extra_class='px-4 fw-semibold', type='submit') }}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Record Share Create Confirmation Modal -->
+<div class="modal fade" id="recordShareCreateModal" tabindex="-1" aria-labelledby="recordShareCreateModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0">
+            <div class="modal-header modal-header-success">
+                <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="recordShareCreateModalLabel">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="16"></line>
+                        <line x1="8" y1="12" x2="16" y2="12"></line>
+                    </svg>
+                    Add to Transactions?
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-start py-4">
+                <p class="mb-3 text-muted">
+                    Would you like to add split share per person = <strong class="text-success" id="createShareAmountDisplay"></strong> to your transactions?
+                </p>
+                <p class="text-muted small mb-0">
+                    This will create a new transaction entry in your ledger and adjust your balance accordingly.
+                </p>
+            </div>
+            <div class="modal-footer d-flex justify-content-end gap-2 border-top-0 pt-0">
+                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                <form id="recordShareCreateForm" method="post" action="">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="overwrite" value="false">
+                    {{ button('Confirm & Add', kind='primary', extra_class='px-4 fw-semibold', type='submit') }}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/splits.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const recordButtons = document.querySelectorAll('.record-share-btn');
+        const confirmModalEl = document.getElementById('recordShareConfirmModal');
+        const confirmModal = confirmModalEl ? new bootstrap.Modal(confirmModalEl) : null;
+
+        const createModalEl = document.getElementById('recordShareCreateModal');
+        const createModal = createModalEl ? new bootstrap.Modal(createModalEl) : null;
+
+        const confirmForm = document.getElementById('recordShareConfirmForm');
+        const createForm = document.getElementById('recordShareCreateForm');
+        const createShareDisplay = document.getElementById('createShareAmountDisplay');
+
+        const confirmSplitTitle = document.getElementById('confirmSplitTitle');
+        const confirmOldAmount = document.getElementById('confirmOldAmount');
+        const confirmNewAmount = document.getElementById('confirmNewAmount');
+
+        recordButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const splitId = btn.getAttribute('data-split-id');
+                const txnId = btn.getAttribute('data-txn-id');
+                const recordedAmount = btn.getAttribute('data-recorded-amount');
+                const shareAmount = parseFloat(btn.getAttribute('data-share-amount') || '0');
+                const splitTitle = btn.getAttribute('data-split-title');
+
+                if (shareAmount <= 0) {
+                    if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
+                        window.FinTrak.showToast('Split total cannot be zero.', 'warning');
+                    } else {
+                        alert('Split total cannot be zero.');
+                    }
+                    return;
+                }
+
+                const recordUrl = `/splits/${splitId}/record_txn`;
+
+                if (txnId) {
+                    if (confirmSplitTitle) confirmSplitTitle.textContent = splitTitle;
+                    if (confirmOldAmount) confirmOldAmount.textContent = `Rs. ${recordedAmount}`;
+                    if (confirmNewAmount) confirmNewAmount.textContent = `Rs. ${shareAmount.toFixed(2)}`;
+                    if (confirmForm) confirmForm.setAttribute('action', recordUrl);
+                    if (confirmModal) confirmModal.show();
+                } else {
+                    if (createShareDisplay) createShareDisplay.textContent = `Rs. ${shareAmount.toFixed(2)}`;
+                    if (createForm) createForm.setAttribute('action', recordUrl);
+                    if (createModal) createModal.show();
+                }
+            });
+        });
+        if (confirmForm) {
+            confirmForm.addEventListener('submit', () => {
+                const submitBtn = confirmForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Overwriting...';
+                }
+            });
+        }
+        if (createForm) {
+            createForm.addEventListener('submit', () => {
+                const submitBtn = createForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Adding...';
+                }
+            });
+        }
+    });
+</script>
 {% endblock %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge, friendly_date %}
 {% block content %}
 
 {% if not session.get('view_only') %}
@@ -31,32 +31,16 @@
                 <tr>
                     <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
                     <td data-label="Description"><small>{{ r.description }}</small></td>
-                    <td data-label="Start">
-                        <small>
-                            {% if r.start_datetime %}
-                            <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
+                    <td data-label="Start"><small>{{ friendly_date(r.start_datetime) }}</small></td>
                     <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                    <td data-label="Last Applied">
-                        <small>
-                            {% if r.last_applied %}
-                            <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
+                    <td data-label="Last Applied"><small>{{ friendly_date(r.last_applied) }}</small></td>
                     <td data-label="Actions" class="text-end">
                         {% if rid %}
                         <div class="table-actions">
                             {% if not session.get('view_only') %}
                             {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editExpenseModal' ~ rid}) }}
                             <form method="post" action="{{ url_for('recurring_delete', r_id=rid) }}"
-                                data-confirm="Delete recurring expense rule?" class="d-inline" data-offline-queue="recurring-delete" data-recurring-id="{{ rid }}">
+                                data-confirm="Delete recurring expense rule?" class="d-inline" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
@@ -68,7 +52,7 @@
                         {% if not session.get('view_only') %}
                         <!-- Edit Expense Rule Modal -->
                         {% call modal('editExpenseModal' ~ rid, 'Edit Expense Rule') %}
-                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}" data-offline-queue="recurring-edit" data-recurring-id="{{ rid }}">
+                            <form method="post" action="{{ url_for('recurring_edit', r_id=rid) }}" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 
                                 {{ form_input('amount' ~ rid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
@@ -125,32 +109,16 @@
                 <tr>
                     <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
                     <td data-label="Note"><small>{{ r.description }}</small></td>
-                    <td data-label="Start">
-                        <small>
-                            {% if r.start_datetime %}
-                            <span data-format-date>{{ r.start_datetime|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
+                    <td data-label="Start"><small>{{ friendly_date(r.start_datetime) }}</small></td>
                     <td data-label="Frequency"><small>{{ r.frequency|default('monthly')|capitalize }}</small></td>
-                    <td data-label="Last Added">
-                        <small>
-                            {% if r.last_applied %}
-                            <span data-format-date>{{ r.last_applied|ist_datetime('%Y-%m-%d %H:%M') }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </small>
-                    </td>
+                    <td data-label="Last Added"><small>{{ friendly_date(r.last_applied) }}</small></td>
                     <td data-label="Actions" class="text-end">
                         {% if rid %}
                         <div class="table-actions">
                             {% if not session.get('view_only') %}
                             {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editBalanceModal' ~ rid}) }}
                             <form method="post" action="{{ url_for('recurring_balance_delete', r_id=rid) }}"
-                                data-confirm="Delete recurring balance rule?" class="d-inline" data-offline-queue="recurring-balance-delete" data-recurring-id="{{ rid }}">
+                                data-confirm="Delete recurring balance rule?" class="d-inline" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 {{ button('Delete', kind='danger', size='sm', type='submit') }}
                             </form>
@@ -162,7 +130,7 @@
                         {% if not session.get('view_only') %}
                         <!-- Edit Balance Rule Modal -->
                         {% call modal('editBalanceModal' ~ rid, 'Edit Balance Rule') %}
-                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}" data-offline-queue="recurring-balance-edit" data-recurring-id="{{ rid }}">
+                            <form method="post" action="{{ url_for('recurring_balance_edit', r_id=rid) }}" data-recurring-id="{{ rid }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 
                                 {{ form_input('bal_amount' ~ rid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(r.amount), step='0.01', min='0.01', required=true) }}
@@ -201,7 +169,7 @@
 <!-- New Expense Modal -->
 {% if not session.get('view_only') %}
 {% call modal('newExpenseModal', 'Set Expense Rule') %}
-    <form method="post" action="{{ url_for('recurring') }}" data-offline-queue="recurring-create">
+    <form method="post" action="{{ url_for('recurring') }}">
         {{ form.hidden_tag() }}
         {{ form_field(form.amount, step="0.01", min="0.01") }}
         {{ form_field(form.description, maxlength="120") }}
@@ -221,7 +189,7 @@
 
 <!-- New Balance Modal -->
 {% call modal('newBalanceModal', 'Set Balance Rule') %}
-    <form method="post" action="{{ url_for('recurring_balance') }}" data-offline-queue="recurring-balance-create">
+    <form method="post" action="{{ url_for('recurring_balance') }}">
         {{ balance_form.hidden_tag() }}
         {{ form_field(balance_form.amount, step="0.01", min="0.01") }}
         {{ form_field(balance_form.description, maxlength="120") }}

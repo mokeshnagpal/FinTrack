@@ -183,14 +183,6 @@ function renderInsights(data) {
     : '<p>No insights available for this range.</p>';
 }
 
-function renderOfflineBalanceNotice(fallback) {
-  elements.insightsArea.innerHTML = `
-    <p><strong>Offline limited view.</strong> Full balance analytics need the server because date filtering, type grouping, comparisons, and complete chart series are calculated from Firestore.</p>
-    <p>Showing only <strong>${fallback.entries.length}</strong> cached balance histor${fallback.entries.length === 1 ? 'y row' : 'y rows'} stored in this browser.</p>
-    <p>Cached net change: <strong>${Number(fallback.summary.net_change || 0).toFixed(2)}</strong>.</p>
-  `;
-}
-
 function renderCharts(data) {
   destroyCharts();
 
@@ -363,34 +355,11 @@ async function refreshAnalytics() {
     }
   } catch (error) {
     console.error('balance analytics render failed', error);
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    if (snapshot?.balance?.history?.length) {
-      destroyCharts();
-      const history = snapshot.balance.history;
-      const balanceValues = history.map((entry) => Number(entry.balance || 0)).reverse();
-      const deltaValues = history.map((entry) => Number(entry.delta || 0)).reverse();
-      const fallback = {
-        summary: {
-          current_balance: snapshot.balance.current?.balance || 0,
-          net_change: deltaValues.reduce((sum, value) => sum + value, 0),
-          count: history.length,
-          opening_balance: balanceValues[0] || 0,
-          closing_balance: balanceValues[balanceValues.length - 1] || 0,
-        },
-        by_type: [],
-        entries: history,
-      };
-      updateSummary(fallback.summary);
-      renderEntries(fallback.entries);
-      setStatus('Offline: showing limited cached balance history only. Full analytics will load when the service wakes.', 'warning');
-      renderOfflineBalanceNotice(fallback);
-    } else {
-      destroyCharts();
-      updateSummary({});
-      renderEntries([]);
-      setStatus('Offline: balance analytics are unavailable because no cached balance history was found.', 'danger');
-      elements.insightsArea.innerHTML = '<p><strong>Offline.</strong> Full balance analytics need server data. Open this page once online to cache recent balance history for a small offline view.</p>';
-    }
+    destroyCharts();
+    updateSummary({});
+    renderEntries([]);
+    setStatus('Unable to load balance analytics. Check the connection and try again.', 'danger');
+    elements.insightsArea.innerHTML = '<p>Balance analytics could not be loaded from the server.</p>';
   } finally {
     elements.applyBtn.disabled = false;
   }

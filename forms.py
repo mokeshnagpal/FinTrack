@@ -342,7 +342,7 @@ class TripForm(FlaskForm):
     )
     cost_type = SelectField(
         'Cost Option',
-        choices=[('fixed', 'Approx Cost (Fixed)'), ('split', 'Split Account (Variable)')],
+        choices=[('fixed', 'Approx Cost'), ('split', 'Create New Split Account')],
         default='fixed',
     )
     approx_cost = DecimalField(

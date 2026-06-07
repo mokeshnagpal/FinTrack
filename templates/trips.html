@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, offline_notice, modal, form_field, form_input, form_select, form_textarea, button, link_button, card %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, modal, form_field, form_input, form_select, form_textarea, button, link_button, card, friendly_date %}
 {% block content %}
 
 {% set header_desc = 'Review travel itineraries, photos, and live cost distributions in read-only mode.' if session.get('view_only') else 'Plan your trips, manage photo albums, and track approximate fixed budgets or split-spend bills.' %}
@@ -16,8 +16,6 @@
 {% else %}
     {{ page_header('My Trips', kicker='Travel Planning', description=header_desc) }}
 {% endif %}
-
-{{ offline_notice('tripOfflineNotice') }}
 
 <div class="row g-3" id="tripsContainer">
     {% for trip in trips %}
@@ -41,7 +39,7 @@
                         <line x1="8" y1="2" x2="8" y2="6"></line>
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                     </svg>
-                    <span data-format-date>{{ trip.start_date|ist_datetime('%Y-%m-%d') }}</span> to <span data-format-date>{{ trip.end_date|ist_datetime('%Y-%m-%d') }}</span>
+                    {{ friendly_date(trip.start_date, '%Y-%m-%d') }} to {{ friendly_date(trip.end_date, '%Y-%m-%d') }}
                 </div>
 
                 <p class="card-text trip-description text-muted flex-grow-1 mb-3">
@@ -50,7 +48,7 @@
 
                 <div class="trip-cost-panel mb-3 p-3 border rounded d-flex justify-content-between align-items-center">
                     <span class="small text-muted fw-semibold">
-                        {{ "Approx Cost (Per Person):" if trip.cost_type == 'split' else "Approx Cost (Fixed):" }}
+                        {{ "Approx Cost (Per Person):" if trip.cost_type == 'split' else "Approx Cost:" }}
                     </span>
                     <strong class="text-primary trip-cost-value">
                         Rs. {{ "%.2f"|format(trip.approx_cost) }}
@@ -78,7 +76,7 @@
                 {% if not session.get('view_only') %}
                 <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
                     {{ button('Edit', kind='primary', outline=true, size='sm', extra_class='flex-grow-1', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editTripModal' ~ tid}) }}
-                    <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-offline-queue="trip-delete" data-trip-id="{{ tid }}">
+                    <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-trip-id="{{ tid }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         {{ button('Delete', kind='danger', size='sm', extra_class='w-100', type='submit', onclick="return confirm('Delete this trip?')") }}
                     </form>
@@ -90,7 +88,7 @@
         {% if not session.get('view_only') %}
         <!-- Edit Trip Modal -->
         {% call modal('editTripModal' ~ tid, 'Edit Trip') %}
-            <form method="post" action="{{ url_for('trip_edit', trip_id=tid) }}" novalidate data-offline-queue="trip-edit" data-trip-id="{{ tid }}">
+            <form method="post" action="{{ url_for('trip_edit', trip_id=tid) }}" novalidate data-form-validation="trip-edit" data-trip-id="{{ tid }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 
                 {{ form_input('name' ~ tid, 'Trip Name', 'name', placeholder='Goa trip', value=trip.name, maxlength=80, required=true) }}
@@ -110,7 +108,7 @@
 
                 <div class="row g-2">
                     <div class="col-6">
-                        {{ form_select('cost_type' ~ tid, 'Cost Option', 'cost_type', [('fixed', 'Approx Cost (Fixed)'), ('split', 'Split Account (Variable)')], selected_value=trip.cost_type, extra_class='edit-cost-type-select', extra_attrs={'data-trip-id': tid}) }}
+                        {{ form_select('cost_type' ~ tid, 'Cost Option', 'cost_type', [('fixed', 'Approx Cost'), ('split', 'Create New Split Account')], selected_value=trip.cost_type, extra_class='edit-cost-type-select', extra_attrs={'data-trip-id': tid}) }}
                     </div>
                     <div class="col-6 edit-approx-cost-container {% if trip.cost_type == 'split' %}is-hidden{% endif %}" id="approxCostContainerEdit{{ tid }}">
                         {{ form_input('approx_cost' ~ tid, 'Approx Cost (Rs.)', 'approx_cost', type='number', value=trip.approx_cost or 0.00, step='0.01', min='0.00') }}
@@ -144,7 +142,7 @@
         <!-- Disconnect Split Confirmation Modal -->
         {% call modal('disconnectModal' ~ tid, 'Disconnect Split Account') %}
             <p>You are about to disconnect the Split Bill account from this Trip. What would you like to do with the connected split account?</p>
-            <form method="post" action="{{ url_for('trip_disconnect', trip_id=tid) }}" data-offline-queue="trip-disconnect" data-trip-id="{{ tid }}">
+            <form method="post" action="{{ url_for('trip_disconnect', trip_id=tid) }}" data-trip-id="{{ tid }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 
                 {{ choice_panel('disconnectKeep' ~ tid, 'keep', 'Just Disconnect', 'Keep the Split Bill account as a standalone split so its transaction ledger is preserved.', checked=true) }}
@@ -171,7 +169,7 @@
 <!-- New Trip Modal -->
 {% if not session.get('view_only') %}
 {% call modal('newTripModal', 'New Trip') %}
-    <form method="post" action="{{ url_for('trips') }}" novalidate data-offline-queue="trip-create">
+    <form method="post" action="{{ url_for('trips') }}" novalidate data-form-validation="trip-create">
         {{ form.hidden_tag() }}
         
         {{ form_field(form.name, placeholder="Goa trip", maxlength="80") }}
@@ -257,152 +255,6 @@
             });
         });
 
-        // Trigger cache refresh
-        if (window.FinTrak?.cache?.refreshSnapshot) {
-            window.FinTrak.cache.refreshSnapshot().catch(() => {});
-        }
-
-        function buildButton(options) {
-            const classes = ['btn'];
-            if (options.size === 'sm') classes.push('btn-sm');
-            if (options.size === 'lg') classes.push('btn-lg');
-            if (options.kind === 'link') classes.push('btn-link');
-            else if (options.outline) classes.push('btn-outline-' + (options.kind || 'primary'));
-            else classes.push('btn-' + (options.kind || 'primary'));
-            if (options.extraClass) classes.push(...options.extraClass.split(' ').filter(Boolean));
-
-            const attrs = [];
-            if (options.tag === 'a') {
-                attrs.push(`href="${escapeHtml(options.href || '#')}"`);
-                attrs.push('role="button"');
-            } else {
-                attrs.push(`type="${escapeHtml(options.type || 'button')}"`);
-            }
-            if (options.title) attrs.push(`title="${escapeHtml(options.title)}"`);
-            if (options.disabled) attrs.push('disabled');
-            Object.entries(options.attrs || {}).forEach(([key, value]) => {
-                attrs.push(`${key}="${escapeHtml(value)}"`);
-            });
-
-            return `<${options.tag || 'button'} class="${classes.join(' ')}" ${attrs.join(' ')}>${escapeHtml(options.text)}</${options.tag || 'button'}>`;
-        }
-
-        function buildLinkButton(href, text, kind, outline, size, extraClass, attrs = {}) {
-            return buildButton({
-                tag: 'a',
-                href,
-                text,
-                kind,
-                outline,
-                size,
-                extraClass,
-                attrs
-            });
-        }
-
-        function buildBadge(text, tone, extraClass) {
-            const classes = ['badge', 'badge-compact'];
-            if (tone) classes.push('badge-' + tone);
-            if (extraClass) classes.push(...extraClass.split(' ').filter(Boolean));
-            return `<span class="${classes.join(' ')}">${escapeHtml(text)}</span>`;
-        }
-
-        function runOfflineFallback() {
-            const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-            const trips = snapshot?.trips || [];
-            
-            if (!trips.length) return;
-
-            const notice = document.getElementById('tripOfflineNotice');
-            if (notice) {
-                notice.textContent = "Render is not awake. Showing cached trip data snapshot only.";
-                notice.classList.remove('d-none');
-            }
-
-            const container = document.getElementById('tripsContainer');
-            if (!container) return;
-
-            const viewOnly = document.body.dataset.viewOnly === 'true';
-
-            container.innerHTML = trips.map((trip) => {
-                const isSplit = trip.cost_type === 'split';
-                const photosLink = trip.photo_link ? `
-                    <div class="mb-3">
-                        ${buildLinkButton(trip.photo_link, 'Photos Album', 'primary', true, 'sm', 'd-inline-flex align-items-center gap-1', { target: '_blank', rel: 'noopener' })}
-                    </div>` : '';
-
-                const connectedSplit = (isSplit && trip.split_id) ? `
-                    <div class="mb-4 small d-flex justify-content-between align-items-center border-top pt-3 border-opacity-10">
-                        <span class="text-muted">Connected Split:</span>
-                        <div class="d-flex align-items-center gap-2">
-                            ${buildLinkButton('/splits/' + encodeURIComponent(trip.split_id), 'View Split', 'link', false, 'sm', 'p-0 text-decoration-none fw-semibold')}
-                        </div>
-                    </div>` : '';
-
-                const actionButtons = viewOnly ? '' : `
-                    <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
-                        ${buildButton({ text: 'Edit', kind: 'primary', outline: true, size: 'sm', extraClass: 'flex-grow-1', title: 'Offline mode', disabled: true })}
-                        ${buildButton({ text: 'Delete', kind: 'danger', outline: true, size: 'sm', extraClass: 'flex-grow-1', title: 'Offline mode', disabled: true })}
-                    </div>`;
-
-                return `
-                <div class="col-12 col-md-6 col-lg-4 trip-card-wrapper" data-trip-id="${escapeHtml(trip.id)}">
-                    <div class="card trip-card h-100 shadow-sm position-relative">
-                        <div class="card-body d-flex flex-column p-4">
-                            <div class="d-flex justify-content-between align-items-start mb-3">
-                                <h3 class="h5 card-title text-primary fw-bold mb-0">${escapeHtml(trip.name)}</h3>
-                                ${buildBadge(isSplit ? 'Split Bill' : 'Fixed Budget', isSplit ? 'split' : 'fixed', '')}
-                            </div>
-
-                            <div class="trip-dates mb-3 text-muted small">
-                                <span>${escapeHtml(window.FinTrak?.formatFriendlyDate?.(trip.start_date) || trip.start_date || '')}</span> to <span>${escapeHtml(window.FinTrak?.formatFriendlyDate?.(trip.end_date) || trip.end_date || '')}</span>
-                            </div>
-
-                            <p class="card-text trip-description text-muted flex-grow-1 mb-3">
-                                ${escapeHtml(trip.description || 'No description.')}
-                            </p>
-
-                            <div class="trip-cost-panel mb-3 p-3 border rounded d-flex justify-content-between align-items-center">
-                                <span class="small text-muted fw-semibold">
-                                    ${isSplit ? "Approx Cost (Per Person):" : "Approx Cost (Fixed):"}
-                                </span>
-                                <strong class="text-primary trip-cost-value">
-                                    Rs. ${Number(trip.approx_cost || 0).toFixed(2)}
-                                </strong>
-                            </div>
-
-                            ${photosLink}
-                            ${connectedSplit}
-                            ${actionButtons}
-                        </div>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return String(str).replace(/[&<>"']/g, m => {
-                switch(m) {
-                    case '&': return '&amp;';
-                    case '<': return '&lt;';
-                    case '>': return '&gt;';
-                    case '"': return '&quot;';
-                    case "'": return '&#039;';
-                    default: return m;
-                }
-            });
-        }
-
-        // Run offline fallback rendering if backend takes too long (service asleep / offline)
-        setTimeout(() => {
-            const syncStatusIcon = document.getElementById('syncStatusIndicator');
-            if (syncStatusIcon && (syncStatusIcon.classList.contains('status-sleeping') || syncStatusIcon.classList.contains('status-waking'))) {
-                runOfflineFallback();
-            }
-        }, 1200);
-
-        window.addEventListener('fintrak:render-fallback', runOfflineFallback);
     });
 </script>
 {% endblock %}

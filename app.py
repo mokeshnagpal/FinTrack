@@ -1,6 +1,6 @@
 from flask import (
     Flask, render_template, redirect, url_for, flash,
-    request, jsonify, send_file, send_from_directory, abort, session
+    request, jsonify, send_file, abort, session
 )
 from functools import wraps
 
@@ -23,21 +23,7 @@ from forms import (
     ViewPasswordRevealForm,
 )
 from constants import (
-    BALANCE_HISTORY_TABLE_LIMIT,
-    BROWSER_CACHE_BALANCE_HISTORY,
-    BROWSER_CACHE_RECENT_TRANSACTIONS,
-    BROWSER_CACHE_TTL_SECONDS,
-    DEFAULT_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_CACHE_TTL_SECONDS,
     DEFAULT_RECURRING_THROTTLE_SECONDS,
-    DEFAULT_WAKE_REFRESH_IDLE_SECONDS,
-    RECENT_TRANSACTIONS_CACHE_LIMIT,
-    RECURRING_RULE_TABLE_LIMIT,
-    SPLIT_DOCUMENT_TABLE_LIMIT,
-    SPLIT_ENTRY_TABLE_LIMIT,
-    SYNC_STATUS_POLL_SECONDS,
-    TRANSACTION_PAGE_SIZE,
-    TRIP_TABLE_LIMIT,
 )
 import os
 import io
@@ -134,18 +120,12 @@ VIEW_ONLY_SETTINGS_DOC = "view_only_access"
 CATEGORIES_SETTINGS_DOC = "categories"
 SPLIT_PEOPLE_SETTINGS_DOC = "split_people"
 CLIENT_ACTIONS_COL = "client_actions"
-CACHE_TTL_SECONDS = env_int('CACHE_TTL_SECONDS', DEFAULT_CACHE_TTL_SECONDS)
-AUTH_CACHE_TTL_SECONDS = env_int('AUTH_CACHE_TTL_SECONDS', DEFAULT_AUTH_CACHE_TTL_SECONDS)
-WAKE_REFRESH_IDLE_SECONDS = env_int('WAKE_REFRESH_IDLE_SECONDS', DEFAULT_WAKE_REFRESH_IDLE_SECONDS)
 RECURRING_THROTTLE_SECONDS = env_int('RECURRING_THROTTLE_SECONDS', DEFAULT_RECURRING_THROTTLE_SECONDS)
 FIRESTORE_TIMEOUT_SECONDS = env_int('FIRESTORE_TIMEOUT_SECONDS', 8)
 ENABLE_DEBUG_ROUTES = env_bool('ENABLE_DEBUG_ROUTES', False)
 MAX_MONEY_AMOUNT = 999999999
 MAX_DESCRIPTION_LENGTH = 120
 MAX_NOTE_LENGTH = 120
-_APP_CACHE = {}
-_LAST_REQUEST_MONOTONIC = time.monotonic()
-_LAST_CACHE_REFRESH_RESULT = None
 
 # ---------------------------------------------------------------------
 # Flask App Configuration
@@ -183,25 +163,13 @@ def ist_datetime_filter(value, fmt='%Y-%m-%d %H:%M'):
 def client_constants_context():
     return {
         'client_constants': {
-            'balance_history_table_limit': BALANCE_HISTORY_TABLE_LIMIT,
-            'browser_cache_balance_history': BROWSER_CACHE_BALANCE_HISTORY,
-            'browser_cache_recent_transactions': RECENT_TRANSACTIONS_CACHE_LIMIT,
-            'browser_cache_refresh_timeout_ms': 8000,
-            'browser_cache_ttl_seconds': BROWSER_CACHE_TTL_SECONDS,
-            'recurring_rule_table_limit': RECURRING_RULE_TABLE_LIMIT,
-            'split_document_table_limit': SPLIT_DOCUMENT_TABLE_LIMIT,
-            'split_entry_table_limit': SPLIT_ENTRY_TABLE_LIMIT,
-            'sync_status_poll_seconds': SYNC_STATUS_POLL_SECONDS,
-            'transaction_page_size': TRANSACTION_PAGE_SIZE,
+            'balance_history_table_limit': 12,
+            'recurring_rule_table_limit': 12,
+            'split_document_table_limit': 12,
+            'split_entry_table_limit': 12,
+            'transaction_page_size': 12,
         }
     }
-
-@app.route('/sw.js')
-def service_worker():
-    response = send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Service-Worker-Allowed'] = '/'
-    return response
 
 # ---------------------------------------------------------------------
 # Utilities: timestamp parsing & document conversion
@@ -220,11 +188,9 @@ VIEW_ONLY_ALLOWED_PREFIXES = (
     '/api/balance_series',
     '/api/balance_analytics',
     '/api/splits',
-    '/api/cache_snapshot',
     '/api/totals',
     '/api/category_breakdown',
     '/api/transactions_range',
-    '/api/render_status',
     '/export/transactions_csv',
     '/export/balances_csv',
     '/export/all_data_zip',
@@ -307,26 +273,6 @@ def categories_settings_ref():
 def split_people_settings_ref():
     return fs.collection(SETTINGS_COL).document(SPLIT_PEOPLE_SETTINGS_DOC)
 
-def cache_get(key):
-    cached = _APP_CACHE.get(key)
-    if not cached:
-        return None
-    expires_at, value = cached
-    if expires_at <= time.monotonic():
-        _APP_CACHE.pop(key, None)
-        return None
-    return value
-
-def cache_set(key, value, ttl=CACHE_TTL_SECONDS):
-    _APP_CACHE[key] = (time.monotonic() + ttl, value)
-    return value
-
-def cache_delete(key):
-    _APP_CACHE.pop(key, None)
-
-def cache_clear():
-    _APP_CACHE.clear()
-
 def load_view_only_password_hash_from_store():
     doc = view_only_settings_ref().get(
         retry=None,
@@ -335,7 +281,7 @@ def load_view_only_password_hash_from_store():
     password_hash = ''
     if doc.exists:
         password_hash = (doc.to_dict() or {}).get('password_hash') or ''
-    return cache_set('view_only_password_hash', password_hash)
+    return password_hash
 
 def load_categories_from_store():
     categories = []
@@ -352,16 +298,12 @@ def load_categories_from_store():
         default_cat = data.get('default_category') or 'Other'
     if not categories:
         categories = default_categories()
-    cache_set('default_category', default_cat)
-    return list(cache_set('categories', categories))
+    return categories, default_cat
 
 def get_default_category():
-    cached_default = cache_get('default_category')
-    if cached_default is not None:
-        return cached_default
     try:
-        load_categories_from_store()
-        return cache_get('default_category') or 'Other'
+        categories, default_cat = load_categories_from_store()
+        return default_cat
     except Exception:
         return 'Other'
 
@@ -378,71 +320,10 @@ def load_user_auth_from_store(username):
         'exists': doc.exists,
         'data': (doc.to_dict() or {}) if doc.exists else {},
     }
-    if entry['exists']:
-        cache_user_auth(normalized_username, entry['data'], exists=True)
-    else:
-        forget_user_auth_cache(normalized_username)
     return freeze_user_auth_entry(entry)
-
-def refresh_cache_job(username=None, reason='manual'):
-    global _LAST_CACHE_REFRESH_RESULT
-
-    result = {
-        'ok': True,
-        'reason': reason,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'updated': [],
-        'errors': [],
-    }
-
-    jobs = (
-        ('view_only_password', lambda: load_view_only_password_hash_from_store()),
-        ('categories', load_categories_from_store),
-        ('split_people', load_split_people_from_store),
-    )
-    for name, loader in jobs:
-        try:
-            loader()
-            result['updated'].append(name)
-        except Exception as exc:
-            result['ok'] = False
-            result['errors'].append(name)
-            app.logger.exception("Cache refresh job failed for %s: %s", name, exc)
-
-    normalized_username = normalize_username(username)
-    if normalized_username:
-        try:
-            load_user_auth_from_store(normalized_username)
-            result['updated'].append('user_auth')
-        except Exception as exc:
-            result['ok'] = False
-            result['errors'].append('user_auth')
-            app.logger.exception("Cache refresh job failed for user_auth user=%s: %s", normalized_username, exc)
-
-    _LAST_CACHE_REFRESH_RESULT = dict(result)
-    return result
-
-def refresh_cache_after_wake():
-    global _LAST_REQUEST_MONOTONIC
-
-    now_monotonic = time.monotonic()
-    idle_seconds = now_monotonic - _LAST_REQUEST_MONOTONIC
-    _LAST_REQUEST_MONOTONIC = now_monotonic
-
-    if idle_seconds >= WAKE_REFRESH_IDLE_SECONDS:
-        result = refresh_cache_job(get_current_username(), reason='wake')
-        app.logger.info(
-            "Ran cache refresh job after %.1fs idle/wake pause ok=%s updated=%s",
-            idle_seconds,
-            result['ok'],
-            ','.join(result['updated']),
-        )
 
 def normalize_username(username):
     return str(username or '').strip().lower()
-
-def auth_cache_key(username):
-    return f"user_auth:{normalize_username(username)}"
 
 def freeze_user_auth_entry(entry):
     return {
@@ -450,49 +331,19 @@ def freeze_user_auth_entry(entry):
         'data': dict(entry.get('data') or {}),
     }
 
-def cache_user_auth(username, user_data=None, exists=True):
-    entry = {
-        'exists': bool(exists),
-        'data': dict(user_data or {}),
-    }
-    return cache_set(auth_cache_key(username), entry, AUTH_CACHE_TTL_SECONDS)
-
-def forget_user_auth_cache(username):
-    cache_delete(auth_cache_key(username))
-
 def get_user_auth_entry(username):
     normalized_username = normalize_username(username)
     if not normalized_username:
         return {'exists': False, 'data': {}}
-
-    cached_entry = cache_get(auth_cache_key(normalized_username))
-    if cached_entry is not None:
-        return freeze_user_auth_entry(cached_entry)
-
     return load_user_auth_from_store(normalized_username)
 
 def get_user_auth_for_login(username):
     normalized_username = normalize_username(username)
     if not normalized_username:
         return {'exists': False, 'data': {}}, 'none'
-
-    try:
-        return load_user_auth_from_store(normalized_username), 'firestore'
-    except Exception:
-        cached_entry = cache_get(auth_cache_key(normalized_username))
-        if cached_entry is not None:
-            app.logger.warning(
-                "Using cached auth hash for login because Firestore is unavailable user=%s",
-                normalized_username,
-            )
-            return freeze_user_auth_entry(cached_entry), 'cache'
-        raise
+    return load_user_auth_from_store(normalized_username), 'firestore'
 
 def get_view_only_password_hash():
-    cached_hash = cache_get('view_only_password_hash')
-    if cached_hash is not None:
-        return cached_hash
-
     try:
         return load_view_only_password_hash_from_store()
     except Exception:
@@ -538,16 +389,8 @@ def category_exists(categories, name):
     return item_exists(categories, name, normalize_category_name)
 
 def get_categories():
-    cached_categories = cache_get('categories')
-    if cached_categories is not None:
-        categories = list(cached_categories)
-        if not category_exists(categories, 'Trip'):
-            categories.append('Trip')
-            cache_set('categories', categories)
-        return categories
-
     try:
-        categories = load_categories_from_store()
+        categories, default_cat = load_categories_from_store()
         if not category_exists(categories, 'Trip'):
             categories.append('Trip')
             save_categories(categories)
@@ -558,7 +401,7 @@ def get_categories():
     categories = default_categories()
     if not category_exists(categories, 'Trip'):
         categories.append('Trip')
-    return list(cache_set('categories', categories))
+    return categories
 
 def save_categories(categories, updated_by=None):
     clean_categories = unique_normalized_items(categories, normalize_category_name)
@@ -571,7 +414,6 @@ def save_categories(categories, updated_by=None):
         'updated_at': datetime.now(UTC),
         'updated_by': updated_by,
     }, merge=True)
-    cache_set('categories', clean_categories)
     return clean_categories
 
 def default_split_people():
@@ -597,18 +439,14 @@ def load_split_people_from_store():
         people = unique_normalized_items(raw_people, normalize_person_name)
     if not people:
         people = default_split_people()
-    return list(cache_set('split_people', people))
+    return people
 
 def get_split_people():
-    cached_people = cache_get('split_people')
-    if cached_people is not None:
-        return list(cached_people)
-
     try:
         return load_split_people_from_store()
     except Exception:
         app.logger.exception("Failed to load split people settings")
-    return list(cache_set('split_people', default_split_people()))
+    return default_split_people()
 
 def save_split_people(people, updated_by=None):
     clean_people = unique_normalized_items(people, normalize_person_name)
@@ -621,7 +459,6 @@ def save_split_people(people, updated_by=None):
         'updated_at': datetime.now(UTC),
         'updated_by': updated_by,
     }, merge=True)
-    cache_set('split_people', clean_people)
     return clean_people
 
 def apply_category_choices(form, include=None):
@@ -1105,7 +942,6 @@ def apply_recurring_balances_up_to_today():
 # Run before every request (minimal safe throttling)
 @app.before_request
 def ensure_recurring_applied():
-    refresh_cache_after_wake()
 
     # Only try to run for logged-in full users
     if not session.get('logged_in'):
@@ -1121,7 +957,6 @@ def ensure_recurring_applied():
         '/static/',
         '/favicon.ico',
         '/export/',
-        '/sync-status',
         '/debug/recurring_run',
         '/api/',
         '/login',
@@ -1248,152 +1083,8 @@ def debug_recurring_run():
 def index():
     return render_template('index.html')
 
-@app.route('/sync-status')
-@login_required
-def sync_status():
-    if session.get('view_only'):
-        abort(403, description="Full authentication required")
-    return render_template('sync_status.html')
 
-@app.route('/api/render_status')
-@login_required
-def api_render_status():
-    cache_refresh = _LAST_CACHE_REFRESH_RESULT
-    if request.args.get('refresh_cache') == '1':
-        cache_refresh = refresh_cache_job(get_current_username(), reason='render_status')
 
-    return jsonify({
-        'ok': True,
-        'awake': True,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'cache_refresh': cache_refresh,
-    })
-
-@app.route('/api/login_wake_status')
-def api_login_wake_status():
-    cache_refresh = _LAST_CACHE_REFRESH_RESULT
-    if request.args.get('refresh_cache') == '1':
-        cache_refresh = refresh_cache_job(reason='login_wake')
-
-    return jsonify({
-        'ok': True,
-        'awake': True,
-        'checked_at': datetime.now(UTC).isoformat(),
-        'cache_refresh': cache_refresh,
-    })
-
-@app.route('/api/login_password_cache_status')
-def api_login_password_cache_status():
-    username = normalize_username(request.args.get('username'))
-    cache_available = bool(username and cache_get(auth_cache_key(username)) is not None)
-    return jsonify({
-        'ok': True,
-        'cache_available': cache_available,
-        'checked_at': datetime.now(UTC).isoformat(),
-    })
-
-def serialize_transaction_for_cache(txn):
-    return {
-        'id': txn.get('_id') or txn.get('id'),
-        'timestamp': format_ist(txn.get('timestamp')) if txn.get('timestamp') else None,
-        'description': txn.get('description') or '',
-        'category': txn.get('category') or 'Uncategorized',
-        'amount': round(float(txn.get('amount', 0.0)), 2),
-    }
-
-def serialize_balance_for_cache(entry):
-    return {
-        'id': entry.get('_id') or entry.get('id'),
-        'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
-        'balance': round(float(entry.get('balance', 0.0)), 2),
-        'type': entry.get('type'),
-        'delta': round(float(entry.get('delta', 0.0)), 2),
-        'note': entry.get('note', ''),
-    }
-
-def serialize_recurring_for_cache(rule):
-    return {
-        'id': rule.get('_id') or rule.get('id'),
-        'amount': round(float(rule.get('amount', 0.0)), 2),
-        'description': rule.get('description') or '',
-        'frequency': rule.get('frequency') or 'monthly',
-        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
-        'category': rule.get('category') or 'Uncategorized',
-    }
-
-def serialize_recurring_balance_for_cache(rule):
-    return {
-        'id': rule.get('_id') or rule.get('id'),
-        'balance': round(float(rule.get('balance', 0.0)), 2),
-        'frequency': rule.get('frequency') or 'monthly',
-        'start_datetime': format_ist(rule.get('start_datetime')) if rule.get('start_datetime') else None,
-        'note': rule.get('note') or '',
-    }
-
-def serialize_split_doc_for_cache(doc):
-    return {
-        'id': doc.get('_id') or doc.get('id'),
-        'title': doc.get('title') or '',
-        'created_at': format_ist(doc.get('created_at')) if doc.get('created_at') else None,
-        'updated_at': format_ist(doc.get('updated_at')) if doc.get('updated_at') else None,
-        'is_live': bool(doc.get('is_live')),
-    }
-
-@app.route('/api/cache_snapshot')
-@login_required
-def api_cache_snapshot():
-    username = require_user()
-    latest_balance = get_latest_balance(username=username)
-    balance_docs_raw = [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            bal_collection(username)
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(100)
-        )
-    ]
-    balance_docs = [d for d in balance_docs_raw if d.get('type') not in ('txn', 'transaction')][:BROWSER_CACHE_BALANCE_HISTORY]
-    txn_docs = [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            tx_collection(username)
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(BROWSER_CACHE_RECENT_TRANSACTIONS)
-        )
-    ]
-    live_split = get_live_split(username=username)
-    recurring_docs = get_recurring_rules_for_page(username)
-    recurring_balance_docs = get_recurring_balance_rules_for_page(username)
-    splits_docs = get_split_documents(username)
-    trips_docs = get_trip_documents(username)
-
-    return jsonify({
-        'ok': True,
-        'cached_at': datetime.now(UTC).isoformat(),
-        'limits': {
-            'recent_transactions': BROWSER_CACHE_RECENT_TRANSACTIONS,
-            'balance_history': BROWSER_CACHE_BALANCE_HISTORY,
-            'split_entries': SPLIT_ENTRY_TABLE_LIMIT,
-            'recurring_rules': RECURRING_RULE_TABLE_LIMIT,
-            'splits': SPLIT_DOCUMENT_TABLE_LIMIT,
-            'trips': TRIP_TABLE_LIMIT,
-        },
-        'categories': get_categories(),
-        'split_people': get_split_people(),
-        'balance': {
-            'current': {
-                'balance': round(float(latest_balance.get('balance', 0.0)), 2) if latest_balance else 0.0,
-                'timestamp': format_ist(latest_balance.get('timestamp')) if latest_balance and latest_balance.get('timestamp') else None,
-            },
-            'history': [serialize_balance_for_cache(entry) for entry in balance_docs],
-        },
-        'transactions': [serialize_transaction_for_cache(txn) for txn in txn_docs],
-        'live_split': build_split_summary(live_split, username=username),
-        'recurring_rules': [serialize_recurring_for_cache(r) for r in recurring_docs],
-        'recurring_balance_rules': [serialize_recurring_balance_for_cache(r) for r in recurring_balance_docs],
-        'splits': [serialize_split_doc_for_cache(d) for d in splits_docs],
-        'trips': [serialize_trip_for_cache(t) for t in trips_docs],
-    })
 
 def build_transaction_doc(form):
     txn_datetime = local_datetime_to_utc(
@@ -1651,11 +1342,10 @@ def api_transaction_update(tx_id):
         old_amount = float(existing_txn.get('amount', 0.0))
         new_amount = float(updated_doc.get('amount', 0.0))
         balance_delta = round(old_amount - new_amount, 2)
-        balance_note = f"edit_txn:{tx_id}:{action_id}" if action_id else f"edit_txn:{tx_id}"
 
-        if balance_delta and not balance_note_exists(username, balance_note):
-            append_balance(balance_delta, 'txn_edit', note=balance_note, username=username)
         doc_ref.update(updated_doc)
+        if balance_delta:
+            update_transaction_balance_entry(tx_id, old_amount, new_amount, username=username)
 
         if action_id:
             client_actions_collection(username).document(action_id).set({
@@ -1701,10 +1391,7 @@ def api_transaction_delete(tx_id):
             return jsonify({'ok': True, 'duplicate': True, 'transaction_id': tx_id})
 
         txn = doc_to_txn(doc)
-        amount = float(txn.get('amount', 0.0))
-        balance_note = f"del_txn:{tx_id}:{action_id}" if action_id else f"del_txn:{tx_id}"
-        if not balance_note_exists(username, balance_note):
-            append_balance(amount, 'txn_delete', note=balance_note, username=username)
+        delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
 
         if action_id:
@@ -1747,7 +1434,7 @@ def edit_transaction(tx_id):
         try:
             doc_ref.update(updated_doc)
             if balance_delta:
-                append_balance(balance_delta, 'txn_edit', note=f"edit_txn:{tx_id}", username=username)
+                update_transaction_balance_entry(tx_id, old_amount, new_amount, username=username)
             app.logger.info(
                 "Transaction updated id=%s user=%s old_amount=%.2f new_amount=%.2f",
                 tx_id,
@@ -1773,124 +1460,33 @@ def edit_transaction(tx_id):
 @app.route('/transactions')
 @login_required
 def transactions():
-    page = parse_positive_int(request.args.get('page'), default=1)
-    per = TRANSACTION_PAGE_SIZE
     search = (request.args.get('q') or '').strip()
-    sort_field = sanitize_sort(
-        request.args.get('sort'),
-        {'timestamp', 'description', 'category', 'amount'},
-        'timestamp',
-    )
-    sort_dir = sanitize_sort(request.args.get('dir'), {'asc', 'desc'}, 'desc')
-    direction = firestore.Query.ASCENDING if sort_dir == 'asc' else firestore.Query.DESCENDING
-    cursor_id = (request.args.get('cursor') or '').strip()
-
     username = require_user()
-    base_query = tx_collection(username).order_by(sort_field, direction=direction)
-    if cursor_id:
-        cursor_doc = tx_collection(username).document(cursor_id).get()
-        if cursor_doc.exists:
-            base_query = base_query.start_after(cursor_doc)
-
-    scan_limit = 150 if search else per + 1
-    docs = list(stream_with_timeout(base_query.limit(scan_limit)))
+    base_query = tx_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING)
+    docs = list(stream_with_timeout(base_query))
 
     if search:
-        search_key = search.lower()
-        filtered_docs = []
+        search_terms = transaction_search_terms(search)
+        filtered_txns = []
         for doc in docs:
             data = doc.to_dict() or {}
             haystack = ' '.join([
+                str(doc.id or ''),
                 str(data.get('description') or ''),
                 str(data.get('category') or ''),
                 str(data.get('amount') or ''),
                 format_ist(data.get('timestamp')) or '',
+                friendly_date_text(data.get('timestamp')),
             ]).lower()
-            if search_key in haystack:
-                filtered_docs.append(doc)
-            if len(filtered_docs) > per:
-                break
-        page_docs = filtered_docs[:per]
-        has_next = len(filtered_docs) > per or len(docs) == scan_limit
+            if any(term in haystack for term in search_terms):
+                filtered_txns.append(doc_to_txn(doc))
+        txns_list = filtered_txns
     else:
-        page_docs = docs[:per]
-        has_next = len(docs) > per
-
-    txns_list = [doc_to_txn(doc) for doc in page_docs]
-    has_prev = page > 1
-    next_cursor = page_docs[-1].id if page_docs and has_next else None
-    current_cursor = cursor_id
-
-    prev_cursor = ''
-    cursor_history_key = f"txn_cursors:{username}:{sort_field}:{sort_dir}:{search}"
-    cursor_history = session.get(cursor_history_key, {})
-    if next_cursor:
-        cursor_history[str(page + 1)] = next_cursor
-        cursor_history = {
-            key: cursor_history[key]
-            for key in sorted(cursor_history, key=lambda item: int(item))[-20:]
-        }
-        session[cursor_history_key] = cursor_history
-    if page > 2:
-        prev_cursor = cursor_history.get(str(page - 1), '')
-
-    page_cursor_map = {1: ''}
-    for cursor_page, cursor_value in cursor_history.items():
-        try:
-            page_cursor_map[int(cursor_page)] = cursor_value
-        except (TypeError, ValueError):
-            continue
-    if current_cursor:
-        page_cursor_map[page] = current_cursor
-    if next_cursor:
-        page_cursor_map[page + 1] = next_cursor
-
-    candidate_pages = {1, page}
-    if has_prev:
-        candidate_pages.add(page - 1)
-    if page > 2:
-        candidate_pages.add(page - 2)
-    if has_next:
-        candidate_pages.add(page + 1)
-    for known_page in page_cursor_map:
-        if abs(known_page - page) <= 2:
-            candidate_pages.add(known_page)
-
-    page_links = []
-    previous_page = None
-    for page_num in sorted(candidate_pages):
-        if page_num < 1:
-            continue
-        cursor_value = page_cursor_map.get(page_num)
-        if page_num != page and cursor_value is None:
-            continue
-        if previous_page is not None and page_num - previous_page > 1:
-            page_links.append({'ellipsis': True})
-        page_links.append({
-            'page': page_num,
-            'cursor': cursor_value or '',
-            'active': page_num == page,
-        })
-        previous_page = page_num
-
-    if has_next and page_links and not page_links[-1].get('ellipsis') and page_links[-1].get('page') == page + 1:
-        page_links.append({'ellipsis': True})
+        txns_list = [doc_to_txn(doc) for doc in docs]
 
     paginate_obj = SimpleNamespace(
         items=txns_list,
-        page=page,
-        per_page=per,
-        has_next=has_next,
-        has_prev=has_prev,
-        next_num=page + 1 if has_next else None,
-        prev_num=page - 1 if has_prev else None,
-        next_cursor=next_cursor,
-        prev_cursor=prev_cursor,
-        current_cursor=current_cursor,
-        page_links=page_links,
         search=search,
-        sort=sort_field,
-        direction=sort_dir,
         latest_transaction_id=get_latest_transaction_id(username=username),
     )
 
@@ -1911,9 +1507,8 @@ def delete(tx_id):
 
     try:
         txn = doc_to_txn(doc)
-        amt = float(txn.get('amount', 0.0))
+        delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
-        append_balance(float(amt), 'txn_delete', note=f"del_txn:{tx_id}", username=username)
         flash('Transaction deleted.', 'info')
     except Exception as e:
         app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
@@ -1979,7 +1574,6 @@ def get_recurring_rules_for_page(username):
         for doc in stream_with_timeout(
             rec_collection(username)
             .order_by('start_datetime', direction=firestore.Query.DESCENDING)
-            .limit(RECURRING_RULE_TABLE_LIMIT)
         )
     ]
 
@@ -1989,7 +1583,6 @@ def get_recurring_balance_rules_for_page(username):
         for doc in stream_with_timeout(
             rec_balance_collection(username)
             .order_by('start_datetime', direction=firestore.Query.DESCENDING)
-            .limit(RECURRING_RULE_TABLE_LIMIT)
         )
     ]
 
@@ -2324,18 +1917,6 @@ def populate_split_entry_form(form, entry):
     form.date.data = entry_time.date()
     form.time.data = entry_time.time().replace(second=0, microsecond=0, tzinfo=None)
 
-def serialize_trip_for_cache(t):
-    return {
-        'id': t.get('_id') or t.get('id'),
-        'name': t.get('name') or '',
-        'start_date': format_ist(t.get('start_date'), "'%y-%m-%d") if t.get('start_date') else None,
-        'end_date': format_ist(t.get('end_date'), "'%y-%m-%d") if t.get('end_date') else None,
-        'description': t.get('description') or '',
-        'photo_link': t.get('photo_link') or '',
-        'cost_type': t.get('cost_type') or 'fixed',
-        'approx_cost': round(float(t.get('approx_cost') or 0.0), 2),
-        'split_id': t.get('split_id') or None,
-    }
 
 def get_trip_documents(username=None):
     if username is None:
@@ -2343,7 +1924,6 @@ def get_trip_documents(username=None):
     docs = stream_with_timeout(
         trips_collection(username)
         .order_by('start_date', direction=firestore.Query.DESCENDING)
-        .limit(TRIP_TABLE_LIMIT)
     )
     trips = []
     for doc in docs:
@@ -2383,7 +1963,6 @@ def get_split_documents(username=None):
     docs = stream_with_timeout(
         splits_collection(username)
         .order_by('updated_at', direction=firestore.Query.DESCENDING)
-        .limit(SPLIT_DOCUMENT_TABLE_LIMIT)
     )
     return [doc_to_txn(doc) for doc in docs]
 
@@ -2405,14 +1984,13 @@ def set_live_split(split_id, username=None):
             splits_collection(username).document(doc.id).set({'is_live': False, 'updated_at': now}, merge=True)
     splits_collection(username).document(str(split_id)).set({'is_live': True, 'updated_at': now}, merge=True)
 
-def get_split_entries(split_id, username=None, limit=SPLIT_ENTRY_TABLE_LIMIT):
+def get_split_entries(split_id, username=None, limit=None):
     if username is None:
         username = require_user()
-    docs = stream_with_timeout(
-        split_entries_collection(split_id, username)
-        .order_by('timestamp', direction=firestore.Query.DESCENDING)
-        .limit(limit)
-    )
+    q = split_entries_collection(split_id, username).order_by('timestamp', direction=firestore.Query.DESCENDING)
+    if limit is not None:
+        q = q.limit(limit)
+    docs = stream_with_timeout(q)
     return [doc_to_txn(doc) for doc in docs]
 
 def get_split_totals(split_id, username=None):
@@ -2441,7 +2019,7 @@ def build_split_summary(split_doc, username=None):
         return None
     split_id = split_doc.get('_id') or split_doc.get('id')
     totals = get_split_totals(split_id, username=username)
-    entries = get_split_entries(split_id, username=username, limit=SPLIT_ENTRY_TABLE_LIMIT)
+    entries = get_split_entries(split_id, username=username)
     return {
         'id': split_id,
         'title': split_doc.get('title') or 'Untitled split',
@@ -3031,10 +2609,9 @@ def split_record_txn(split_id):
             old_amount = float(existing_txn.get('amount', 0.0))
             new_amount = float(txn_amount)
             balance_delta = round(old_amount - new_amount, 2)
-            balance_note = f"edit_txn:{txn_id}"
 
-            if balance_delta and not balance_note_exists(username, balance_note):
-                append_balance(balance_delta, 'txn_edit', note=balance_note, username=username)
+            if balance_delta:
+                update_transaction_balance_entry(txn_id, old_amount, new_amount, username=username)
 
             txn_ref.update({
                 'amount': float(txn_amount),
@@ -3090,7 +2667,7 @@ def trips():
         form = TripForm(formdata=None)
 
     if not session.get('view_only') and request.method == 'POST':
-        # JSON API payload check (offline sync)
+        # JSON API payload check for direct online submissions.
         if request.is_json:
             payload = request.get_json(silent=True) or {}
             name = validate_short_text(payload.get('name'), 'Trip Name')
@@ -3623,7 +3200,6 @@ def management():
             'updated_at': datetime.now(UTC),
             'updated_by': username,
         }, merge=True)
-        cache_set('view_only_password_hash', password_hash)
         app.logger.info("View-only password updated by user=%s", username)
         flash('View-only password updated successfully.', 'success')
         return redirect(url_for('management'))
@@ -3688,8 +3264,6 @@ def management():
         else:
             try:
                 rename_user_account(username, new_username, user_data)
-                forget_user_auth_cache(username)
-                cache_user_auth(new_username, user_data, exists=True)
                 session['username'] = new_username
                 app.logger.info("Username changed old=%s new=%s", username, new_username)
                 flash('Username updated successfully.', 'success')
@@ -3720,7 +3294,6 @@ def management():
                 'password': password_hash,
                 'updated_at': updated_at,
             })
-            cache_user_auth(username, user_data, exists=True)
             app.logger.info("Full-login password updated user=%s", username)
             flash('Password updated successfully.', 'success')
             return redirect(url_for('management'))
@@ -3781,7 +3354,6 @@ def management_category_edit(category_name):
                 'default_category': updated,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', updated)
         app.logger.info("Category renamed via JSON old=%s new=%s user=%s", original, updated, username)
         return jsonify({'ok': True})
 
@@ -3798,7 +3370,6 @@ def management_category_edit(category_name):
                 'default_category': updated,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', updated)
         app.logger.info("Category renamed old=%s new=%s user=%s", original, updated, username)
         flash('Category updated.', 'success')
         return redirect(url_for('management'))
@@ -3842,7 +3413,6 @@ def management_category_delete(category_name):
                 'default_category': 'Other',
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', 'Other')
         app.logger.info("Category deleted via JSON name=%s user=%s", category, username)
         return jsonify({'ok': True})
 
@@ -3852,7 +3422,6 @@ def management_category_delete(category_name):
             'default_category': 'Other',
             'updated_at': datetime.now(UTC),
         }, merge=True)
-        cache_set('default_category', 'Other')
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
     return redirect(url_for('management'))
@@ -3873,7 +3442,6 @@ def management_set_default_category():
                 'default_category': default_cat,
                 'updated_at': datetime.now(UTC),
             }, merge=True)
-            cache_set('default_category', default_cat)
             flash(f"Default category updated to {default_cat}", "success")
         except Exception as e:
             app.logger.exception("Failed to set default category")
@@ -4165,28 +3733,6 @@ def view_only_login():
         flash('Login error', 'danger')
         return redirect(url_for('login'))
 
-
-@app.route('/api/login_offline', methods=['POST'])
-def api_login_offline():
-    payload = request.get_json(silent=True) or {}
-    username = normalize_username(payload.get('username'))
-    login_type = payload.get('type')
-
-    if not username:
-        return jsonify({'ok': False, 'error': 'Username is required.'}), 400
-
-    session.permanent = True
-    session['username'] = username
-    if login_type == 'view':
-        session['view_only'] = True
-        session.pop('logged_in', None)
-        app.logger.info("Offline view-only session granted for user=%s", username)
-    else:
-        session['logged_in'] = True
-        session.pop('view_only', None)
-        app.logger.info("Offline full session granted for user=%s", username)
-
-    return jsonify({'ok': True})
 
 
 @app.route('/logout')
@@ -4646,6 +4192,137 @@ def balance():
 def balance_analytics():
     return render_template('balance_analytics.html')
 
+def balance_transaction_id(d):
+    explicit_id = d.get('transaction_id') or ''
+    if explicit_id:
+        return explicit_id
+
+    note = str(d.get('note') or '').strip()
+    if note.lower().startswith('txn:'):
+        return note.split(':', 1)[1].strip()
+    return ''
+
+def find_balance_entries_for_transaction(tx_id, username=None):
+    if username is None:
+        username = require_user()
+
+    q = (
+        bal_collection(username)
+        .where('type', '==', 'txn')
+        .order_by('timestamp', direction=firestore.Query.ASCENDING)
+    )
+    entries = []
+    for doc in stream_with_timeout(q):
+        data = doc.to_dict() or {}
+        if balance_transaction_id(data) == tx_id:
+            entries.append(doc)
+    return entries
+
+
+def delete_balance_entry_document(doc, username=None):
+    if username is None:
+        username = require_user()
+
+    entry = doc_to_txn(doc)
+    delta = float(entry.get('delta', 0.0))
+    timestamp = entry.get('timestamp')
+    bal_collection(username).document(doc.id).delete()
+    shift_balance_entries_after(timestamp, -delta, username=username)
+    return entry
+
+
+def delete_balance_entries_for_transaction(tx_id, username=None):
+    if username is None:
+        username = require_user()
+
+    entries = find_balance_entries_for_transaction(tx_id, username=username)
+    for doc in entries:
+        delete_balance_entry_document(doc, username=username)
+    return len(entries)
+
+
+def update_transaction_balance_entry(tx_id, old_amount, new_amount, username=None):
+    if username is None:
+        username = require_user()
+
+    entries = find_balance_entries_for_transaction(tx_id, username=username)
+    if not entries:
+        note = f"txn:{tx_id}"
+        append_balance(-float(new_amount), 'txn', note=note, username=username)
+        return 0
+
+    if len(entries) > 1:
+        app.logger.warning(
+            "Multiple balance rows found for transaction %s user=%s; updating the earliest row.",
+            tx_id,
+            username,
+        )
+
+    doc = entries[0]
+    entry = doc_to_txn(doc)
+    old_delta = -float(old_amount)
+    new_delta = -float(new_amount)
+    if old_delta == new_delta:
+        return 0
+
+    previous = get_previous_balance_before(entry.get('timestamp'), username=username)
+    previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
+    new_balance = round(previous_balance + new_delta, 2)
+    balance_diff = round(new_balance - float(entry.get('balance', 0.0)), 2)
+
+    bal_collection(username).document(doc.id).update({
+        'balance': float(new_balance),
+        'delta': float(new_delta),
+        'updated_at': datetime.now(UTC),
+    })
+    shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+    return 1
+
+
+def load_transactions_by_id(username, txn_ids):
+    ids = [tid for tid in txn_ids if tid]
+    if not ids:
+        return {}
+    lookup = {}
+    for tid in set(ids):
+        try:
+            doc = tx_collection(username).document(tid).get()
+            if doc.exists:
+                lookup[tid] = doc_to_txn(doc)
+        except Exception:
+            pass
+    return lookup
+
+def serialize_balance_history_entry(d, txn_lookup):
+    tx_id = balance_transaction_id(d)
+    txn = txn_lookup.get(tx_id) if tx_id else None
+    note = d.get('note', '')
+    if txn:
+        note_display = f"{txn.get('description', '')}({txn.get('category', '')})"
+        transaction_search_text = ' '.join(
+            str(part or '')
+            for part in (
+                txn.get('_id') or txn.get('id') or tx_id,
+                txn.get('description'),
+                txn.get('category'),
+            )
+        ).strip()
+    else:
+        note_display = note
+        transaction_search_text = tx_id or ''
+    return {
+        'id': d.get('_id') or d.get('id'),
+        'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
+        'type': d.get('type') or 'add',
+        'balance_mode': d.get('balance_mode') or ('sync' if d.get('type') == 'sync' else 'add'),
+        'delta': round(float(d.get('delta', 0.0)), 2),
+        'balance': round(float(d.get('balance', 0.0)), 2),
+        'note': note,
+        'note_display': note_display,
+        'transaction_id': tx_id or '',
+        'transaction_search_text': transaction_search_text,
+    }
+
 @app.route('/api/balance_current')
 @login_required
 def api_balance_current():
@@ -4657,15 +4334,30 @@ def api_balance_current():
         .limit(500)
     )
     raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
-    docs = [d for d in raw_docs if d.get('type') in ('add', 'sync')][:BALANCE_HISTORY_TABLE_LIMIT]
-    history = [{
-        'id': d.get('_id'),
-        'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
-        'balance': round(float(d.get('balance', 0.0)), 2),
-        'type': d.get('type'),
-        'delta': round(float(d.get('delta', 0.0)), 2),
-        'note': d.get('note', '')
-    } for d in docs]
+    show_txns = request.args.get('show_txns') == 'true'
+    allowed_types = ('add', 'sync', 'txn') if show_txns else ('add', 'sync')
+    default_limit = 12 * (12 if show_txns else 8)
+    limit = parse_positive_int(request.args.get('limit'), default=default_limit, max_value=200)
+
+    docs = [d for d in raw_docs if d.get('type') in allowed_types]
+    txn_lookup = {}
+
+    if show_txns:
+        txn_ids = [balance_transaction_id(d) for d in docs if str(d.get('type') or '').lower() == 'txn']
+        txn_lookup = load_transactions_by_id(username, txn_ids)
+
+        filtered_docs = []
+        for d in docs:
+            if str(d.get('type') or '').lower() == 'txn':
+                tx_id = balance_transaction_id(d)
+                if not tx_id or tx_id not in txn_lookup:
+                    continue
+            filtered_docs.append(d)
+        docs = filtered_docs[:limit]
+    else:
+        docs = docs[:limit]
+
+    history = [serialize_balance_history_entry(d, txn_lookup) for d in docs]
     out = {
         'current': {
             'balance': round(float(latest.get('balance', 0.0)), 2) if latest else 0.0,
@@ -4741,8 +4433,9 @@ def _balance_type_label(type_key):
         'add': 'Manual add',
         'sync': 'Sync',
         'txn': 'Transaction',
-        'txn_edit': 'Edit transaction',
-        'txn_delete': 'Delete transaction',
+        'add_txn': 'Edited transaction',
+        'txn_edit': 'Edited transaction',
+        'txn_delete': 'Deleted transaction',
         'recurring': 'Recurring expense',
         'recurring_balance': 'Recurring balance',
     }

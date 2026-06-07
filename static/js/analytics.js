@@ -129,59 +129,6 @@ function updateSummary(summary = {}) {
   );
 }
 
-function buildCachedSpendFallback(snapshot) {
-  const transactions = Array.isArray(snapshot?.transactions) ? snapshot.transactions : [];
-  const total = transactions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const amounts = transactions.map((item) => Number(item.amount || 0)).sort((a, b) => a - b);
-  const count = transactions.length;
-  const avg = count ? total / count : 0;
-  const median = count
-    ? (count % 2 ? amounts[Math.floor(count / 2)] : (amounts[count / 2 - 1] + amounts[count / 2]) / 2)
-    : 0;
-  const min = count ? amounts[0] : 0;
-  const max = count ? amounts[count - 1] : 0;
-  const byCategory = transactions.reduce((acc, item) => {
-    const category = item.category || 'Uncategorized';
-    acc[category] = (acc[category] || 0) + Number(item.amount || 0);
-    return acc;
-  }, {});
-  const categories = Object.entries(byCategory)
-    .map(([category, amount]) => ({ category, amount }))
-    .sort((a, b) => b.amount - a.amount);
-  const largest = transactions.reduce((best, item) => (
-    !best || Number(item.amount || 0) > Number(best.amount || 0) ? item : best
-  ), null);
-
-  return {
-    transactions,
-    categories,
-    summary: {
-      total,
-      count,
-      avg,
-      median,
-      min,
-      max,
-      prev_total: 0,
-      pct_change: null,
-      top_category: categories[0] || null,
-      largest_transaction: largest,
-    },
-  };
-}
-
-function renderOfflineSpendNotice(fallback) {
-  const categoryText = fallback.categories.length
-    ? `Top cached category: <strong>${escapeHtml(fallback.categories[0].category)}</strong> (${Number(fallback.categories[0].amount || 0).toFixed(2)}).`
-    : 'No category breakdown is available from cache.';
-
-  elements.insightsArea.innerHTML = `
-    <p><strong>Offline limited view.</strong> Full spend analytics need the server because date filtering, previous-period comparison, and complete chart data are calculated from Firestore.</p>
-    <p>Showing only <strong>${fallback.transactions.length}</strong> cached recent transaction${fallback.transactions.length === 1 ? '' : 's'} stored in this browser.</p>
-    <p>${categoryText}</p>
-  `;
-}
-
 function renderInsights(totals, categories) {
   const chunks = [];
   const summary = totals && totals.summary;
@@ -329,24 +276,11 @@ async function refreshAnalytics() {
     }
   } catch (error) {
     console.error('analytics render failed', error);
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    if (snapshot?.transactions?.length) {
-      const fallback = buildCachedSpendFallback(snapshot);
-      destroyCharts();
-      updateSummary(fallback.summary);
-      renderTransactions(fallback.transactions);
-      if (elements.rawTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
-        window.FinTrak.initUnifiedTable(elements.rawTable);
-      }
-      setStatus('Offline: showing limited cached spend data only. Full analytics will load when the service wakes.', 'warning');
-      renderOfflineSpendNotice(fallback);
-    } else {
-      destroyCharts();
-      updateSummary({});
-      renderTransactions([]);
-      setStatus('Offline: spend analytics are unavailable because no cached transactions were found.', 'danger');
-      elements.insightsArea.innerHTML = '<p><strong>Offline.</strong> Full spend analytics need server data. Open this page once online to cache recent transactions for a small offline view.</p>';
-    }
+    destroyCharts();
+    updateSummary({});
+    renderTransactions([]);
+    setStatus('Unable to load spend analytics. Check the connection and try again.', 'danger');
+    elements.insightsArea.innerHTML = '<p>Spend analytics could not be loaded from the server.</p>';
   } finally {
     elements.applyBtn.disabled = false;
   }

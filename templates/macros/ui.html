@@ -47,18 +47,14 @@
     (['recurring', 'recurring_edit', 'recurring_balance', 'recurring_balance_edit', 'recurring_balance_delete'], 'recurring', 'Recurring Bills'),
     (['trips', 'trip_detail'], 'trips', 'Trips'),
     (['splits', 'split_detail', 'split_edit', 'split_entry_edit'], 'splits', 'Split Bills'),
-    (['sync_status'], 'sync_status', 'Offline Sync'),
     (['management', 'management_category_delete', 'management_category_edit', 'management_split_person_edit', 'management_split_person_delete'], 'management', 'Setup & Settings')
 ] %}
 {% for endpoints, route, label in nav_items %}
     {% set is_view_only = session.get('view_only') %}
-    {% if not is_view_only or route not in ['recurring', 'sync_status', 'management'] %}
+    {% if not is_view_only or route not in ['recurring', 'management'] %}
         <li class="nav-item">
             <a class="nav-link {{ 'active' if request.endpoint in endpoints else '' }}" href="{{ url_for(route) }}">
                 {{ label }}
-                {% if route == 'sync_status' %}
-                    <span id="pendingNavBadge" class="nav-pending-badge" hidden>0</span>
-                {% endif %}
             </a>
         </li>
     {% endif %}
@@ -103,11 +99,10 @@
 </div>
 {%- endmacro %}
 
-{% macro delete_button(action_url, confirm_text='', disabled=false, offline_queue='', extra_attrs=none) -%}
+{% macro delete_button(action_url, confirm_text='', disabled=false, extra_attrs=none) -%}
 <form method="post" action="{{ action_url }}" 
       {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} 
       class="d-inline"
-      {% if offline_queue %}data-offline-queue="{{ offline_queue }}"{% endif %}
       {% if extra_attrs %}
         {% for k, v in extra_attrs.items() %}
           data-{{ k }}="{{ v }}"
@@ -257,60 +252,9 @@
 </section>
 {%- endmacro %}
 
-{% macro offline_notice(id, extra_class='') -%}
-<div id="{{ id }}" class="alert alert-warning d-none {{ extra_class }}" role="alert"></div>
-{%- endmacro %}
 
-{% macro pager(paginate_obj, endpoint, extra_params=none) -%}
-{% if paginate_obj.items %}
-<nav aria-label="Pagination">
-    {% set start = ((paginate_obj.page - 1) * paginate_obj.per_page) + 1 %}
-    {% set end = start + paginate_obj.items|length - 1 %}
-    <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-2">
-        <div class="small text-muted">
-            Showing {{ start }}&ndash;{{ end }} · page {{ paginate_obj.page }}
-        </div>
-        <ul class="pagination mb-0">
-            {% if paginate_obj.has_prev %}
-            <li class="page-item nav-btn">
-                <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.prev_num, cursor=paginate_obj.prev_cursor, **(extra_params or {})) }}">
-                    Previous
-                </a>
-            </li>
-            {% else %}
-            <li class="page-item nav-btn disabled"><span class="page-link">Previous</span></li>
-            {% endif %}
 
-            {% if paginate_obj.page_links %}
-                {% for link in paginate_obj.page_links %}
-                    {% if link.ellipsis %}
-                    <li class="page-item ellipsis"><span class="page-link">{{ link.label or '...' }}</span></li>
-                    {% elif link.active %}
-                    <li class="page-item active"><span class="page-link">{{ link.page }}</span></li>
-                    {% else %}
-                    <li class="page-item">
-                        <a class="page-link" href="{{ url_for(endpoint, page=link.page, cursor=link.cursor, **(extra_params or {})) }}">{{ link.page }}</a>
-                    </li>
-                    {% endif %}
-                {% endfor %}
-            {% else %}
-                <li class="page-item active"><span class="page-link">{{ paginate_obj.page }}</span></li>
-            {% endif %}
 
-            {% if paginate_obj.has_next %}
-            <li class="page-item nav-btn">
-                <a class="page-link" href="{{ url_for(endpoint, page=paginate_obj.next_num, cursor=paginate_obj.next_cursor, **(extra_params or {})) }}">
-                    Next
-                </a>
-            </li>
-            {% else %}
-            <li class="page-item nav-btn disabled"><span class="page-link">Next</span></li>
-            {% endif %}
-        </ul>
-    </div>
-</nav>
-{% endif %}
-{%- endmacro %}
 
 {% macro form_field(field, label=None, label_class='form-label', placeholder=None, maxlength=None, autocomplete=None, minlength=None, required=false, step=None, min=None, max=None, pattern=None, autofocus=false, readonly=false, input_attrs=None, type=None, title=None, value=None, rows=None, id=None) -%}
 <div class="mb-3">
@@ -368,18 +312,7 @@
                     {% endfor %}
                 {% endif %}
 
-                <div class="auth-status-grid" aria-live="polite">
-                    <div class="auth-status-item">
-                        <span class="kicker">Service</span>
-                        <strong id="authRenderState">Waking</strong>
-                        <p id="authRenderMessage">Waiting for the service to respond.</p>
-                    </div>
-                    <div class="auth-status-item">
-                        <span class="kicker">Cache</span>
-                        <strong id="authCacheState">Not available</strong>
-                        <p id="authCacheMessage">Enter username to check cached login.</p>
-                    </div>
-                </div>
+
 
                 {{ caller() }}
             </div>
@@ -428,6 +361,64 @@
         {% endif %}
     {% endif %}
 {%- endmacro %}
+{% macro pagination(current_page=1, total_pages=1, extra_class='') -%}
+{% if total_pages > 1 %}
+<nav aria-label="Pagination" class="d-flex justify-content-center mt-3 {{ extra_class }}">
+    <ul class="pagination mb-0">
+        {% if current_page > 1 %}
+        <li class="page-item">
+            <button class="page-link" type="button" data-page="1" title="First page">«</button>
+        </li>
+        <li class="page-item">
+            <button class="page-link" type="button" data-page="{{ current_page - 1 }}" title="Previous page">‹</button>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <span class="page-link">«</span>
+        </li>
+        <li class="page-item disabled">
+            <span class="page-link">‹</span>
+        </li>
+        {% endif %}
+        
+        {% set start_page = [1, current_page - 2] | max %}
+        {% set end_page = [total_pages, current_page + 2] | min %}
+        {% if start_page > 1 %}
+        <li class="page-item disabled"><span class="page-link">...</span></li>
+        {% endif %}
+        
+        {% for page in range(start_page, end_page + 1) %}
+        {% if page == current_page %}
+        <li class="page-item active"><span class="page-link">{{ page }}</span></li>
+        {% else %}
+        <li class="page-item"><button class="page-link" type="button" data-page="{{ page }}">{{ page }}</button></li>
+        {% endif %}
+        {% endfor %}
+        
+        {% if end_page < total_pages %}
+        <li class="page-item disabled"><span class="page-link">...</span></li>
+        {% endif %}
+        
+        {% if current_page < total_pages %}
+        <li class="page-item">
+            <button class="page-link" type="button" data-page="{{ current_page + 1 }}" title="Next page">›</button>
+        </li>
+        <li class="page-item">
+            <button class="page-link" type="button" data-page="{{ total_pages }}" title="Last page">»</button>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <span class="page-link">›</span>
+        </li>
+        <li class="page-item disabled">
+            <span class="page-link">»</span>
+        </li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{%- endmacro %}
+
 {% macro analytics_controls() -%}
 <div class="card p-3 mb-3 shadow-sm analytics-controls">
     <div class="analytics-control-layout">
@@ -460,4 +451,12 @@
         </div>
     </div>
 </div>
+{%- endmacro %}
+
+{% macro friendly_date(dt_val, format='%Y-%m-%d %H:%M') -%}
+    {% if dt_val %}
+        <span data-format-date>{{ dt_val|ist_datetime(format) }}</span>
+    {% else %}
+        -
+    {% endif %}
 {%- endmacro %}

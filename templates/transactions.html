@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, pager, edit_button, modal, form_field, form_input, form_select, button, link_button, badge %}
+{% from "macros/ui.html" import page_header, table_shell, edit_button, modal, form_field, form_input, form_select, button, link_button, badge %}
 {% block content %}
 {% if not session.get('view_only') %}
     {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
@@ -10,35 +10,20 @@
 {% endif %}
 
 <form class="transaction-toolbar" method="get" action="{{ url_for('transactions') }}">
-    <input type="hidden" name="sort" value="{{ txns.sort }}">
-    <input type="hidden" name="dir" value="{{ txns.direction }}">
     {{ form_input('transactionSearch', 'Search transactions', 'q', type='search', value=txns.search, placeholder='Search description, category, amount, or date', label_class='visually-hidden') }}
     {{ button('Search', kind='primary', type='submit') }}
     {% if txns.search %}
-    {{ link_button(url_for('transactions', sort=txns.sort, dir=txns.direction), 'Clear', kind='secondary', outline=true) }}
+    {{ link_button(url_for('transactions'), 'Clear', kind='secondary', outline=true) }}
     {% endif %}
 </form>
 
-{% macro sort_link(label, field, align='') -%}
-    {% set active = txns.sort == field %}
-    {% set next_dir = 'asc' if not active or txns.direction == 'desc' else 'desc' %}
-    <a class="sortable-header {{ 'active' if active else '' }} {{ align }}"
-        href="{{ url_for('transactions', sort=field, dir=next_dir, q=txns.search) }}"
-        title="Sort by {{ label }}">
-        <span>{{ label }}</span>
-        <span class="sort-icon">
-            {% if active and txns.direction == 'asc' %}&uarr;{% elif active %}&darr;{% else %}&#8597;{% endif %}
-        </span>
-    </a>
-{%- endmacro %}
-
-{% call table_shell(extra_class='table-striped server-sorted') %}
+{% call table_shell(extra_class='table-striped') %}
     <thead>
         <tr>
-            <th>{{ sort_link('Date', 'timestamp') }}</th>
-            <th>{{ sort_link('Description', 'description') }}</th>
-            <th>{{ sort_link('Category', 'category') }}</th>
-            <th class="text-end">{{ sort_link('Amount (Rs.)', 'amount', 'justify-content-end') }}</th>
+            <th class="sortable-header active" data-dir="desc">Date</th>
+            <th class="sortable-header">Description</th>
+            <th class="sortable-header">Category</th>
+            <th class="sortable-header text-end">Amount (Rs.)</th>
             <th class="text-end">Actions</th>
         </tr>
     </thead>
@@ -55,9 +40,7 @@
                 <div class="table-actions">
                     {{ edit_button('editTransactionModal' ~ txn.id) }}
                     <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
-                        class="delete-form d-inline"
-                        data-offline-queue="transaction-delete"
-                        data-transaction-id="{{ txn.id }}">
+                        class="delete-form d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         {{ button('Delete', kind='danger', size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#deleteModal' ~ txn.id}) }}
 
@@ -77,9 +60,7 @@
 
                 <!-- Edit Transaction Modal -->
                 {% call modal('editTransactionModal' ~ txn.id, 'Edit Transaction') %}
-                    <form method="post" action="{{ url_for('edit_transaction', tx_id=txn.id) }}"
-                        data-offline-queue="transaction-edit"
-                        data-transaction-id="{{ txn.id }}">
+                    <form method="post" action="{{ url_for('edit_transaction', tx_id=txn.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         
                         {{ form_input('amount' ~ txn.id, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(txn.amount), step='0.01', min='0.01', required=true) }}
@@ -113,12 +94,10 @@
     </tbody>
 {% endcall %}
 
-{{ pager(txns, 'transactions', extra_params={'q': txns.search, 'sort': txns.sort, 'dir': txns.direction}) }}
-
 <!-- Add Transaction Modal -->
 {% if not session.get('view_only') %}
 {% call modal('addTransactionModal', 'Record Spending') %}
-    <form method="post" action="{{ url_for('add') }}" data-offline-queue="transaction-create">
+    <form method="post" action="{{ url_for('add') }}">
         {{ form.hidden_tag() }}
         {{ form_field(form.amount, step="0.01", min="0.01") }}
         {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input, button, link_button %}
+{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input, button, link_button, pagination %}
 {% block content %}
 
 {% call page_header('Balance', kicker='Overview', description='Track current cashflow balance, adjustments, and recent history.') %}
@@ -8,8 +8,9 @@
 {% endcall %}
 
 <div class="row g-3">
-    <div class="col-lg-4 col-md-5 col-sm-12">
-        {% call card(extra_class='mb-3') %}
+    <!-- Current Balance Column -->
+    <div class="col-md-6 col-sm-12">
+        {% call card(extra_class='h-100') %}
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Current Balance</h6>
             <div class="balance-amount">
                 Rs. <span id="currentBalance">0.00</span>
@@ -18,9 +19,12 @@
             <hr>
             {{ button('Refresh', kind='primary', size='sm', extra_class='w-100', type='button', id='refreshBtn') }}
         {% endcall %}
+    </div>
 
+    <!-- Actions Column -->
+    <div class="col-md-6 col-sm-12">
         {% if not session.get('view_only') %}
-        {% call card(extra_class='mb-3') %}
+        {% call card(extra_class='h-100') %}
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
             <div class="d-flex flex-column gap-2">
                 {{ button('Add Manual Entry', kind='primary', size='sm', extra_class='w-100', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addBalanceModal'}) }}
@@ -28,7 +32,7 @@
             </div>
         {% endcall %}
         {% else %}
-        {% call card() %}
+        {% call card(extra_class='h-100') %}
             <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Actions</h6>
             <p class="mb-2 small text-muted">
                 You are viewing this account in <strong>view-only</strong> mode. Action controls are not available.
@@ -37,11 +41,20 @@
         {% endcall %}
         {% endif %}
     </div>
+</div>
 
-    <div class="col-lg-8 col-md-7 col-sm-12">
+<div class="row g-3 mt-1">
+    <!-- Recent Entries (Whole Width) -->
+    <div class="col-12">
         {% call card() %}
-            <h6 class="mb-2 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
-            {% call table_shell(extra_class='recent-entries') %}
+            <div class="d-flex justify-content-between align-items-center mb-3 gap-2 flex-wrap">
+                <h6 class="mb-0 text-uppercase text-muted fw-semibold small">Recent Entries</h6>
+                <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" role="switch" id="showTxnsCheckbox">
+                    <label class="form-check-label small text-muted fw-semibold ms-2" for="showTxnsCheckbox" style="cursor: pointer;">Show Transactions</label>
+                </div>
+            </div>
+            {% call table_shell(extra_class='table-striped', id='balanceHistoryTable', attrs={'data-page-size': '12'}) %}
                 <thead>
                     <tr>
                         <th class="sortable-header">When</th>
@@ -55,6 +68,7 @@
                 </thead>
                 <tbody id="historyBody"></tbody>
             {% endcall %}
+            <div id="paginationContainer" class="table-pagination-controls"></div>
         {% endcall %}
     </div>
 </div>

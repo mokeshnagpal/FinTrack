@@ -74,42 +74,42 @@ function noteError(value) {
 
 
 
-async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
+async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false) {
   let data;
-  let offline = false;
   try {
-    data = await fetchJSON('/api/balance_current');
-    if (window.FinTrak?.cache?.refreshSnapshot) {
-      window.FinTrak.cache.refreshSnapshot().catch(() => {});
-    }
+    data = await fetchJSON('/api/balance_current', { show_txns: showTransactions ? 'true' : 'false' });
   } catch (error) {
-    const snapshot = window.FinTrak?.cache?.readSnapshot?.();
-    if (!snapshot?.balance) throw error;
-    data = snapshot.balance;
-    offline = true;
+    console.error('Failed to fetch balance history', error);
+    throw error;
   }
   const current = data.current || { balance: 0.0, timestamp: null };
 
   if (currentBalanceEl) currentBalanceEl.innerText = formatNumber(current.balance);
   if (balanceTimestampEl) {
     const label = current.timestamp ? `Updated: ${formatDisplayDate(current.timestamp)}` : 'No entries yet';
-    balanceTimestampEl.innerHTML = offline ? `${label} (cached)` : label;
+    balanceTimestampEl.innerHTML = label;
   }
 
   if (!historyBody) return;
-  historyBody.innerHTML = '';
 
-  const manualHistory = (data.history || []).filter((entry) => {
+  // Filter visible history (respect the showTransactions toggle)
+  const visibleHistory = (data.history || []).filter((entry) => {
     const type = String(entry.type || '').toLowerCase();
-    return type === 'add' || type === 'sync';
+    return showTransactions || type === 'add' || type === 'sync';
   });
 
-  manualHistory.forEach((entry) => {
+  // Render all visible rows into the tbody; pagination/sorting handled by initUnifiedTable
+  console.debug('balance.refreshAll: rendering', visibleHistory.length, 'rows, showTransactions=', showTransactions);
+  historyBody.innerHTML = '';
+  visibleHistory.forEach((entry) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
     const mode = normalizeBalanceMode(entry);
     const viewOnly = document.body.dataset.viewOnly === 'true';
-    const hasActions = !viewOnly;
+    const isManual = type === 'add' || type === 'sync';
+    const hasActions = !viewOnly && isManual;
+    const noteText = entry.note_display || entry.note || '';
+    const transactionSearch = entry.transaction_search_text || entry.transaction_id || noteText;
 
     const actionButtons = hasActions
       ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
@@ -130,23 +130,35 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody) {
             data-note="${escapeAttr(entry.note || '')}">
             Delete
          </button>`
-      : `<span class="text-muted small">View-only</span>`;
+      : (entry.transaction_id
+          ? `<a class="btn btn-sm btn-outline-secondary balance-go-transaction-btn" href="/transactions?q=${encodeURIComponent(transactionSearch)}">Transaction</a>`
+          : `<span class="text-muted small">${viewOnly ? 'View-only' : '-'}</span>`);
 
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
                     <td data-label="Source">${escapeHtml(entry.type || '')}</td>
                     <td data-label="Mode"><span class="badge badge-compact ${mode === 'sync' ? 'badge-sync' : 'badge-add'}">${modeLabel(mode)}</span></td>
                     <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
                     <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
-                    <td data-label="Note">${escapeHtml(formatDisplayNote(entry.note || ''))}</td>
+                    <td data-label="Note">${escapeHtml(formatDisplayNote(noteText))}</td>
                     <td data-label="Actions" class="text-end"><div class="table-actions">${actionButtons}</div></td>`;
     historyBody.appendChild(tr);
   });
 
   const parentTable = historyBody.closest('table');
   if (parentTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
-    window.FinTrak.initUnifiedTable(parentTable);
+    console.debug('balance.refreshAll: parentTable.dataset.unifiedInitialized=', parentTable.dataset.unifiedInitialized);
+    // If the unified table has already been initialized earlier, use its
+    // refreshPagination method to avoid re-initializing and losing state.
+    if (parentTable.dataset.unifiedInitialized === 'true' && typeof parentTable.refreshPagination === 'function') {
+      console.debug('balance.refreshAll: calling parentTable.refreshPagination()');
+      parentTable.refreshPagination();
+    } else {
+      console.debug('balance.refreshAll: calling initUnifiedTable()');
+      window.FinTrak.initUnifiedTable(parentTable);
+    }
   }
 }
+
 
 function ensureEditModal() {
   let modal = document.getElementById('balanceEditModal');
@@ -297,15 +309,16 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) 
     });
     modal.classList.remove('show');
     showToast('Balance entry updated', 'success');
-    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+    const showTransactions = Boolean(document.getElementById('showTxnsCheckbox')?.checked);
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions);
   } catch (error) {
     console.error('balance edit failed', error);
     showToast('Edit failed', 'danger', error.message);
   }
 }
 
-async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody) {
-  await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody);
+async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false) {
+  await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions);
 }
 
 async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, historyBody) {
@@ -323,20 +336,11 @@ async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, 
       method: 'POST'
     });
     showToast('Balance entry deleted', 'success');
-    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+    const showTransactions = Boolean(document.getElementById('showTxnsCheckbox')?.checked);
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions);
   } catch (error) {
     console.error('Balance entry deletion failed', error);
-    if (window.FinTrak?.enqueueOfflineAction) {
-      window.FinTrak.enqueueOfflineAction(
-        'balance_delete',
-        { id },
-        `/api/balance/${encodeURIComponent(id)}/delete`
-      );
-      showToast('Delete saved locally', 'success', 'It will sync when the service wakes.');
-      await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
-    } else {
-      showToast('Deletion failed', 'danger', error.message);
-    }
+    showToast('Deletion failed', 'danger', error.message);
   }
 }
 
@@ -351,6 +355,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const syncNote = document.getElementById('syncNote');
   const syncBtn = document.getElementById('syncBtn');
   const historyBody = document.getElementById('historyBody');
+  const showTxnsCheckbox = document.getElementById('showTxnsCheckbox');
+  const showTransactions = () => Boolean(showTxnsCheckbox?.checked);
 
   if (addBtn && addAmount) {
     addBtn.addEventListener('click', async () => {
@@ -380,18 +386,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         addAmount.value = '';
         if (addNote) addNote.value = '';
         closeModal('addBalanceModal');
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());
       } catch (error) {
         console.error('add failed', error);
-        if (window.FinTrak?.enqueueOfflineAction) {
-          window.FinTrak.enqueueOfflineAction('balance_add', { amount, note: addNote ? addNote.value || '' : '' });
-          showToast('Add saved locally', 'success', 'It will sync when the service wakes.');
-          addAmount.value = '';
-          if (addNote) addNote.value = '';
-          closeModal('addBalanceModal');
-        } else {
-          showToast('Add failed', 'danger', error.message);
-        }
+        showToast('Add failed', 'danger', error.message);
       }
     });
   }
@@ -424,28 +422,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncAmount.value = '';
         if (syncNote) syncNote.value = '';
         closeModal('syncBalanceModal');
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());
       } catch (error) {
         console.error('sync failed', error);
-        if (window.FinTrak?.enqueueOfflineAction) {
-          window.FinTrak.enqueueOfflineAction('balance_sync', { balance, note: syncNote ? syncNote.value || '' : '' });
-          showToast('Sync saved locally', 'success', 'It will sync when the service wakes.');
-          syncAmount.value = '';
-          if (syncNote) syncNote.value = '';
-          closeModal('syncBalanceModal');
-        } else {
-          showToast('Sync failed', 'danger', error.message);
-        }
+        showToast('Sync failed', 'danger', error.message);
       }
     });
   }
 
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => (
-      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody)
+      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions())
         .catch((error) => showToast('Refresh failed', 'danger', error.message))
     ));
   }
+
+  if (showTxnsCheckbox) {
+    showTxnsCheckbox.addEventListener('change', () => {
+      refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions())
+        .catch((error) => showToast('Refresh failed', 'danger', error.message));
+    });
+  }
+
 
   if (historyBody) {
     historyBody.addEventListener('click', async (event) => {
@@ -469,7 +467,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   try {
-    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody);
+    await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());
   } catch (error) {
     console.error('Balance script initialization error', error);
     showToast('Balance script error', 'danger', error.message);

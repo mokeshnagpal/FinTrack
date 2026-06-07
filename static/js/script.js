@@ -2,32 +2,12 @@
     const root = document.documentElement;
     const toggle = document.getElementById('themeToggle');
     const icon = document.getElementById('themeIcon');
-    const storageKey = 'fintrak_theme';
-
-    function readStorage(key) {
-        try {
-            return localStorage.getItem(key);
-        } catch (error) {
-            return null;
-        }
-    }
-
-    function writeStorage(key, value) {
-        try {
-            localStorage.setItem(key, value);
-        } catch (error) {
-            // Theme preference is non-critical when browser storage is unavailable.
-        }
-    }
-
-    const saved = readStorage(storageKey);
 
     const sunIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
     const moonIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="theme-svg-icon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`;
 
     function setTheme(theme) {
         root.setAttribute('data-theme', theme);
-        writeStorage(storageKey, theme);
 
         if (icon) {
             icon.innerHTML = theme === 'dark' ? sunIcon : moonIcon;
@@ -37,13 +17,9 @@
         }
     }
 
-    if (saved) {
-        setTheme(saved);
-    } else {
-        const prefersDark = window.matchMedia
-            && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        setTheme(prefersDark ? 'dark' : 'light');
-    }
+    const prefersDark = window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setTheme(prefersDark ? 'dark' : 'light');
 
     if (toggle) {
         toggle.addEventListener('click', () => {
@@ -52,22 +28,7 @@
         });
     }
 
-    function registerServiceWorker() {
-        if (!('serviceWorker' in navigator)) return;
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js').catch((error) => {
-                console.warn('FinTrak service worker registration failed', error);
-            });
-        });
-    }
 
-    function refreshSnapshotAfterAuthenticatedLoad() {
-        const path = window.location.pathname;
-        if (path === '/login' || path === '/view-login') return;
-        window.FinTrak?.cache?.refreshSnapshot?.().catch((error) => {
-            console.warn('FinTrak browser snapshot refresh failed after page load', error);
-        });
-    }
 
     function ordinal(day) {
         if (day > 10 && day < 20) return `${day}th`;
@@ -186,6 +147,7 @@
     const BALANCE_NOTE_LABELS = {
         del_txn: 'Deleted transaction',
         edit_txn: 'Edited transaction',
+        add_txn: 'Edited transaction',
         txn: 'Transaction',
         recurring: 'Recurring',
     };
@@ -305,7 +267,6 @@
 
     function initModalFormDismiss() {
         document.querySelectorAll('.modal form').forEach((form) => {
-            if (form.dataset.offlineQueue) return;
             form.addEventListener('submit', () => {
                 hideModal(form);
             });
@@ -706,10 +667,10 @@
         const tbody = table.querySelector('tbody');
         if (!tbody) return;
 
-        // Mark as initialized
         table.dataset.unifiedInitialized = 'true';
+        const pageSize = Number(table.dataset.pageSize || options.pageSize || 12);
+        const itemsPerPage = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 12;
 
-        // 1. Client-Side Sorting Setup
         const headers = table.querySelectorAll('th.sortable-header');
         headers.forEach((header, index) => {
             let iconSpan = header.querySelector('.sort-icon');
@@ -718,12 +679,10 @@
                 iconSpan.className = 'sort-icon';
                 header.appendChild(iconSpan);
             }
-            // Start with unsorted icon unless already set
             if (!header.classList.contains('active')) {
                 iconSpan.innerHTML = doubleArrowSvg;
             }
 
-            // Remove old listeners to avoid multiple triggers on re-init
             const newHeader = header.cloneNode(true);
             header.parentNode.replaceChild(newHeader, header);
 
@@ -748,99 +707,121 @@
                 }
 
                 sortRows(table, index, nextDir);
-                // Reset page to 1 after sorting
-                currentPage = 1;
                 renderPage(1);
             });
         });
 
-        // 2. Client-Side Pagination Setup
-        const itemsPerPage = options.pageSize || 10;
-        let currentPage = 1;
+        const shell = table.closest('.table-shell') || table;
+        let pagContainer = shell.querySelector('.table-pagination-controls');
+        if (!pagContainer) {
+            const existingPagination = document.getElementById('paginationContainer');
+            if (existingPagination) {
+                pagContainer = existingPagination;
+                pagContainer.classList.add('table-pagination-controls');
+                pagContainer.classList.remove('is-hidden');
+                if (pagContainer.parentNode !== shell.parentNode || pagContainer.previousElementSibling !== shell) {
+                    shell.parentNode.insertBefore(pagContainer, shell.nextSibling);
+                }
+            } else {
+                pagContainer = document.createElement('div');
+                pagContainer.className = 'table-pagination-controls';
+                shell.parentNode.insertBefore(pagContainer, shell.nextSibling);
+            }
+        }
+        pagContainer.classList.remove('is-hidden');
+        pagContainer.innerHTML = '';
 
-        // Dynamic pagination container
-        let pagContainer = table.nextElementSibling;
-        if (pagContainer && pagContainer.classList.contains('table-pagination-controls')) {
-            pagContainer.innerHTML = '';
-        } else {
-            pagContainer = document.createElement('div');
-            pagContainer.className = 'd-flex justify-content-between align-items-center mt-3 flex-wrap gap-2 table-pagination-controls';
-            
-            // Insert after table-shell if inside one, else after table itself
-            const shell = table.closest('.table-shell') || table;
-            shell.parentNode.insertBefore(pagContainer, shell.nextSibling);
+        function pageItems(currentPage, totalPages) {
+            const pages = [];
+            const add = (value) => {
+                if (pages[pages.length - 1] !== value) pages.push(value);
+            };
+
+            add(1);
+            const start = Math.max(2, currentPage - 1);
+            const end = Math.min(totalPages - 1, currentPage + 1);
+            if (start > 2) add('ellipsis-left');
+            for (let pageNum = start; pageNum <= end; pageNum += 1) add(pageNum);
+            if (end < totalPages - 1) add('ellipsis-right');
+            if (totalPages > 1) add(totalPages);
+            return pages;
+        }
+
+        function pageButton(label, page, disabled = false, active = false, extraClass = '') {
+            const safeLabel = escapeHtmlText(label);
+            return `
+                <li class="page-item ${disabled ? 'disabled' : ''} ${active ? 'active' : ''} ${extraClass}">
+                    <a class="page-link" href="#" data-page="${page}" aria-label="${safeLabel}">${safeLabel}</a>
+                </li>
+            `;
         }
 
         function renderPage(page) {
             const allRows = Array.from(tbody.querySelectorAll('tr'));
-            // Filter out empty state row
             const dataRows = allRows.filter(row => !row.querySelector('td[colspan]'));
 
             if (dataRows.length === 0) {
                 pagContainer.classList.add('is-hidden');
+                allRows.forEach(r => r.classList.remove('table-row-hidden'));
                 return;
             }
 
             const totalRows = dataRows.length;
             const totalPages = Math.ceil(totalRows / itemsPerPage);
+            const currentPage = Math.max(1, Math.min(page, totalPages));
 
             if (totalPages <= 1) {
                 pagContainer.classList.add('is-hidden');
-                // Show all rows
                 allRows.forEach(r => r.classList.remove('table-row-hidden'));
                 return;
             }
 
             pagContainer.classList.remove('is-hidden');
-            currentPage = Math.max(1, Math.min(page, totalPages));
 
             const startIdx = (currentPage - 1) * itemsPerPage;
             const endIdx = startIdx + itemsPerPage;
 
-            // Hide/Show appropriate rows
             dataRows.forEach((row, idx) => {
                 row.classList.toggle('table-row-hidden', !(idx >= startIdx && idx < endIdx));
             });
 
-            // Rebuild controls content
             const showingStart = startIdx + 1;
             const showingEnd = Math.min(endIdx, totalRows);
+            const pageLinks = pageItems(currentPage, totalPages).map((item) => {
+                if (String(item).startsWith('ellipsis')) {
+                    return '<li class="page-item ellipsis"><span class="page-link">...</span></li>';
+                }
+                return pageButton(String(item), item, false, item === currentPage);
+            }).join('');
             
             pagContainer.innerHTML = `
-                <div class="text-muted small">Showing <strong>${showingStart}</strong> to <strong>${showingEnd}</strong> of <strong>${totalRows}</strong> entries</div>
+                <div class="table-pagination-summary text-muted small">Showing <strong>${showingStart}</strong>-<strong>${showingEnd}</strong> of <strong>${totalRows}</strong></div>
                 <ul class="pagination pagination-sm mb-0">
-                    <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
-                        <a class="page-link" href="#" data-page="${currentPage - 1}">Previous</a>
-                    </li>
-                    ${Array.from({ length: totalPages }, (_, i) => i + 1).map(p => `
-                        <li class="page-item ${currentPage === p ? 'active' : ''}">
-                            <a class="page-link" href="#" data-page="${p}">${p}</a>
-                        </li>
-                    `).join('')}
-                    <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
-                        <a class="page-link" href="#" data-page="${currentPage + 1}">Next</a>
-                    </li>
+                    ${pageButton('Prev', currentPage - 1, currentPage === 1, false, 'nav-btn')}
+                    ${pageLinks}
+                    ${pageButton('Next', currentPage + 1, currentPage === totalPages, false, 'nav-btn')}
                 </ul>
             `;
 
-            // Bind click handlers to pagination links
             pagContainer.querySelectorAll('.page-link').forEach(link => {
                 link.addEventListener('click', (e) => {
                     e.preventDefault();
+                    if (link.closest('.disabled') || link.closest('.ellipsis')) return;
                     const targetPage = parseInt(link.getAttribute('data-page'));
                     if (!isNaN(targetPage) && targetPage !== currentPage) {
                         renderPage(targetPage);
                     }
                 });
             });
+
+            pagContainer.classList.remove('is-hidden');
         }
 
-        // Expose a quick trigger to re-paginate dynamically
         table.refreshPagination = () => {
-            renderPage(currentPage);
+            pagContainer.classList.remove('is-hidden');
+            renderPage(1);
         };
 
-        // Initial render
         renderPage(1);
     }
 
@@ -992,9 +973,11 @@
     function initParticipantChecklistValidation() {
         document.addEventListener('submit', (event) => {
             const form = event.target;
-            const queueType = form.dataset.offlineQueue;
+            const participantInputs = form.querySelectorAll('input[name="people"]');
+            if (!participantInputs.length) return;
+            const action = String(form.getAttribute('action') || '').toLowerCase();
             
-            if (queueType === 'split-create' || queueType === 'split-edit') {
+            if (action.includes('split')) {
                 const checked = form.querySelectorAll('input[name="people"]:checked');
                 if (checked.length === 0) {
                     event.preventDefault();
@@ -1004,7 +987,7 @@
                 }
             }
             
-            if (queueType === 'trip-create' || queueType === 'trip-edit') {
+            if (action.includes('trip')) {
                 const costTypeSelect = form.querySelector('[name="cost_type"]');
                 if (costTypeSelect && costTypeSelect.value === 'split') {
                     const checked = form.querySelectorAll('input[name="people"]:checked');
@@ -1031,9 +1014,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-        registerServiceWorker();
-        window.FinTrak?.cache?.commitCredentials?.();
-        refreshSnapshotAfterAuthenticatedLoad();
         formatDateElements();
         initCopyButtons();
         initConfirmForms();
