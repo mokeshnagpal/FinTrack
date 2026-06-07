@@ -6,16 +6,28 @@ The app uses server-rendered Jinja templates, Bootstrap 5, custom CSS, vanilla J
 
 ## Architecture
 
-FinTrak is intentionally online-only:
+FinTrak is built as a server-rendered Flask application with Firestore as the primary datastore.
 
-- Page loads render from current Firestore-backed server state.
-- CRUD actions write directly to Firestore through Flask routes.
-- API endpoints read fresh Firestore values for analytics, balances, splits, trips, transactions, and settings.
-- The browser does not maintain an offline action queue or cached snapshot.
-- The server does not keep an in-memory application data cache.
-- There is no service worker, Cache API usage, PWA manifest, background sync, or offline login flow.
+- Flask handles page rendering, form submissions, authentication, and JSON APIs.
+- Firestore stores transactions, balances, categories, splits, trips, recurring rules, and settings.
+- Templates are generated with Jinja and delivered as HTML pages.
+- Static assets are served from `static/` and include CSS, JavaScript, and icons.
+- Session management, authentication, and CSRF protection are managed by Flask and Werkzeug.
 
-The application focuses on core online-only features: transactions, balances, recurring rules, splits, trips, and analytics, all backed by real-time Firestore data.
+## Pages
+
+- `index.html` — Main dashboard and navigation entry point.
+- `login.html` — User login page.
+- `transactions.html` — Transaction listing, add/edit/delete forms, search, and filters.
+- `balance.html` — Balance ledger view with add/edit/delete balance rows.
+- `balance_analytics.html` — Balance analytics charts and summary metrics.
+- `analytics.html` — Spend analytics charts, summaries, and CSV export.
+- `recurring.html` — Manage recurring transactions and balance rules.
+- `splits.html` — Split bill overview and active split management.
+- `split_detail.html` — Detailed split item editing and participant totals.
+- `trips.html` — Trip planning, budget tracking, and expense assignments.
+- `management.html` — Account settings, categories, split people, and view-only password management.
+- `view.html` — Read-only access interface.
 
 ## Main Features
 
@@ -48,7 +60,7 @@ Balance rows use two related fields:
 | `type` | The broad row source, such as `add`, `sync`, transaction edit/delete adjustment, or transaction-created balance movement. |
 | `balance_mode` | The editable balance mode marker: `add` or `sync`. |
 
-The legacy value `sync` in balance data means an absolute balance anchor. It is not an offline/background synchronization system.
+The legacy value `sync` in balance data indicates an absolute balance anchor.
 
 ## UI And Components
 
