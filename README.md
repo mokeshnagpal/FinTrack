@@ -1,8 +1,8 @@
 # FinTrak
 
-FinTrak is a fully online Flask + Firestore finance tracker for personal spending, balances, recurring rules, split bills, trips, analytics, admin settings, and view-only access.
+FinTrak is an online Flask + Firestore finance tracker for personal spending, balances, recurring rules, split bills, trips, analytics, admin settings, and view-only access.
 
-The app is server-rendered with Jinja templates, Bootstrap 5, custom CSS, vanilla JavaScript, Chart.js, the Firestore Admin SDK, and direct Firestore reads/writes. Firestore is the single source of truth.
+The app uses server-rendered Jinja templates, Bootstrap 5, custom CSS, vanilla JavaScript, Chart.js, the Firebase Admin SDK, and direct Firestore reads/writes. Firestore is the single source of truth.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ FinTrak is intentionally online-only:
 - Page loads render from current Firestore-backed server state.
 - CRUD actions write directly to Firestore through Flask routes.
 - API endpoints read fresh Firestore values for analytics, balances, splits, trips, transactions, and settings.
-- The browser does not maintain an offline action queue or cached application snapshot.
+- The browser does not maintain an offline action queue or cached snapshot.
 - The server does not keep an in-memory application data cache.
 - There is no service worker, Cache API usage, PWA manifest, background sync, or offline login flow.
 
