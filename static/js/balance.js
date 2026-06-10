@@ -72,6 +72,90 @@ function noteError(value) {
   return String(value || '').trim().length > 120 ? 'Use 120 characters or fewer for the note.' : '';
 }
 
+// Transaction modal functions
+function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody) {
+  const editBtn = document.getElementById('editTransactionBtn');
+  const deleteBtn = document.getElementById('deleteTransactionBtn');
+  const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+  let currentTxnId = null;
+
+  if (editBtn) {
+    editBtn.addEventListener('click', () => {
+      if (currentTxnId) {
+        window.location.href = `/edit/${encodeURIComponent(currentTxnId)}`;
+      }
+    });
+  }
+
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      const confirmModal = document.getElementById('deleteTransactionConfirmModal');
+      if (confirmModal && window.bootstrap?.Modal) {
+        new window.bootstrap.Modal(confirmModal).show();
+      }
+    });
+  }
+
+  if (confirmDeleteBtn) {
+    confirmDeleteBtn.addEventListener('click', async () => {
+      if (!currentTxnId) return;
+      try {
+        const result = await fetchJSON(`/api/transactions/${encodeURIComponent(currentTxnId)}/delete`, {}, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (result.ok) {
+          closeModal('viewTransactionModal');
+          closeModal('deleteTransactionConfirmModal');
+          showToast('Transaction deleted.', 'success');
+          if (historyBody && balanceTimestampEl && currentBalanceEl) {
+            await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, Boolean(document.getElementById('showTxnsCheckbox')?.checked));
+          }
+        } else {
+          showToast(result.error || 'Failed to delete transaction.', 'danger');
+        }
+      } catch (error) {
+        console.error('Delete failed', error);
+        showToast('Delete failed: ' + error.message, 'danger');
+      }
+    });
+  }
+
+  window.openTransactionModal = async function(txnId) {
+    currentTxnId = txnId;
+    const modal = document.getElementById('viewTransactionModal');
+    if (!modal) {
+      console.error('Transaction modal not found');
+      return;
+    }
+
+    try {
+      const result = await fetchJSON(`/api/transactions/${encodeURIComponent(txnId)}/view`);
+      if (!result.ok || !result.transaction) {
+        showToast(result.error || 'Failed to load transaction.', 'danger');
+        return;
+      }
+
+      const txn = result.transaction;
+      document.getElementById('txnDescription').textContent = escapeHtml(txn.description || '-');
+      document.getElementById('txnAmount').textContent = rupee(txn.amount);
+      document.getElementById('txnCategory').textContent = escapeHtml(txn.category || '-');
+      document.getElementById('txnDate').textContent = txn.date || '-';
+      document.getElementById('txnTime').textContent = txn.time || '-';
+
+      if (window.bootstrap?.Modal) {
+        new window.bootstrap.Modal(modal).show();
+      } else {
+        modal.classList.add('show');
+        modal.style.display = 'block';
+      }
+    } catch (error) {
+      console.error('Failed to load transaction', error);
+      showToast('Failed to load transaction: ' + error.message, 'danger');
+    }
+  };
+}
 
 
 async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false) {
@@ -131,7 +215,7 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, sho
             Delete
          </button>`
       : (entry.transaction_id
-          ? `<a class="btn btn-sm btn-outline-secondary balance-go-transaction-btn" href="/transactions?q=${encodeURIComponent(transactionSearch)}">Transaction</a>`
+          ? `<button class="btn btn-sm btn-outline-secondary balance-view-transaction-btn" data-txn-id="${escapeAttr(entry.transaction_id || '')}">View Txn</button>`
           : `<span class="text-muted small">${viewOnly ? 'View-only' : '-'}</span>`);
 
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
@@ -458,6 +542,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         await deleteBalanceEntry(deleteBtn, currentBalanceEl, balanceTimestampEl, historyBody);
         return;
       }
+
+      const viewTxnBtn = event.target.closest('.balance-view-transaction-btn');
+      if (viewTxnBtn) {
+        const txnId = viewTxnBtn.dataset.txnId;
+        if (txnId) {
+          await openTransactionModal(txnId);
+        }
+        return;
+      }
     });
   }
 
@@ -465,6 +558,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!event.target.closest('[data-balance-edit-save]')) return;
     saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody);
   });
+
+  // Transaction modal setup
+  setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody);
 
   try {
     await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());

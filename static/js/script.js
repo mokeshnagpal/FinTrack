@@ -240,6 +240,7 @@
     }
 
     window.FinTrak.showToast = showToast;
+    window.showToast = showToast;
 
     function showFlash(message, type = 'info', delay = 3500) {
         const div = document.createElement('div');

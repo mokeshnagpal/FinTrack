@@ -355,3 +355,46 @@ class TripForm(FlaskForm):
         ],
     )
     submit = SubmitField('Save Trip')
+
+
+class ForgotPasswordForm(FlaskForm):
+    email = StringField(
+        'Email Address',
+        validators=[
+            DataRequired(message='Email is required'),
+            Length(max=120, message='Email is too long'),
+            Regexp(EMAIL_PATTERN, message='Enter a valid email address'),
+        ],
+    )
+    submit = SubmitField('Send OTP')
+
+
+class VerifyOTPForm(FlaskForm):
+    otp = StringField(
+        'Enter OTP',
+        validators=[
+            DataRequired(message='OTP is required'),
+            Length(min=6, max=6, message='OTP must be exactly 6 digits'),
+            Regexp(r'^\d{6}$', message='OTP must be a 6-digit number'),
+        ],
+    )
+    submit = SubmitField('Verify OTP')
+
+
+class ResetPasswordForm(FlaskForm):
+    password = PasswordField(
+        'New password',
+        validators=[
+            DataRequired(message='New password is required'),
+            Regexp(STRONG_PASSWORD_PATTERN, message=STRONG_PASSWORD_MESSAGE),
+        ],
+    )
+    confirm_password = PasswordField(
+        'Confirm password',
+        validators=[
+            DataRequired(message='Please confirm the password'),
+            EqualTo('password', message='Passwords must match'),
+        ],
+    )
+    submit = SubmitField('Update Password')
+

@@ -16,6 +16,7 @@
 {% endcall %}
 
 <div class="management-grid">
+    {% if is_admin %}
     <div class="management-panel">
         {% call card(extra_class='h-100 management-card') %}
             <div class="management-section-heading">
@@ -78,6 +79,7 @@
             </form>
         {% endcall %}
     </div>
+    {% endif %}
 
     <div class="management-panel">
         {% call card(extra_class='h-100 management-card') %}

@@ -21,6 +21,11 @@ from forms import (
     TripForm,
     ViewPasswordForm,
     ViewPasswordRevealForm,
+    ForgotPasswordForm,
+    VerifyOTPForm,
+    ResetPasswordForm,
+    STRONG_PASSWORD_PATTERN,
+    STRONG_PASSWORD_MESSAGE,
 )
 from constants import (
     DEFAULT_RECURRING_THROTTLE_SECONDS,
@@ -29,6 +34,11 @@ import os
 import io
 import csv
 import statistics
+import re
+import secrets
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -37,6 +47,7 @@ import logging
 import json
 import time
 import math
+import hashlib
 from urllib.parse import urlparse, urljoin
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -96,6 +107,25 @@ HW_PASSWORD = os.environ.get('VIEW_PASS')  # could be None
 if isinstance(HW_PASSWORD, str):
     HW_PASSWORD = HW_PASSWORD.strip()
 
+DEFAULT_ADMIN_PASSWORD = os.environ.get('ADMIN_PASS')
+if isinstance(DEFAULT_ADMIN_PASSWORD, str):
+    DEFAULT_ADMIN_PASSWORD = DEFAULT_ADMIN_PASSWORD.strip()
+
+DEFAULT_CATEGORY_ACCESS_RAW = os.environ.get('DEFAULT_CATEGORY_ACCESS', '')
+DEFAULT_CATEGORY_ACCESS = {}
+if isinstance(DEFAULT_CATEGORY_ACCESS_RAW, str) and DEFAULT_CATEGORY_ACCESS_RAW.strip():
+    try:
+        DEFAULT_CATEGORY_ACCESS = json.loads(DEFAULT_CATEGORY_ACCESS_RAW)
+        if not isinstance(DEFAULT_CATEGORY_ACCESS, dict):
+            DEFAULT_CATEGORY_ACCESS = {}
+    except Exception:
+        raw = DEFAULT_CATEGORY_ACCESS_RAW.strip()
+        parts = [part.strip() for part in raw.split(',') if part.strip()]
+        for part in parts:
+            if ':' in part:
+                key, value = part.split(':', 1)
+                DEFAULT_CATEGORY_ACCESS[key.strip()] = value.strip().lower()
+
 # ---------------------------------------------------------------------
 # Firebase / Firestore init
 # ---------------------------------------------------------------------
@@ -115,11 +145,6 @@ if not firebase_admin._apps:
 
 fs = firestore.client()
 
-SETTINGS_COL = "settings"
-VIEW_ONLY_SETTINGS_DOC = "view_only_access"
-CATEGORIES_SETTINGS_DOC = "categories"
-SPLIT_PEOPLE_SETTINGS_DOC = "split_people"
-CLIENT_ACTIONS_COL = "client_actions"
 RECURRING_THROTTLE_SECONDS = env_int('RECURRING_THROTTLE_SECONDS', DEFAULT_RECURRING_THROTTLE_SECONDS)
 FIRESTORE_TIMEOUT_SECONDS = env_int('FIRESTORE_TIMEOUT_SECONDS', 8)
 ENABLE_DEBUG_ROUTES = env_bool('ENABLE_DEBUG_ROUTES', False)
@@ -176,6 +201,9 @@ def client_constants_context():
 # ---------------------------------------------------------------------
 ADMIN_USER_RAW = os.environ.get('ADMIN_USER', '')
 ADMIN_USERS = set(u.strip().lower() for u in ADMIN_USER_RAW.split(',') if u.strip())
+
+def is_env_admin(username):
+    return normalize_username(username) in ADMIN_USERS
 
 VIEW_ONLY_ALLOWED_PREFIXES = (
     '/balance',
@@ -261,51 +289,251 @@ def trips_collection(username=None):
 def split_entries_collection(split_id, username=None):
     return splits_collection(username).document(str(split_id)).collection('entries')
 
-def client_actions_collection(username=None):
-    return user_doc_ref(username).collection(CLIENT_ACTIONS_COL)
 
-def view_only_settings_ref():
-    return fs.collection(SETTINGS_COL).document(VIEW_ONLY_SETTINGS_DOC)
+def get_user_details(username):
+    normalized = normalize_username(username)
+    if not normalized:
+        return {}
+    try:
+        doc = user_doc_ref(normalized).get(
+            retry=None,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+        if doc.exists:
+            return doc.to_dict() or {}
+    except Exception:
+        app.logger.exception("Failed to load user details for %s", normalized)
+    return {}
 
-def categories_settings_ref():
-    return fs.collection(SETTINGS_COL).document(CATEGORIES_SETTINGS_DOC)
+def get_user_view_pass_hash(username):
+    return (get_user_details(username) or {}).get('view_pass') or ''
 
-def split_people_settings_ref():
-    return fs.collection(SETTINGS_COL).document(SPLIT_PEOPLE_SETTINGS_DOC)
+def get_user_admin_pass_hash(username):
+    return (get_user_details(username) or {}).get('admin_pass') or ''
 
-def load_view_only_password_hash_from_store():
-    doc = view_only_settings_ref().get(
-        retry=None,
-        timeout=FIRESTORE_TIMEOUT_SECONDS,
-    )
-    password_hash = ''
-    if doc.exists:
-        password_hash = (doc.to_dict() or {}).get('password_hash') or ''
-    return password_hash
+def get_user_auth_password_hash(user_data):
+    return (user_data.get('admin_pass') or user_data.get('password') or '')
+
+
+def get_default_category_access():
+    if DEFAULT_CATEGORY_ACCESS:
+        return DEFAULT_CATEGORY_ACCESS
+
+    categories = default_categories()
+    return {
+        item: 'protected' if item.lower() == 'trip' else 'public'
+        for item in categories
+    }
+
+
+def ensure_user_document_structure(username, user_data):
+    normalized = normalize_username(username)
+    if not normalized or not user_data:
+        return
+
+    update_payload = {}
+    existing_admin_hash = user_data.get('admin_pass')
+    existing_password_hash = user_data.get('password')
+
+    if not existing_admin_hash and existing_password_hash:
+        update_payload['admin_pass'] = existing_password_hash
+        update_payload['view_pass'] = existing_password_hash
+        update_payload['password'] = firestore.DELETE_FIELD
+
+    if not user_data.get('view_pass'):
+        admin_hash = existing_admin_hash or update_payload.get('admin_pass')
+        if admin_hash:
+            update_payload['view_pass'] = admin_hash
+
+    categories_value = user_data.get('categories')
+    categories_map = None
+    if isinstance(categories_value, dict):
+        categories_map = {
+            normalize_category_name(key): normalize_category_access(value)
+            for key, value in categories_value.items()
+            if normalize_category_name(key)
+        }
+        if categories_map != categories_value:
+            update_payload['categories'] = categories_map
+    elif isinstance(categories_value, list):
+        categories_map = {
+            item: 'protected' if item.lower() == 'trip' else 'public'
+            for item in categories_value
+            if normalize_category_name(item)
+        }
+        update_payload['categories'] = categories_map
+    else:
+        categories_map = get_default_category_access()
+        update_payload['categories'] = categories_map
+
+    default_category_value = user_data.get('default_category')
+    if not isinstance(default_category_value, str) or not category_exists(categories_map.keys(), default_category_value):
+        update_payload['default_category'] = next(iter(categories_map.keys()), 'Other')
+
+    if update_payload:
+        fs.collection('users').document(normalized).update(update_payload)
+
+
+def set_user_passes(username, view_pass_hash=None, admin_pass_hash=None):
+    normalized = normalize_username(username)
+    if not normalized:
+        return
+    payload = {}
+    if view_pass_hash is not None:
+        payload['view_pass'] = view_pass_hash
+    if admin_pass_hash is not None:
+        payload['admin_pass'] = admin_pass_hash
+    if payload:
+        user_doc_ref(normalized).set(payload, merge=True)
+
+
+def normalize_category_access(value):
+    return 'protected' if str(value or '').strip().lower() == 'protected' else 'public'
+
+
+def load_user_categories_from_store(username=None):
+    username = normalize_username(username or get_current_username() or '')
+    if username:
+        try:
+            doc = user_doc_ref(username).get(
+                retry=None,
+                timeout=FIRESTORE_TIMEOUT_SECONDS,
+            )
+            if doc.exists:
+                data = doc.to_dict() or {}
+                raw_categories = data.get('categories')
+                categories = {}
+                if isinstance(raw_categories, dict):
+                    for key, access in raw_categories.items():
+                        name = normalize_category_name(key)
+                        if not name:
+                            continue
+                        categories[name] = normalize_category_access(access)
+                elif isinstance(raw_categories, list):
+                    for item in raw_categories:
+                        name = normalize_category_name(item)
+                        if not name:
+                            continue
+                        categories[name] = 'protected' if name.lower() == 'trip' else 'public'
+
+                default_cat = normalize_category_name(data.get('default_category')) or 'Other'
+                if not categories:
+                    categories = get_default_category_access()
+                if not category_exists(list(categories.keys()), default_cat):
+                    default_cat = next(iter(categories.keys()), 'Other')
+                return categories, default_cat
+        except Exception:
+            app.logger.exception("Failed to load user categories for %s", username)
+
+    fallback_categories = get_default_category_access()
+    return fallback_categories, next(iter(fallback_categories.keys()), 'Other')
+
+
+def get_default_category_access():
+    if DEFAULT_CATEGORY_ACCESS:
+        return DEFAULT_CATEGORY_ACCESS
+
+    categories = default_categories()
+    return {
+        item: 'protected' if item.lower() == 'trip' else 'public'
+        for item in categories
+    }
+
+
+def get_categories(username=None):
+    categories, _ = load_user_categories_from_store(username)
+    return list(categories.keys())
+
+
+def get_default_category(username=None):
+    categories, default_cat = load_user_categories_from_store(username)
+    if default_cat and category_exists(categories.keys(), default_cat):
+        return default_cat
+    return 'Other'
+
+
+def save_user_categories(username, categories, default_category=None, updated_by=None):
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        return []
+
+    category_map = {}
+    if isinstance(categories, dict):
+        for key, access in categories.items():
+            name = normalize_category_name(key)
+            if not name:
+                continue
+            category_map[name] = normalize_category_access(access)
+    else:
+        for item in categories:
+            name = normalize_category_name(item)
+            if not name:
+                continue
+            category_map[name] = 'protected' if name.lower() == 'trip' else 'public'
+
+    if not category_map:
+        category_map = {'Other': 'public'}
+
+    payload = {
+        'categories': category_map,
+    }
+    if updated_by:
+        payload['updated_by'] = updated_by
+    if default_category:
+        payload['default_category'] = normalize_category_name(default_category)
+    elif not category_exists(category_map.keys(), get_default_category(username)):
+        payload['default_category'] = next(iter(category_map.keys()), 'Other')
+
+    try:
+        user_doc_ref(username).set(payload, merge=True)
+    except Exception:
+        app.logger.exception("Failed to save user categories for %s", username)
+
+    return list(category_map.keys())
+
+
+def get_category_access(category, username=None):
+    categories, _ = load_user_categories_from_store(username)
+    for key, access in categories.items():
+        if category_key(key) == category_key(category):
+            return access
+    return 'public'
+
+
+def category_is_protected(category, username=None):
+    if category_key(category) in {'uncategorized', 'trip'}:
+        return True
+    return get_category_access(category, username) == 'protected'
+
+
+def save_categories(categories, updated_by=None):
+    username = get_current_username()
+    if not username:
+        return []
+    return save_user_categories(username, categories, default_category=get_default_category(username), updated_by=updated_by)
+
+
+def bootstrap_view_only_password_from_env_for_user(username):
+    if not HW_PASSWORD:
+        return
+    if get_user_view_pass_hash(username):
+        return
+    set_user_passes(username, view_pass_hash=make_password_hash(HW_PASSWORD))
+    app.logger.info("Bootstrapped view-only password into user document for %s", normalize_username(username))
+
+
+def get_view_only_password_hash(username=None):
+    try:
+        if username:
+            return get_user_view_pass_hash(username) or None
+        # if no username provided, return None (per-user storage preferred)
+        return None
+    except Exception:
+        app.logger.exception("Failed to load view-only password configuration")
+        return None
 
 def load_categories_from_store():
-    categories = []
-    default_cat = 'Other'
-    doc = categories_settings_ref().get(
-        retry=None,
-        timeout=FIRESTORE_TIMEOUT_SECONDS,
-    )
-    if doc.exists:
-        data = doc.to_dict() or {}
-        raw_categories = data.get('items') or []
-        categories = [normalize_category_name(item) for item in raw_categories]
-        categories = [item for item in categories if item]
-        default_cat = data.get('default_category') or 'Other'
-    if not categories:
-        categories = default_categories()
-    return categories, default_cat
-
-def get_default_category():
-    try:
-        categories, default_cat = load_categories_from_store()
-        return default_cat
-    except Exception:
-        return 'Other'
+    return default_categories(), 'Other'
 
 def load_user_auth_from_store(username):
     normalized_username = normalize_username(username)
@@ -316,11 +544,118 @@ def load_user_auth_from_store(username):
         retry=None,
         timeout=FIRESTORE_TIMEOUT_SECONDS,
     )
-    entry = {
-        'exists': doc.exists,
-        'data': (doc.to_dict() or {}) if doc.exists else {},
+    if not doc.exists:
+        return freeze_user_auth_entry({'exists': False, 'data': {}})
+
+    data = doc.to_dict() or {}
+    try:
+        ensure_user_document_structure(normalized_username, data)
+    except Exception:
+        app.logger.exception("Failed to migrate user document structure for %s", normalized_username)
+
+    return freeze_user_auth_entry({
+        'exists': True,
+        'data': data,
+    })
+
+def bootstrap_env_admin_user(username, password=None, source='env_admin'):
+    normalized_username = normalize_username(username)
+    if not normalized_username or normalized_username not in ADMIN_USERS:
+        return {'exists': False, 'data': {}}
+
+    user_ref = fs.collection('users').document(normalized_username)
+    existing_doc = user_ref.get(
+        retry=None,
+        timeout=FIRESTORE_TIMEOUT_SECONDS,
+    )
+    if existing_doc.exists:
+        existing_data = existing_doc.to_dict() or {}
+        now = datetime.now(UTC)
+        update_payload = {}
+
+        if not existing_data.get('admin_pass'):
+            if DEFAULT_ADMIN_PASSWORD:
+                update_payload['admin_pass'] = make_password_hash(DEFAULT_ADMIN_PASSWORD)
+                update_payload['bootstrap_source'] = source
+
+        if not existing_data.get('view_pass'):
+            if HW_PASSWORD:
+                update_payload['view_pass'] = make_password_hash(HW_PASSWORD)
+            elif update_payload.get('admin_pass'):
+                update_payload['view_pass'] = update_payload['admin_pass']
+
+        categories_value = existing_data.get('categories')
+        if isinstance(categories_value, list):
+            update_payload['categories'] = {
+                item: 'protected' if item.lower() == 'trip' else 'public'
+                for item in categories_value
+            }
+        elif isinstance(categories_value, dict):
+            update_payload['categories'] = {
+                normalize_category_name(key): normalize_category_access(value)
+                for key, value in categories_value.items()
+                if normalize_category_name(key)
+            }
+        else:
+            update_payload['categories'] = get_default_category_access()
+
+        default_category_value = existing_data.get('default_category')
+        if not isinstance(default_category_value, str) or not category_exists(update_payload['categories'].keys(), default_category_value):
+            update_payload['default_category'] = next(iter(update_payload['categories'].keys()), 'Other')
+
+        if update_payload:
+            user_ref.set(update_payload, merge=True)
+            existing_data.update(update_payload)
+            app.logger.info(
+                "Updated env admin user structure for %s source=%s",
+                normalized_username,
+                source,
+            )
+
+        try:
+            if update_payload.get('admin_pass'):
+                set_user_passes(normalized_username, admin_pass_hash=update_payload['admin_pass'])
+            if update_payload.get('view_pass'):
+                set_user_passes(normalized_username, view_pass_hash=update_payload['view_pass'])
+        except Exception:
+            app.logger.exception("Failed to set admin/view passes in user document for %s", normalized_username)
+
+        return freeze_user_auth_entry({
+            'exists': True,
+            'data': existing_data,
+        })
+
+    now = datetime.now(UTC)
+    user_data = {
+        'username': normalized_username,
+        'created_at': now,
+        'bootstrap_source': source,
+        'categories': get_default_category_access(),
+        'default_category': 'Other',
     }
-    return freeze_user_auth_entry(entry)
+    if DEFAULT_ADMIN_PASSWORD:
+        user_data['admin_pass'] = make_password_hash(DEFAULT_ADMIN_PASSWORD)
+    if HW_PASSWORD:
+        user_data['view_pass'] = make_password_hash(HW_PASSWORD)
+    elif user_data.get('admin_pass'):
+        user_data['view_pass'] = user_data['admin_pass']
+
+    user_ref.set(user_data)
+    try:
+        if password:
+            set_user_passes(normalized_username, admin_pass_hash=make_password_hash(password))
+        if HW_PASSWORD:
+            # record view_pass as well
+            set_user_passes(normalized_username, view_pass_hash=make_password_hash(HW_PASSWORD))
+    except Exception:
+        app.logger.exception("Failed to write admin_pass to user document for %s", normalized_username)
+    app.logger.info("Bootstrapped env admin user record for %s source=%s", normalized_username, source)
+    return freeze_user_auth_entry({
+        'exists': True,
+        'data': user_data,
+    })
+
+
 
 def normalize_username(username):
     return str(username or '').strip().lower()
@@ -343,15 +678,19 @@ def get_user_auth_for_login(username):
         return {'exists': False, 'data': {}}, 'none'
     return load_user_auth_from_store(normalized_username), 'firestore'
 
-def get_view_only_password_hash():
+def is_view_only_password_configured(username=None):
+    if username:
+        return bool(get_view_only_password_hash(username) or HW_PASSWORD)
+    # Fallback: if any user has a view_pass or HW_PASSWORD exists
+    if HW_PASSWORD:
+        return True
     try:
-        return load_view_only_password_hash_from_store()
+        users_query = fs.collection('users').where('view_pass', '!=', '').limit(1)
+        docs = list(users_query.stream(retry=None, timeout=FIRESTORE_TIMEOUT_SECONDS))
+        return bool(docs)
     except Exception:
-        app.logger.exception("Failed to load view-only password settings")
-        return None
-
-def is_view_only_password_configured():
-    return bool(get_view_only_password_hash() or HW_PASSWORD)
+        app.logger.exception("Failed to check view-only password configuration")
+    return False
 
 def default_categories():
     return [label for _, label in CATEGORY_CHOICES]
@@ -388,34 +727,6 @@ def category_key(name):
 def category_exists(categories, name):
     return item_exists(categories, name, normalize_category_name)
 
-def get_categories():
-    try:
-        categories, default_cat = load_categories_from_store()
-        if not category_exists(categories, 'Trip'):
-            categories.append('Trip')
-            save_categories(categories)
-        return categories
-    except Exception:
-        app.logger.exception("Failed to load category settings")
-
-    categories = default_categories()
-    if not category_exists(categories, 'Trip'):
-        categories.append('Trip')
-    return categories
-
-def save_categories(categories, updated_by=None):
-    clean_categories = unique_normalized_items(categories, normalize_category_name)
-
-    if not clean_categories:
-        clean_categories = ['Other']
-
-    categories_settings_ref().set({
-        'items': clean_categories,
-        'updated_at': datetime.now(UTC),
-        'updated_by': updated_by,
-    }, merge=True)
-    return clean_categories
-
 def default_split_people():
     return ['Me']
 
@@ -428,37 +739,40 @@ def person_key(name):
 def person_exists(people, name):
     return item_exists(people, name, normalize_person_name)
 
-def load_split_people_from_store():
+def load_split_people_from_store(username=None):
+    username = normalize_username(username or get_current_username() or '')
     people = []
-    doc = split_people_settings_ref().get(
-        retry=None,
-        timeout=FIRESTORE_TIMEOUT_SECONDS,
-    )
-    if doc.exists:
-        raw_people = (doc.to_dict() or {}).get('items') or []
-        people = unique_normalized_items(raw_people, normalize_person_name)
+    if username:
+        doc = user_doc_ref(username).get(
+            retry=None,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+        if doc.exists:
+            raw_people = (doc.to_dict() or {}).get('split_people') or []
+            people = unique_normalized_items(raw_people, normalize_person_name)
     if not people:
         people = default_split_people()
     return people
 
-def get_split_people():
+def get_split_people(username=None):
     try:
-        return load_split_people_from_store()
+        return load_split_people_from_store(username)
     except Exception:
-        app.logger.exception("Failed to load split people settings")
+        app.logger.exception("Failed to load split people for %s", username)
     return default_split_people()
 
-def save_split_people(people, updated_by=None):
+def save_split_people(people, updated_by=None, username=None):
+    normalized_username = normalize_username(username or get_current_username() or '')
     clean_people = unique_normalized_items(people, normalize_person_name)
 
     if not clean_people:
         clean_people = default_split_people()
 
-    split_people_settings_ref().set({
-        'items': clean_people,
-        'updated_at': datetime.now(UTC),
-        'updated_by': updated_by,
-    }, merge=True)
+    if normalized_username:
+        user_doc_ref(normalized_username).set({
+            'split_people': clean_people,
+            'updated_by': updated_by,
+        }, merge=True)
     return clean_people
 
 def apply_category_choices(form, include=None):
@@ -483,7 +797,8 @@ def apply_split_entry_choices(form, person_include=None, category_include=None, 
     form.person.choices = [(item, item) for item in people]
 
 def view_password_status_context():
-    has_db_password = bool(get_view_only_password_hash())
+    current_user = get_current_username()
+    has_db_password = bool(get_user_view_pass_hash(current_user)) if current_user else False
     can_copy_current_view_password = bool(HW_PASSWORD and not has_db_password)
     return {
         'has_db_password': has_db_password,
@@ -505,6 +820,8 @@ def render_management(
     split_people=None,
     editing_split_person=None,
 ):
+    current_user = get_current_username()
+    is_admin = current_user in ADMIN_USERS if current_user else False
     return render_template(
         'management.html',
         form=view_form or ViewPasswordForm(prefix='view_password'),
@@ -512,7 +829,7 @@ def render_management(
         revealed_current_view_password=revealed_current_view_password,
         username_form=username_form or ChangeUsernameForm(prefix='account_username'),
         password_form=password_form or ChangePasswordForm(prefix='account_password'),
-        current_username=get_current_username() or '',
+        current_username=current_user or '',
         category_form=category_form or CategoryForm(prefix='category'),
         categories=categories if categories is not None else get_categories(),
         default_category=get_default_category(),
@@ -520,6 +837,7 @@ def render_management(
         split_person_form=split_person_form or SplitPersonForm(prefix='split_person'),
         split_people=split_people if split_people is not None else get_split_people(),
         editing_split_person=editing_split_person,
+        is_admin=is_admin,
         **view_password_status_context(),
     )
 
@@ -581,10 +899,25 @@ def validate_optional_note(value):
     return note
 
 def stream_with_timeout(query):
-    return query.stream(
-        retry=None,
-        timeout=FIRESTORE_TIMEOUT_SECONDS,
-    )
+    try:
+        stream_iter = query.stream(
+            retry=None,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        app.logger.exception("Firestore stream setup failed: %s", e)
+        return iter(())
+
+    def safe_stream():
+        try:
+            for doc in stream_iter:
+                yield doc
+        except Exception as e:
+            app.logger.exception("Firestore stream iteration failed: %s", e)
+            return
+
+    return safe_stream()
+
 
 def login_required(view_fn):
     @wraps(view_fn)
@@ -628,6 +961,11 @@ def doc_to_txn(doc):
         d = dict(doc)
     else:
         d = dict(doc)
+
+    if 'notes' in d and 'note' not in d:
+        d['note'] = d['notes']
+    elif 'note' in d and 'notes' not in d:
+        d['notes'] = d['note']
 
     if hasattr(doc, 'id'):
         d['_id'] = doc.id
@@ -808,6 +1146,10 @@ def apply_recurring_up_to_today():
                 }
                 try:
                     rec_ref = rec_collection(username).document(rec_id)
+                    
+                    # Pre-allocate a document ID so we can use it in the balance entry
+                    new_txn_ref = tx_collection(username).document()
+                    new_txn_id = getattr(new_txn_ref, 'id', None)
 
                     transaction = fs.transaction()
 
@@ -821,23 +1163,33 @@ def apply_recurring_up_to_today():
                              .limit(1))
                         if len(list(stream_with_timeout(q))) > 0:
                             return
-                        new_txn_ref = tx_collection(username).document()
+                        # Use the pre-allocated reference
                         tx.set(new_txn_ref, txn_doc)
                         tx.update(rec_ref, {'last_applied': next_occ})
 
                     transaction.call(trans_op)
-                    app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
+                    app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s (user=%s) with txn_id=%s", rec_id, next_occ, username, new_txn_id)
+                    # Create balance entry with type='txn' and include the transaction ID
                     try:
-                        append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
+                        append_balance(-float(txn_doc.get('amount', 0.0)), 'txn', username=username, extra_fields={'txn_id': new_txn_id})
                     except Exception:
                         app.logger.exception("Failed to append balance for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                 except Exception as e_tx:
                     app.logger.exception("Transaction write failed for recurring %s at %s: %s - falling back to add() (user=%s)", rec_id, next_occ, e_tx, username)
                     try:
-                        tx_collection(username).add(txn_doc)
-                        app.logger.info("Created transaction (fallback add) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
+                        # Use fallback add for transaction creation
+                        res = tx_collection(username).add(txn_doc)
+                        fallback_txn_id = res[1].id if isinstance(res, tuple) and len(res) > 1 else None
+                        if fallback_txn_id is None and hasattr(res, 'id'):
+                            fallback_txn_id = res.id
+                        app.logger.info("Created transaction (fallback add) for recurring %s at %s (user=%s) with txn_id=%s", rec_id, next_occ, username, fallback_txn_id)
+                        # Create balance entry with type='txn' and include the transaction ID
                         try:
-                            append_balance(-float(txn_doc.get('amount', 0.0)), 'recurring', note=f"recurring:{rec_id}", username=username)
+                            if fallback_txn_id:
+                                append_balance(-float(txn_doc.get('amount', 0.0)), 'txn', username=username, extra_fields={'txn_id': fallback_txn_id})
+                            else:
+                                app.logger.warning("Failed to get txn_id from fallback add for recurring %s", rec_id)
+                                append_balance(-float(txn_doc.get('amount', 0.0)), 'add', username=username, notes=f"recurring:{rec_id}")
                         except Exception:
                             app.logger.exception("Failed to append balance (fallback) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                         try:
@@ -1098,12 +1450,36 @@ def build_transaction_doc(form):
         'timestamp': txn_datetime
     }
 
-def clean_client_action_id(value):
-    cleaned = ''.join(
-        char for char in str(value or '').strip()
-        if char.isalnum() or char in {'-', '_', '.'}
-    )
-    return cleaned[:120]
+def request_payload_signature(payload):
+    try:
+        normalized = json.dumps(payload or {}, sort_keys=True, separators=(',', ':'), default=str)
+    except (TypeError, ValueError):
+        normalized = str(payload or {})
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+
+def is_recent_duplicate_request(session_key, payload, window_seconds=5):
+    if payload is None:
+        return False
+    last = session.get(session_key)
+    if not isinstance(last, dict):
+        return False
+    if last.get('hash') != request_payload_signature(payload):
+        return False
+    timestamp = last.get('ts')
+    if not isinstance(timestamp, (int, float)):
+        return False
+    return time.time() - float(timestamp) < window_seconds
+
+
+def record_request_signature(session_key, payload):
+    if payload is None:
+        return
+    session[session_key] = {
+        'hash': request_payload_signature(payload),
+        'ts': time.time(),
+    }
+
 
 def build_transaction_doc_from_payload(payload):
     txn_date = parse_iso_date(payload.get('date'))
@@ -1128,69 +1504,12 @@ def build_transaction_doc_from_payload(payload):
         'timestamp': local_datetime_to_utc(txn_date, txn_time),
     }
 
-def balance_note_exists(username, note):
-    if not note:
-        return False
-    docs = stream_with_timeout(bal_collection(username).where('note', '==', note).limit(1))
-    return any(True for _ in docs)
-
-def get_completed_client_action(username, client_action_id):
-    action_id = clean_client_action_id(client_action_id)
-    if not action_id:
-        return None, ''
-    action_doc = client_actions_collection(username).document(action_id).get()
-    if not action_doc.exists:
-        return None, action_id
-    return action_doc.to_dict() or {}, action_id
-
-def save_completed_client_action(username, action_id, action_type, result):
-    if not action_id:
-        return
-    client_actions_collection(username).document(action_id).set({
-        'type': action_type,
-        'result': result,
-        'created_at': datetime.now(UTC),
-    }, merge=True)
-
-def create_transaction(username, txn_doc, client_action_id=None):
-    action_id = clean_client_action_id(client_action_id)
-    if action_id:
-        action_ref = client_actions_collection(username).document(action_id)
-        action_doc = action_ref.get()
-        if action_doc.exists:
-            data = action_doc.to_dict() or {}
-            return data.get('transaction_id'), True
-
-        doc_ref = tx_collection(username).document(action_id)
-        if doc_ref.get().exists:
-            note = f"txn:{action_id}"
-            if not balance_note_exists(username, note):
-                append_balance(-float(txn_doc['amount']), 'txn', note=note, username=username)
-            action_ref.set({
-                'type': 'transaction_create',
-                'transaction_id': action_id,
-                'created_at': datetime.now(UTC),
-            }, merge=True)
-            return action_id, True
-
-        txn_doc = dict(txn_doc)
-        txn_doc['client_action_id'] = action_id
-        doc_ref.set(txn_doc)
-        txn_id = action_id
-    else:
-        doc_ref, _ = tx_collection(username).add(txn_doc)
-        txn_id = getattr(doc_ref, 'id', '')
-
-    append_balance(-float(txn_doc['amount']), 'txn', note=f"txn:{txn_id}", username=username)
-
-    if action_id:
-        client_actions_collection(username).document(action_id).set({
-            'type': 'transaction_create',
-            'transaction_id': txn_id,
-            'created_at': datetime.now(UTC),
-        }, merge=True)
-
-    return txn_id, False
+def create_transaction(username, txn_doc):
+    txn_doc = dict(txn_doc)
+    doc_ref, _ = tx_collection(username).add(txn_doc)
+    txn_id = getattr(doc_ref, 'id', '')
+    append_balance(-float(txn_doc['amount']), 'txn', username=username, extra_fields={'txn_id': txn_id})
+    return txn_id
 
 
 def get_latest_transaction_id(username=None):
@@ -1267,9 +1586,14 @@ def add():
     apply_category_choices(form)
     if form.validate_on_submit():
         txn_doc = build_transaction_doc(form)
+        username = require_user()
+        if is_recent_duplicate_request('recent_add_transaction', txn_doc):
+            flash('Same transaction data submitted too quickly. Please wait 5 seconds and try again.', 'warning')
+            return redirect(url_for('transactions', add='true'))
+
         try:
-            username = require_user()
             create_transaction(username, txn_doc)
+            record_request_signature('recent_add_transaction', txn_doc)
             app.logger.info("Transaction created user=%s amount=%.2f", username, txn_doc['amount'])
             flash('Transaction added successfully.', 'success')
         except Exception as e:
@@ -1290,23 +1614,24 @@ def api_transaction_create():
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
+    username = require_user()
+    if is_recent_duplicate_request('api_transaction_create', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same transaction data submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
+
     try:
-        username = require_user()
         txn_doc = build_transaction_doc_from_payload(payload)
-        txn_id, duplicate = create_transaction(
-            username,
-            txn_doc,
-            client_action_id=payload.get('client_action_id'),
-        )
+        txn_id = create_transaction(username, txn_doc)
+        record_request_signature('api_transaction_create', payload)
         app.logger.info(
-            "Transaction API create user=%s amount=%.2f duplicate=%s",
+            "Transaction API create user=%s amount=%.2f",
             username,
             txn_doc['amount'],
-            duplicate,
         )
         return jsonify({
             'ok': True,
-            'duplicate': duplicate,
             'transaction_id': txn_id,
         })
     except ValueError as exc:
@@ -1323,15 +1648,14 @@ def api_transaction_update(tx_id):
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
-    action_id = clean_client_action_id(payload.get('client_action_id'))
     username = require_user()
+    if is_recent_duplicate_request(f'api_transaction_update:{tx_id}', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same transaction update submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
 
     try:
-        if action_id:
-            action_doc = client_actions_collection(username).document(action_id).get()
-            if action_doc.exists:
-                return jsonify({'ok': True, 'duplicate': True, 'transaction_id': tx_id})
-
         doc_ref = tx_collection(username).document(tx_id)
         doc = doc_ref.get()
         if not doc.exists:
@@ -1347,15 +1671,9 @@ def api_transaction_update(tx_id):
         if balance_delta:
             update_transaction_balance_entry(tx_id, old_amount, new_amount, username=username)
 
-        if action_id:
-            client_actions_collection(username).document(action_id).set({
-                'type': 'transaction_update',
-                'transaction_id': tx_id,
-                'created_at': datetime.now(UTC),
-            }, merge=True)
-
+        record_request_signature(f'api_transaction_update:{tx_id}', payload)
         app.logger.info("Transaction API update id=%s user=%s", tx_id, username)
-        return jsonify({'ok': True, 'duplicate': False, 'transaction_id': tx_id})
+        return jsonify({'ok': True, 'transaction_id': tx_id})
     except ValueError as exc:
         app.logger.warning("Transaction API update validation failed id=%s user=%s error=%s", tx_id, username, exc)
         return jsonify({'ok': False, 'error': str(exc)}), 400
@@ -1370,42 +1688,63 @@ def api_transaction_delete(tx_id):
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
-    action_id = clean_client_action_id(payload.get('client_action_id'))
     username = require_user()
+    if is_recent_duplicate_request(f'api_transaction_delete:{tx_id}', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same transaction delete submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
 
     try:
-        if action_id:
-            action_doc = client_actions_collection(username).document(action_id).get()
-            if action_doc.exists:
-                return jsonify({'ok': True, 'duplicate': True, 'transaction_id': tx_id})
-
         doc_ref = tx_collection(username).document(tx_id)
         doc = doc_ref.get()
         if not doc.exists:
-            if action_id:
-                client_actions_collection(username).document(action_id).set({
-                    'type': 'transaction_delete',
-                    'transaction_id': tx_id,
-                    'created_at': datetime.now(UTC),
-                }, merge=True)
-            return jsonify({'ok': True, 'duplicate': True, 'transaction_id': tx_id})
+            return jsonify({'ok': False, 'error': 'Transaction not found.'}), 404
 
-        txn = doc_to_txn(doc)
         delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
 
-        if action_id:
-            client_actions_collection(username).document(action_id).set({
-                'type': 'transaction_delete',
-                'transaction_id': tx_id,
-                'created_at': datetime.now(UTC),
-            }, merge=True)
-
+        record_request_signature(f'api_transaction_delete:{tx_id}', payload)
         app.logger.info("Transaction API delete id=%s user=%s", tx_id, username)
-        return jsonify({'ok': True, 'duplicate': False, 'transaction_id': tx_id})
+        return jsonify({'ok': True, 'transaction_id': tx_id})
     except Exception:
         app.logger.exception("Transaction API delete failed id=%s", tx_id)
         return jsonify({'ok': False, 'error': 'Failed to delete transaction.'}), 500
+
+
+@app.route('/api/transactions/<string:tx_id>/view', methods=['GET'])
+@login_required
+def api_get_transaction(tx_id):
+    """Get transaction details for modal dialog."""
+    if not session.get('logged_in'):
+        abort(403, description="Full authentication required")
+
+    username = require_user()
+
+    try:
+        doc_ref = tx_collection(username).document(tx_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return jsonify({'ok': False, 'error': 'Transaction not found.'}), 404
+
+        txn = doc_to_txn(doc)
+        txn_time = utc_to_ist(txn.get('timestamp')) or now_ist()
+
+        return jsonify({
+            'ok': True,
+            'transaction': {
+                'id': tx_id,
+                'amount': round(float(txn.get('amount', 0.0)), 2),
+                'description': txn.get('description', ''),
+                'category': txn.get('category', 'Uncategorized'),
+                'date': txn_time.date().isoformat(),
+                'time': txn_time.time().isoformat()[:5],
+                'timestamp': format_ist(txn.get('timestamp')) if txn.get('timestamp') else None,
+            }
+        })
+    except Exception:
+        app.logger.exception("Failed to fetch transaction %s for user %s", tx_id, username)
+        return jsonify({'ok': False, 'error': 'Failed to fetch transaction.'}), 500
 
 
 @app.route('/edit/<string:tx_id>', methods=['GET', 'POST'])
@@ -2029,32 +2368,18 @@ def build_split_summary(split_doc, username=None):
         'entries': [serialize_split_entry(entry) for entry in entries],
     }
 
-def create_split_entry(username, split_id, entry_doc, client_action_id=None):
-    action_id = clean_client_action_id(client_action_id)
-    if action_id:
-        completed, _ = get_completed_client_action(username, action_id)
-        if completed:
-            return completed.get('result', {}).get('entry_id'), True
-
+def create_split_entry(username, split_id, entry_doc):
     split_ref = splits_collection(username).document(split_id)
     if not split_ref.get().exists:
         raise LookupError('Split not found.')
 
     entry_doc = dict(entry_doc)
     entry_doc['created_at'] = entry_doc.get('created_at') or datetime.now(UTC)
-    entry_ref = split_entries_collection(split_id, username).document(action_id) if action_id else split_entries_collection(split_id, username).document()
+    entry_ref = split_entries_collection(split_id, username).document()
     entry_ref.set(entry_doc, merge=True)
     split_ref.set({'updated_at': datetime.now(UTC)}, merge=True)
 
-    if action_id:
-        save_completed_client_action(
-            username,
-            action_id,
-            'split_entry_create',
-            {'split_id': split_id, 'entry_id': entry_ref.id},
-        )
-
-    return entry_ref.id, False
+    return entry_ref.id
 
 
 @app.route('/splits', methods=['GET', 'POST'])
@@ -2382,26 +2707,26 @@ def api_split_entry_create(split_id):
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
+    if is_recent_duplicate_request(f'api_split_entry_create:{split_id}', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same split entry data submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
+
     username = require_user()
     try:
         entry_doc = build_split_entry_doc_from_payload(payload)
-        entry_id, duplicate = create_split_entry(
-            username,
-            split_id,
-            entry_doc,
-            client_action_id=payload.get('client_action_id'),
-        )
+        entry_id = create_split_entry(username, split_id, entry_doc)
+        record_request_signature(f'api_split_entry_create:{split_id}', payload)
         app.logger.info(
-            "Split entry API create split=%s entry=%s user=%s duplicate=%s",
+            "Split entry API create split=%s entry=%s user=%s",
             split_id,
             entry_id,
             username,
-            duplicate,
         )
         split_doc = doc_to_txn(splits_collection(username).document(split_id).get())
         return jsonify({
             'ok': True,
-            'duplicate': duplicate,
             'split_id': split_id,
             'entry_id': entry_id,
             'split': build_split_summary(split_doc, username=username),
@@ -2424,14 +2749,14 @@ def api_split_entry_update(split_id, entry_id):
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
-    action_id = clean_client_action_id(payload.get('client_action_id'))
+    if is_recent_duplicate_request(f'api_split_entry_update:{split_id}:{entry_id}', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same split entry update submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
+
     username = require_user()
     try:
-        if action_id:
-            completed, _ = get_completed_client_action(username, action_id)
-            if completed:
-                return jsonify({'ok': True, 'duplicate': True, 'split_id': split_id, 'entry_id': entry_id})
-
         split_doc = splits_collection(username).document(split_id).get()
         if not split_doc.exists:
             app.logger.warning("Split entry API update requested for missing split=%s entry=%s user=%s", split_id, entry_id, username)
@@ -2449,18 +2774,10 @@ def api_split_entry_update(split_id, entry_id):
         entry_ref.set(update_doc, merge=True)
         splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
 
-        if action_id:
-            save_completed_client_action(
-                username,
-                action_id,
-                'split_entry_update',
-                {'split_id': split_id, 'entry_id': entry_id},
-            )
-
+        record_request_signature(f'api_split_entry_update:{split_id}:{entry_id}', payload)
         app.logger.info("Split entry API update split=%s entry=%s user=%s", split_id, entry_id, username)
         return jsonify({
             'ok': True,
-            'duplicate': False,
             'split_id': split_id,
             'entry_id': entry_id,
             'split': build_split_summary(doc_to_txn(split_doc), username=username),
@@ -2480,14 +2797,14 @@ def api_split_entry_delete(split_id, entry_id):
         abort(403, description="Full authentication required")
 
     payload = request.get_json(silent=True) or {}
-    action_id = clean_client_action_id(payload.get('client_action_id'))
+    if is_recent_duplicate_request(f'api_split_entry_delete:{split_id}:{entry_id}', payload):
+        return jsonify({
+            'ok': False,
+            'error': 'Same split entry delete submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
+
     username = require_user()
     try:
-        if action_id:
-            completed, _ = get_completed_client_action(username, action_id)
-            if completed:
-                return jsonify({'ok': True, 'duplicate': True, 'split_id': split_id, 'entry_id': entry_id})
-
         split_doc = splits_collection(username).document(split_id).get()
         if not split_doc.exists:
             app.logger.warning("Split entry API delete requested for missing split=%s entry=%s user=%s", split_id, entry_id, username)
@@ -2501,18 +2818,10 @@ def api_split_entry_delete(split_id, entry_id):
         entry_ref.delete()
         splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
 
-        if action_id:
-            save_completed_client_action(
-                username,
-                action_id,
-                'split_entry_delete',
-                {'split_id': split_id, 'entry_id': entry_id},
-            )
-
+        record_request_signature(f'api_split_entry_delete:{split_id}:{entry_id}', payload)
         app.logger.info("Split entry API delete split=%s entry=%s user=%s", split_id, entry_id, username)
         return jsonify({
             'ok': True,
-            'duplicate': False,
             'split_id': split_id,
             'entry_id': entry_id,
             'split': build_split_summary(doc_to_txn(split_doc), username=username),
@@ -3066,15 +3375,16 @@ def make_password_hash(password: str) -> str:
     """
     return generate_password_hash(password)  # e.g. "pbkdf2:sha256:260000$..."
 
-def verify_view_only_password(provided_pw):
+def verify_view_only_password(username, provided_pw):
     """
-    Verify the view-only password against Firestore settings first.
-    VIEW_PASS remains a fallback so existing deployments continue to work.
+    Verify the view-only password for a specific user.
+    Per-user view password stored in the user document is checked first.
+    Falls back to `VIEW_PASS` env var if configured.
     """
     if not provided_pw:
         return False
 
-    stored_hash = get_view_only_password_hash()
+    stored_hash = get_view_only_password_hash(username)
     if stored_hash:
         return verify_password(stored_hash, provided_pw)
 
@@ -3095,7 +3405,7 @@ def verify_current_user_password(username, password):
         return False, None
 
     user_data = user_entry['data']
-    if not verify_password(user_data.get('password'), password):
+    if not verify_password(get_user_auth_password_hash(user_data), password):
         return False, user_data
 
     return True, user_data
@@ -3138,11 +3448,10 @@ def rename_user_account(old_username, new_username, user_data):
         raise ValueError('Username already exists.')
 
     new_data = dict(user_data or {})
-    new_data['updated_at'] = datetime.now(UTC)
     new_ref.set(new_data, merge=True)
 
     copied_docs = []
-    for collection_name in ('transactions', 'recurring', 'recurring_balances', 'balances', CLIENT_ACTIONS_COL):
+    for collection_name in ('transactions', 'recurring', 'recurring_balances', 'balances'):
         for doc in copy_user_subcollection(old_ref, new_ref, collection_name):
             copied_docs.append((collection_name, doc.id))
     copied_docs.extend(copy_user_splits(old_ref, new_ref))
@@ -3194,19 +3503,22 @@ def management():
     action = request.form.get('action')
 
     if action == 'update_view_password' and form.validate_on_submit():
+        if username not in ADMIN_USERS:
+            flash('Only administrators can change the view-only password.', 'danger')
+            return redirect(url_for('management'))
         password_hash = make_password_hash(form.password.data.strip())
-        view_only_settings_ref().set({
-            'password_hash': password_hash,
-            'updated_at': datetime.now(UTC),
-            'updated_by': username,
-        }, merge=True)
+        # store per-user view password in the user document
+        set_user_passes(username, view_pass_hash=password_hash)
         app.logger.info("View-only password updated by user=%s", username)
         flash('View-only password updated successfully.', 'success')
         return redirect(url_for('management'))
 
     if action == 'reveal_view_password' and reveal_form.validate_on_submit():
+        if username not in ADMIN_USERS:
+            flash('Only administrators can access the view-only password.', 'danger')
+            return redirect(url_for('management'))
         entered_password = reveal_form.current_password.data.strip()
-        if verify_view_only_password(entered_password):
+        if verify_view_only_password(username, entered_password):
             app.logger.info("View-only password verified for reveal by user=%s", username)
             return render_management(
                 view_form=form,
@@ -3284,15 +3596,14 @@ def management():
             flash('Current password is incorrect.', 'danger')
         else:
             password_hash = make_password_hash(password_form.password.data.strip())
-            updated_at = datetime.now(UTC)
             user_doc_ref(username).set({
-                'password': password_hash,
-                'updated_at': updated_at,
+                'admin_pass': password_hash,
+                'view_pass': password_hash,
             }, merge=True)
             user_data = dict(user_data or {})
             user_data.update({
-                'password': password_hash,
-                'updated_at': updated_at,
+                'admin_pass': password_hash,
+                'view_pass': password_hash,
             })
             app.logger.info("Full-login password updated user=%s", username)
             flash('Password updated successfully.', 'success')
@@ -3326,7 +3637,7 @@ def management():
 def management_category_edit(category_name):
     username = require_user()
     original = normalize_category_name(category_name)
-    categories = get_categories()
+    categories = get_categories(username)
     category_form = CategoryForm(prefix='category')
     category_form.submit.label.text = 'Update Category'
 
@@ -3334,7 +3645,7 @@ def management_category_edit(category_name):
         flash('Category not found.', 'warning')
         return redirect(url_for('management'))
 
-    if category_key(original) in {'uncategorized', 'trip'}:
+    if category_is_protected(original, username):
         if request.is_json:
             return jsonify({'ok': False, 'error': 'This system category is protected and cannot be edited or deleted.'}), 400
         flash('This system category is protected and cannot be edited or deleted.', 'warning')
@@ -3348,12 +3659,13 @@ def management_category_edit(category_name):
         if category_key(updated) != category_key(original) and category_exists(categories, updated):
             return jsonify({'ok': False, 'error': 'Category already exists.'}), 400
         renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
+        default_cat = get_default_category(username)
+        if category_key(default_cat) == category_key(original):
+            default_cat = updated
         save_categories(renamed, updated_by=username)
-        if category_key(get_default_category()) == category_key(original):
-            categories_settings_ref().set({
-                'default_category': updated,
-                'updated_at': datetime.now(UTC),
-            }, merge=True)
+        user_doc_ref(username).set({
+            'default_category': default_cat,
+        }, merge=True)
         app.logger.info("Category renamed via JSON old=%s new=%s user=%s", original, updated, username)
         return jsonify({'ok': True})
 
@@ -3364,12 +3676,13 @@ def management_category_edit(category_name):
             return redirect(url_for('management', edit='true', edit_id=original))
 
         renamed = [updated if category_key(item) == category_key(original) else item for item in categories]
+        default_cat = get_default_category(username)
+        if category_key(default_cat) == category_key(original):
+            default_cat = updated
         save_categories(renamed, updated_by=username)
-        if category_key(get_default_category()) == category_key(original):
-            categories_settings_ref().set({
-                'default_category': updated,
-                'updated_at': datetime.now(UTC),
-            }, merge=True)
+        user_doc_ref(username).set({
+            'default_category': default_cat,
+        }, merge=True)
         app.logger.info("Category renamed old=%s new=%s user=%s", original, updated, username)
         flash('Category updated.', 'success')
         return redirect(url_for('management'))
@@ -3389,13 +3702,13 @@ def management_category_edit(category_name):
 def management_category_delete(category_name):
     username = require_user()
     category = normalize_category_name(category_name)
-    if category_key(category) in {'uncategorized', 'trip'}:
+    if category_is_protected(category, username):
         if request.is_json:
             return jsonify({'ok': False, 'error': 'This system category is protected and cannot be edited or deleted.'}), 400
         flash('This system category is protected and cannot be edited or deleted.', 'warning')
         return redirect(url_for('management'))
 
-    categories = get_categories()
+    categories = get_categories(username)
     remaining = [item for item in categories if category_key(item) != category_key(category)]
 
     if len(remaining) == len(categories):
@@ -3407,21 +3720,23 @@ def management_category_delete(category_name):
         return redirect(url_for('management'))
 
     if request.is_json:
+        default_cat = get_default_category(username)
+        if category_key(default_cat) == category_key(category):
+            default_cat = remaining[0] if remaining else 'Other'
         save_categories(remaining, updated_by=username)
-        if category_key(get_default_category()) == category_key(category):
-            categories_settings_ref().set({
-                'default_category': 'Other',
-                'updated_at': datetime.now(UTC),
-            }, merge=True)
+        user_doc_ref(username).set({
+            'default_category': default_cat,
+        }, merge=True)
         app.logger.info("Category deleted via JSON name=%s user=%s", category, username)
         return jsonify({'ok': True})
 
+    default_cat = get_default_category(username)
+    if category_key(default_cat) == category_key(category):
+        default_cat = remaining[0] if remaining else 'Other'
     save_categories(remaining, updated_by=username)
-    if category_key(get_default_category()) == category_key(category):
-        categories_settings_ref().set({
-            'default_category': 'Other',
-            'updated_at': datetime.now(UTC),
-        }, merge=True)
+    user_doc_ref(username).set({
+        'default_category': default_cat,
+    }, merge=True)
     app.logger.info("Category deleted name=%s user=%s", category, username)
     flash('Category deleted.', 'info')
     return redirect(url_for('management'))
@@ -3430,17 +3745,17 @@ def management_category_delete(category_name):
 @app.route('/management/set_default_category', methods=['POST'])
 @login_required
 def management_set_default_category():
+    username = require_user()
     if session.get('view_only'):
         flash("Action not allowed in view-only mode", "error")
         return redirect(url_for('management'))
 
     default_cat = request.form.get('default_category')
-    categories = get_categories()
+    categories = get_categories(username)
     if default_cat and category_exists(categories, default_cat):
         try:
-            categories_settings_ref().set({
+            user_doc_ref(username).set({
                 'default_category': default_cat,
-                'updated_at': datetime.now(UTC),
             }, merge=True)
             flash(f"Default category updated to {default_cat}", "success")
         except Exception as e:
@@ -3554,13 +3869,36 @@ def login():
         try:
             user_entry, auth_source = get_user_auth_for_login(username)
             if not user_entry['exists']:
+                if is_env_admin(username) and DEFAULT_ADMIN_PASSWORD and password == DEFAULT_ADMIN_PASSWORD:
+                    user_entry = bootstrap_env_admin_user(
+                        username,
+                        password=DEFAULT_ADMIN_PASSWORD,
+                        source='default_admin_password_login',
+                    )
+                    auth_source = 'env_default_password'
+                else:
+                    app.logger.warning("Login failed: user document not found for %s", username)
+                    flash('Invalid credentials', 'danger')
+                    return render_template('login.html', form=form)
+
+            if not user_entry['exists']:
                 app.logger.warning("Login failed: user document not found for %s", username)
                 flash('Invalid credentials', 'danger')
                 return render_template('login.html', form=form)
 
             user_data = user_entry['data']
-            stored_pw = user_data.get('password')
-            if stored_pw is None:
+            stored_pw = get_user_auth_password_hash(user_data)
+            if not stored_pw:
+                if is_env_admin(username) and DEFAULT_ADMIN_PASSWORD and password == DEFAULT_ADMIN_PASSWORD:
+                    user_entry = bootstrap_env_admin_user(
+                        username,
+                        password=DEFAULT_ADMIN_PASSWORD,
+                        source='default_admin_password_login_existing_user',
+                    )
+                    user_data = user_entry['data']
+                    stored_pw = get_user_auth_password_hash(user_data)
+
+            if not stored_pw:
                 app.logger.warning("Login failed: user %s has no password set in Firestore", username)
                 flash('Invalid credentials', 'danger')
                 return render_template('login.html', form=form)
@@ -3615,12 +3953,19 @@ def view_login():
             flash('Invalid credentials', 'danger')
             return render_template('view.html', form=form)
 
-        if not is_view_only_password_configured():
-            app.logger.error("Attempted view-only login but no view-only password is configured")
+        if not is_view_only_password_configured(username):
+            app.logger.error("Attempted view-only login but no view-only password is configured for %s", username)
             flash('View-only login currently disabled.', 'danger')
             return render_template('view.html', form=form)
 
-        if verify_view_only_password(password):
+        if verify_view_only_password(username, password):
+            if is_env_admin(username):
+                bootstrap_view_only_password_from_env_for_user(username)
+                bootstrap_env_admin_user(
+                    username,
+                    password=DEFAULT_ADMIN_PASSWORD,
+                    source='view_only_env_admin_login',
+                )
             session['view_only'] = True
             session['username'] = username
             session.permanent = True
@@ -3665,7 +4010,7 @@ def view_only_login():
     if isinstance(password, str):
         password = password.strip()
 
-    if not is_view_only_password_configured():
+    if not is_view_only_password_configured(username):
         app.logger.warning("View-only attempted but no view-only password is configured.")
         flash('Server misconfiguration: view-only password not configured.', 'danger')
         return redirect(url_for('login'))
@@ -3685,11 +4030,19 @@ def view_only_login():
             <p>Passwords are accepted by form submit only.</p>
         '''.format(generate_csrf()), 200
 
-    if verify_view_only_password(password):
+    if verify_view_only_password(username, password):
         if not is_valid_user(username):
             app.logger.info("View-only attempted for unknown user %s", username)
             flash('Invalid username for view-only access.', 'danger')
             return redirect(url_for('login'))
+
+        if is_env_admin(username):
+            bootstrap_view_only_password_from_env_for_user(username)
+            bootstrap_env_admin_user(
+                username,
+                password=DEFAULT_ADMIN_PASSWORD,
+                source='view_endpoint_env_admin_login',
+            )
 
         session['view_only'] = True
         session['username'] = username
@@ -3705,13 +4058,30 @@ def view_only_login():
     try:
         user_entry, auth_source = get_user_auth_for_login(username)
         if not user_entry['exists']:
-            app.logger.warning("Login failed: user document not found for %s", username)
-            flash('Invalid credentials', 'danger')
-            return redirect(url_for('login'))
+            if is_env_admin(username) and DEFAULT_ADMIN_PASSWORD and password == DEFAULT_ADMIN_PASSWORD:
+                user_entry = bootstrap_env_admin_user(
+                    username,
+                    password=DEFAULT_ADMIN_PASSWORD,
+                    source='view_endpoint_env_admin_login_full',
+                )
+            else:
+                app.logger.warning("Login failed: user document not found for %s", username)
+                flash('Invalid credentials', 'danger')
+                return redirect(url_for('login'))
 
         user_data = user_entry['data']
-        stored_pw = user_data.get('password')
-        if stored_pw is None:
+        stored_pw = get_user_auth_password_hash(user_data)
+        if not stored_pw:
+            if is_env_admin(username) and DEFAULT_ADMIN_PASSWORD and password == DEFAULT_ADMIN_PASSWORD:
+                user_entry = bootstrap_env_admin_user(
+                    username,
+                    password=DEFAULT_ADMIN_PASSWORD,
+                    source='view_endpoint_env_admin_login_existing_user',
+                )
+                user_data = user_entry['data']
+                stored_pw = get_user_auth_password_hash(user_data)
+
+        if not stored_pw:
             app.logger.warning("Login failed: user %s has no password set in Firestore", username)
             flash('Invalid credentials', 'danger')
             return redirect(url_for('login'))
@@ -3952,7 +4322,7 @@ def export_balances_csv():
             _balance_type_label(b.get('type')),
             f"{float(b.get('delta', 0.0)):.2f}",
             f"{float(b.get('balance', 0.0)):.2f}",
-            b.get('note') or ''
+            b.get('notes') or b.get('note') or ''
         ])
 
     buf = io.BytesIO(si.getvalue().encode('utf-8'))
@@ -4146,7 +4516,7 @@ def shift_balance_entries_after(timestamp, delta, username=None):
         count += 1
     return count
 
-def append_balance(delta, type_, note='', username=None, extra_fields=None):
+def append_balance(delta, type_, note='', notes=None, username=None, extra_fields=None):
     if username is None:
         username = require_user()
     try:
@@ -4159,11 +4529,12 @@ def append_balance(delta, type_, note='', username=None, extra_fields=None):
     except Exception:
         new_bal = round(base + 0.0, 2)
 
+    balance_notes = notes if notes is not None else note
     doc = {
         'balance': float(new_bal),
         'type': str(type_),
         'delta': float(round(float(delta), 2)),
-        'note': (note or '')[:1024],
+        'notes': (balance_notes or '')[:1024],
         'timestamp': datetime.now(UTC)
     }
     if extra_fields:
@@ -4193,14 +4564,8 @@ def balance_analytics():
     return render_template('balance_analytics.html')
 
 def balance_transaction_id(d):
-    explicit_id = d.get('transaction_id') or ''
-    if explicit_id:
-        return explicit_id
-
-    note = str(d.get('note') or '').strip()
-    if note.lower().startswith('txn:'):
-        return note.split(':', 1)[1].strip()
-    return ''
+    explicit_id = d.get('txn_id') or d.get('transaction_id') or ''
+    return str(explicit_id).strip() if explicit_id else ''
 
 def find_balance_entries_for_transaction(tx_id, username=None):
     if username is None:
@@ -4209,14 +4574,10 @@ def find_balance_entries_for_transaction(tx_id, username=None):
     q = (
         bal_collection(username)
         .where('type', '==', 'txn')
+        .where('txn_id', '==', tx_id)
         .order_by('timestamp', direction=firestore.Query.ASCENDING)
     )
-    entries = []
-    for doc in stream_with_timeout(q):
-        data = doc.to_dict() or {}
-        if balance_transaction_id(data) == tx_id:
-            entries.append(doc)
-    return entries
+    return list(stream_with_timeout(q))
 
 
 def delete_balance_entry_document(doc, username=None):
@@ -4247,8 +4608,7 @@ def update_transaction_balance_entry(tx_id, old_amount, new_amount, username=Non
 
     entries = find_balance_entries_for_transaction(tx_id, username=username)
     if not entries:
-        note = f"txn:{tx_id}"
-        append_balance(-float(new_amount), 'txn', note=note, username=username)
+        append_balance(-float(new_amount), 'txn', username=username, extra_fields={'txn_id': tx_id})
         return 0
 
     if len(entries) > 1:
@@ -4296,7 +4656,7 @@ def load_transactions_by_id(username, txn_ids):
 def serialize_balance_history_entry(d, txn_lookup):
     tx_id = balance_transaction_id(d)
     txn = txn_lookup.get(tx_id) if tx_id else None
-    note = d.get('note', '')
+    notes = str(d.get('notes') or d.get('note') or '').strip()
     if txn:
         note_display = f"{txn.get('description', '')}({txn.get('category', '')})"
         transaction_search_text = ' '.join(
@@ -4308,8 +4668,8 @@ def serialize_balance_history_entry(d, txn_lookup):
             )
         ).strip()
     else:
-        note_display = note
-        transaction_search_text = tx_id or ''
+        note_display = notes
+        transaction_search_text = tx_id or notes
     return {
         'id': d.get('_id') or d.get('id'),
         'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
@@ -4317,7 +4677,7 @@ def serialize_balance_history_entry(d, txn_lookup):
         'balance_mode': d.get('balance_mode') or ('sync' if d.get('type') == 'sync' else 'add'),
         'delta': round(float(d.get('delta', 0.0)), 2),
         'balance': round(float(d.get('balance', 0.0)), 2),
-        'note': note,
+        'note': notes,
         'note_display': note_display,
         'transaction_id': tx_id or '',
         'transaction_search_text': transaction_search_text,
@@ -4451,7 +4811,7 @@ def _serialize_balance_entry(entry):
         'type': entry.get('type'),
         'type_label': _balance_type_label(entry.get('type')),
         'delta': round(float(entry.get('delta', 0.0)), 2),
-        'note': entry.get('note', ''),
+        'note': entry.get('notes') if entry.get('notes') is not None else entry.get('note', ''),
     }
 
 
@@ -4566,11 +4926,11 @@ def api_balance_analytics():
 def api_balance_add():
     username = require_user()
     data = request.get_json() or {}
-    completed, action_id = get_completed_client_action(username, data.get('client_action_id'))
-    if completed:
-        result = completed.get('result') or {}
-        result['duplicate'] = True
-        return jsonify(result)
+    if is_recent_duplicate_request('api_balance_add', data):
+        return jsonify({
+            'ok': False,
+            'error': 'Same balance add data submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
 
     try:
         delta = parse_money(data.get('amount'), field_name='Amount', allow_negative=True)
@@ -4586,12 +4946,12 @@ def api_balance_add():
         'balance': float(new_bal),
         'type': 'add',
         'delta': float(delta),
-        'note': note,
+        'notes': note,
         'timestamp': now
     }
     bal_collection(username).add(doc)
-    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add", "duplicate": False}
-    save_completed_client_action(username, action_id, 'balance_add', result)
+    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add"}
+    record_request_signature('api_balance_add', data)
     app.logger.info("Balance add created user=%s delta=%.2f new_balance=%.2f", username, delta, new_bal)
     return jsonify(result)
 
@@ -4600,11 +4960,11 @@ def api_balance_add():
 def api_balance_sync():
     username = require_user()
     data = request.get_json() or {}
-    completed, action_id = get_completed_client_action(username, data.get('client_action_id'))
-    if completed:
-        result = completed.get('result') or {}
-        result['duplicate'] = True
-        return jsonify(result)
+    if is_recent_duplicate_request('api_balance_sync', data):
+        return jsonify({
+            'ok': False,
+            'error': 'Same balance sync data submitted too quickly. Please wait 5 seconds and try again.',
+        }), 429
 
     try:
         new_balance = parse_money(
@@ -4625,7 +4985,7 @@ def api_balance_sync():
         'balance': float(round(new_balance, 2)),
         'type': 'add',
         'delta': float(delta),
-        'note': note,
+        'notes': note,
         'timestamp': now
     }
     bal_collection(username).add(doc)
@@ -4634,9 +4994,8 @@ def api_balance_sync():
         "timestamp": format_ist(now),
         "type": "add",
         "delta": delta,
-        "duplicate": False,
     }
-    save_completed_client_action(username, action_id, 'balance_sync', result)
+    record_request_signature('api_balance_sync', data)
     app.logger.info("Balance sync created user=%s delta=%.2f new_balance=%.2f", username, delta, new_balance)
     return jsonify(result)
 
@@ -4689,7 +5048,7 @@ def api_balance_update(entry_id):
         doc_ref.update({
             'balance': float(new_balance),
             'delta': float(new_delta),
-            'note': note,
+            'notes': note,
             'updated_at': datetime.now(UTC),
         })
         shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
@@ -4812,9 +5171,348 @@ def api_balance_history():
         "balance": round(float(d.get('balance', 0.0)), 2),
         "type": d.get('type'),
         "delta": round(float(d.get('delta', 0.0)), 2),
-        "note": d.get('note', '')
+        "note": d.get('notes') or d.get('note', '')
     } for d in docs]
     return jsonify({"history": out})
+
+# ---------------------------------------------------------------------
+# Forgot Password Flow (Admin Users Only)
+# ---------------------------------------------------------------------
+
+def send_otp_email(to_email, otp):
+    smtp_email = os.environ.get('EMAIL')
+    smtp_password = os.environ.get('APP_PASSWORD')
+    
+    if not smtp_email or not smtp_password:
+        app.logger.error("SMTP credentials not configured in environment variables.")
+        raise ValueError("Email service configuration is missing.")
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = 'FinTrak Admin Password Reset OTP'
+    msg['From'] = f"FinTrak Support <{smtp_email}>"
+    msg['To'] = to_email
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f4f6f8;
+            color: #1e293b;
+            margin: 0;
+            padding: 0;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+        }}
+        .header {{
+            background-color: #208b7a;
+            padding: 30px;
+            text-align: center;
+        }}
+        .brand {{
+            color: #ffffff;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }}
+        .content {{
+            padding: 40px 30px;
+            line-height: 1.6;
+        }}
+        .title {{
+            font-size: 20px;
+            font-weight: 600;
+            color: #0f172a;
+            margin-bottom: 20px;
+        }}
+        .otp-box {{
+            background-color: #f0fdfa;
+            border: 1px dashed #208b7a;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 6px;
+            color: #208b7a;
+            margin: 30px 0;
+        }}
+        .warning {{
+            background-color: #fffaf0;
+            border-left: 4px solid #dd6b20;
+            padding: 15px;
+            font-size: 14px;
+            color: #7b341e;
+            margin-top: 30px;
+            border-radius: 4px;
+        }}
+        .footer {{
+            background-color: #f8fafc;
+            padding: 20px 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #f1f5f9;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <span class="brand">FinTrak</span>
+        </div>
+        <div class="content">
+            <h2 class="title">Reset Your Password</h2>
+            <p>We received a request to reset your admin password. Use the following One-Time Password (OTP) to proceed with the password reset:</p>
+            <div class="otp-box">{otp}</div>
+            <p>This OTP is valid for <strong>5 minutes</strong> and can only be used once.</p>
+            <div class="warning">
+                <strong>Security Warning:</strong> Never share this OTP with anyone. FinTrak support will never ask for your OTP or password.
+            </div>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 FinTrak. All rights reserved.</p>
+            <p>If you did not request a password reset, please ignore this email or secure your account.</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+    text_content = f"Your FinTrak OTP is: {otp}. It is valid for 5 minutes."
+
+    msg.attach(MIMEText(text_content, 'plain'))
+    msg.attach(MIMEText(html_content, 'html'))
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_email, smtp_password)
+            server.sendmail(smtp_email, to_email, msg.as_string())
+        app.logger.info("OTP email sent successfully to %s", to_email)
+    except Exception as e:
+        app.logger.exception("Failed to send OTP email to %s", to_email)
+        raise e
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    form = ForgotPasswordForm()
+    if form.validate_on_submit():
+        email = normalize_username(form.email.data)
+
+        # Verify email against Admin list and ensure the user exists in Firestore
+        if email not in ADMIN_USERS:
+            app.logger.warning("Forgot password requested for non-admin email: %s", email)
+            flash('Not an admin user.', 'danger')
+            return render_template('forgot_password.html', form=form)
+
+        user_entry = get_user_auth_entry(email)
+        if not user_entry['exists']:
+            app.logger.warning("Forgot password requested for admin email not in Firestore: %s", email)
+            flash('Not an admin user.', 'danger')
+            return render_template('forgot_password.html', form=form)
+
+        # Generate secure OTP
+        otp = ''.join(secrets.choice('0123456789') for _ in range(6))
+        expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        
+        # Store OTP details in session (no DB)
+        session['reset_email'] = email
+        session['reset_otp_hash'] = generate_password_hash(otp)
+        session['reset_expires_at'] = time.time() + 5 * 60
+        session['reset_attempts'] = 0
+        session['reset_verified'] = False
+        session['last_otp_sent'] = time.time()
+
+        try:
+            send_otp_email(email, otp)
+            flash('OTP has been sent to your email.', 'success')
+            return redirect(url_for('verify_otp'))
+        except Exception:
+            flash('Failed to send OTP email. Please try again later.', 'danger')
+
+    return render_template('forgot_password.html', form=form)
+
+
+@app.route('/forgot-password/verify', methods=['GET', 'POST'])
+def verify_otp():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    email = session.get('reset_email')
+    if not email:
+        flash('Session expired. Please restart the process.', 'warning')
+        return redirect(url_for('forgot_password'))
+
+    # Load from session
+    otp_hash = session.get('reset_otp_hash')
+    expires_at_ts = session.get('reset_expires_at')
+    now_ts = time.time()
+
+    if not otp_hash or not expires_at_ts:
+        flash('No password reset process active. Please restart.', 'warning')
+        return redirect(url_for('forgot_password'))
+
+    # Check if expired
+    if now_ts > float(expires_at_ts):
+        # clear session keys
+        session.pop('reset_email', None)
+        session.pop('reset_otp_hash', None)
+        session.pop('reset_expires_at', None)
+        session.pop('reset_attempts', None)
+        session.pop('reset_verified', None)
+        flash('OTP has expired. Please request a new one.', 'danger')
+        return redirect(url_for('forgot_password'))
+
+    remaining_seconds = int(max(0, float(expires_at_ts) - now_ts))
+
+    form = VerifyOTPForm()
+    if form.validate_on_submit():
+        otp = (form.otp.data or '').strip()
+        attempts = int(session.get('reset_attempts', 0))
+
+        if attempts >= 3:
+            # clear session
+            session.pop('reset_email', None)
+            session.pop('reset_otp_hash', None)
+            session.pop('reset_expires_at', None)
+            session.pop('reset_attempts', None)
+            session.pop('reset_verified', None)
+            flash('Maximum verification attempts exceeded. Please start over.', 'danger')
+            return redirect(url_for('forgot_password'))
+
+        stored_hash = session.get('reset_otp_hash')
+        if stored_hash and check_password_hash(stored_hash, otp):
+            # Success: Mark as verified and progress to reset
+            session['reset_verified'] = True
+            flash('OTP verified successfully. You can now reset your password.', 'success')
+            return redirect(url_for('reset_password'))
+        else:
+            attempts += 1
+            session['reset_attempts'] = attempts
+            if attempts >= 3:
+                # clear session
+                session.pop('reset_email', None)
+                session.pop('reset_otp_hash', None)
+                session.pop('reset_expires_at', None)
+                session.pop('reset_attempts', None)
+                session.pop('reset_verified', None)
+                flash('Maximum verification attempts exceeded. Please start over.', 'danger')
+                return redirect(url_for('forgot_password'))
+            else:
+                flash(f'Incorrect OTP. Remaining attempts: {3 - attempts}', 'danger')
+
+    return render_template('verify_otp.html', form=form, email=email, remaining_seconds=remaining_seconds)
+
+
+@app.route('/forgot-password/resend', methods=['POST'])
+def resend_otp():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    email = session.get('reset_email')
+    if not email:
+        flash('Session expired. Please restart the process.', 'warning')
+        return redirect(url_for('forgot_password'))
+
+    # Check throttle limit
+    last_sent = session.get('last_otp_sent', 0)
+    if time.time() - last_sent < 60:
+        flash('Please wait before requesting a new OTP.', 'warning')
+        return redirect(url_for('verify_otp'))
+
+    # Generate secure OTP
+    otp = ''.join(secrets.choice('0123456789') for _ in range(6))
+    # Store OTP details in session
+    session['reset_otp_hash'] = generate_password_hash(otp)
+    session['reset_expires_at'] = time.time() + 5 * 60
+    session['reset_attempts'] = 0
+    session['last_otp_sent'] = time.time()
+
+    try:
+        send_otp_email(email, otp)
+        flash('A new OTP has been sent to your email.', 'success')
+    except Exception:
+        flash('Failed to send OTP email. Please try again later.', 'danger')
+
+    return redirect(url_for('verify_otp'))
+
+
+@app.route('/forgot-password/reset', methods=['GET', 'POST'])
+def reset_password():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+
+    email = session.get('reset_email')
+    if not email:
+        flash('Unauthorized access. Please start the process.', 'danger')
+        return redirect(url_for('forgot_password'))
+
+    # Check session state
+    if not session.get('reset_verified'):
+        flash('OTP must be verified first.', 'danger')
+        return redirect(url_for('verify_otp'))
+
+    expires_at_ts = session.get('reset_expires_at')
+    if not expires_at_ts or time.time() > float(expires_at_ts):
+        # clear session keys
+        session.pop('reset_email', None)
+        session.pop('reset_otp_hash', None)
+        session.pop('reset_expires_at', None)
+        session.pop('reset_attempts', None)
+        session.pop('reset_verified', None)
+        flash('Password reset session expired. Please start over.', 'danger')
+        return redirect(url_for('forgot_password'))
+
+    form = ResetPasswordForm()
+    if form.validate_on_submit():
+        new_password = (form.password.data or '').strip()
+        
+        # Additional validation check on password pattern just in case
+        if not re.match(STRONG_PASSWORD_PATTERN, new_password):
+            flash(STRONG_PASSWORD_MESSAGE, 'danger')
+            return render_template('reset_password.html', form=form)
+
+        # Update password in Firestore
+        password_hash = make_password_hash(new_password)
+
+        user_ref = fs.collection('users').document(email)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            flash('Password reset session invalid. Please start over.', 'danger')
+            return redirect(url_for('forgot_password'))
+
+        user_ref.set({
+            'admin_pass': password_hash,
+            'view_pass': password_hash,
+        }, merge=True)
+
+        # Clear session keys to prevent reuse
+        session.pop('reset_email', None)
+        session.pop('reset_otp_hash', None)
+        session.pop('reset_expires_at', None)
+        session.pop('reset_attempts', None)
+        session.pop('reset_verified', None)
+        session.pop('last_otp_sent', None)
+
+        app.logger.info("Admin password reset successfully for user=%s", email)
+        flash('Password updated successfully. You can now log in.', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('reset_password.html', form=form)
+
 
 # ---------------------------------------------------------------------
 # Main

@@ -95,6 +95,64 @@
 {% endcall %}
 {% endif %}
 
+<!-- Transaction Detail Modal -->
+{% call modal('viewTransactionModal', 'Transaction Details') %}
+    <div class="transaction-details">
+        <div class="row mb-3">
+            <div class="col-6">
+                <small class="text-muted d-block">Description</small>
+                <strong id="txnDescription">-</strong>
+            </div>
+            <div class="col-6 text-end">
+                <small class="text-muted d-block">Amount</small>
+                <strong id="txnAmount">-</strong>
+            </div>
+        </div>
+        <div class="row mb-3">
+            <div class="col-6">
+                <small class="text-muted d-block">Category</small>
+                <strong id="txnCategory">-</strong>
+            </div>
+            <div class="col-6">
+                <small class="text-muted d-block">Date</small>
+                <strong id="txnDate">-</strong>
+            </div>
+        </div>
+        <div class="row mb-4">
+            <div class="col-12">
+                <small class="text-muted d-block">Time</small>
+                <strong id="txnTime">-</strong>
+            </div>
+        </div>
+        <hr>
+        <div class="d-flex gap-2 justify-content-end">
+            {{ button('Close', kind='secondary', extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+            {{ button('Edit', kind='primary', extra_class='px-4', type='button', id='editTransactionBtn') }}
+            {{ button('Delete', kind='danger', extra_class='px-4', type='button', id='deleteTransactionBtn') }}
+        </div>
+    </div>
+{% endcall %}
+
+<!-- Delete Transaction Confirmation Modal (for modal context) -->
+<div class="modal fade" id="deleteTransactionConfirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <p class="fw-semibold mb-1">Delete this transaction?</p>
+                <p class="text-muted small mb-3">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer justify-content-center">
+                {{ button('Cancel', kind='secondary', extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                {{ button('Delete', kind='danger', extra_class='px-4', type='button', id='confirmDeleteBtn') }}
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
 {% endblock %}
 

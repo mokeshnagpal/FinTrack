@@ -76,9 +76,9 @@
                 {% if not session.get('view_only') %}
                 <div class="d-flex gap-2 mt-auto border-top pt-3 border-opacity-10">
                     {{ button('Edit', kind='primary', outline=true, size='sm', extra_class='flex-grow-1', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editTripModal' ~ tid}) }}
-                    <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-trip-id="{{ tid }}">
+                    <form method="post" action="{{ url_for('trip_delete', trip_id=tid) }}" class="d-inline flex-grow-1" data-trip-id="{{ tid }}" data-confirm="Delete this trip?">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        {{ button('Delete', kind='danger', size='sm', extra_class='w-100', type='submit', onclick="return confirm('Delete this trip?')") }}
+                        {{ button('Delete', kind='danger', size='sm', extra_class='w-100', type='submit') }}
                     </form>
                 </div>
                 {% endif %}

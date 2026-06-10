@@ -285,11 +285,8 @@
                 const splitTitle = btn.getAttribute('data-split-title');
 
                 if (shareAmount <= 0) {
-                    if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
-                        window.FinTrak.showToast('Split total cannot be zero.', 'warning');
-                    } else {
-                        alert('Split total cannot be zero.');
-                    }
+                    const flash = window.FinTrak?.showFlash || window.FinTrak?.showToast;
+                    if (typeof flash === 'function') flash('Split total cannot be zero.', 'warning');
                     return;
                 }
 

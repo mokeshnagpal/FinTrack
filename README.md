@@ -1,160 +1,299 @@
 # FinTrak
 
-FinTrak is an online Flask + Firestore finance tracker for personal spending, balances, recurring rules, split bills, trips, analytics, admin settings, and view-only access.
+FinTrak is a Flask + Firestore personal finance web app. It combines server-rendered pages, authenticated user flows, and Firestore-backed collections for transactions, balances, recurring rules, split payments, trips, and analytics.
 
-The app uses server-rendered Jinja templates, Bootstrap 5, custom CSS, vanilla JavaScript, Chart.js, the Firebase Admin SDK, and direct Firestore reads/writes. Firestore is the single source of truth.
+## What FinTrak does
+
+- Tracks daily transactions with categories, notes, and tags.
+- Stores running balances and recurring balance rules.
+- Supports split expenses and multi-person trips.
+- Provides analytics dashboards for spending and balance trends.
+- Includes management tools for categories, split participants, and password controls.
+- Offers a view-only access mode for safe shared access.
 
 ## Architecture
 
-FinTrak is built as a server-rendered Flask application with Firestore as the primary datastore.
+### Backend
 
-- Flask handles page rendering, form submissions, authentication, and JSON APIs.
-- Firestore stores transactions, balances, categories, splits, trips, recurring rules, and settings.
-- Templates are generated with Jinja and delivered as HTML pages.
-- Static assets are served from `static/` and include CSS, JavaScript, and icons.
-- Session management, authentication, and CSRF protection are managed by Flask and Werkzeug.
+- `app.py` is the single Flask application entrypoint.
+- Uses `firebase-admin` and Firestore as the primary persistent datastore.
+- Renders HTML through Jinja templates in `templates/`.
+- Handles form validation via `Flask-WTF` and `WTForms`.
+- Supports session-based user state, login, logout, view-only sessions, and duplicate submission protection.
 
-## Pages
+### Frontend
 
-- `index.html` — Main dashboard and navigation entry point.
-- `login.html` — User login page.
-- `transactions.html` — Transaction listing, add/edit/delete forms, search, and filters.
-- `balance.html` — Balance ledger view with add/edit/delete balance rows.
-- `balance_analytics.html` — Balance analytics charts and summary metrics.
-- `analytics.html` — Spend analytics charts, summaries, and CSV export.
-- `recurring.html` — Manage recurring transactions and balance rules.
-- `splits.html` — Split bill overview and active split management.
-- `split_detail.html` — Detailed split item editing and participant totals.
-- `trips.html` — Trip planning, budget tracking, and expense assignments.
-- `management.html` — Account settings, categories, split people, and view-only password management.
-- `view.html` — Read-only access interface.
+- Static files live in `static/`.
+- CSS: `static/css/styles.css`.
+- JS: reusable client helpers, analytics scripts, balance/transaction UI, and split/trip controls.
+- Uses Bootstrap 5 and Chart.js for responsive UI and charts.
 
-## Main Features
+### Data model
 
-| Area | What the code supports |
-|---|---|
-| Transactions | Add, edit, delete, search, sort, and view transaction history. |
-| Balance | Add delta entries, set an absolute balance, edit/delete displayed balance rows, and recalculate later rows. |
-| Recurring | Expense recurring rules and balance recurring rules with create/edit/delete flows. |
-| Splits | Split documents, live/saved status, split entries, per-person totals, and trip connection/disconnection flows. |
-| Trips | Fixed-budget trips and split-spend trips, with create/edit/delete/disconnect flows. |
-| Analytics | Spend analytics, balance analytics, Chart.js charts, summary cards, tables, and CSV export. |
-| Management | Categories, split people, view-only password, account username/email, and account password management. |
-| View-only mode | Read-only access with write controls hidden or blocked server-side. |
+The app stores data under a top-level Firestore collection:
 
-## Data Flow
+- `users` — one document per normalized username.
 
-1. Users authenticate through Flask.
-2. Login checks the submitted credentials against Firestore-backed account data.
-3. Standard page requests render server-side Jinja templates.
-4. Form submissions and JSON APIs validate input server-side and then read/write Firestore directly.
-5. Analytics pages call Firestore-backed API endpoints each time they refresh.
-6. If the backend or network is unavailable, the affected request fails visibly instead of falling back to stale local data.
+Each user document contains profile-level settings and access controls, plus transactional subcollections.
 
-## Balance Ledger Behavior
+## Recent cleanup and schema migration
 
-Balance rows use two related fields:
+- Balance entries now use explicit `txn_id` for transaction-linked rows.
+- The `type` field is enforced on balances: `txn` for transaction rows, `add` for manual adjustments, and `sync` for balance syncs.
+- Legacy `note="txn:<id>"` linkage is no longer used for transaction balance mapping.
+- Free-text balance notes are stored in `notes`; `note` is preserved only as a display alias for compatibility.
+- Temporary CSV export artifacts have been removed from the repository root.
 
-| Field | Meaning |
-|---|---|
-| `type` | The broad row source, such as `add`, `sync`, transaction edit/delete adjustment, or transaction-created balance movement. |
-| `balance_mode` | The editable balance mode marker: `add` or `sync`. |
+### `users/{username}` document fields
 
-The legacy value `sync` in balance data indicates an absolute balance anchor.
+- `categories` — map of category name → access type (`public` or `protected`).
+- `split_people` — array of split participant names.
+- `view_pass` — hashed password used for view-only login.
+- `admin_pass` — hashed admin password.
+- `password` — hashed normal login password.
+- Optional metadata fields are created/maintained by the app.
 
-## UI And Components
+### Per-user subcollections
 
-The app uses a shared base layout, shared CSS variables, Bootstrap classes, and Jinja macros in `templates/macros/ui.html`.
+- `transactions` — transaction records.
+- `balances` — balance entries.
+- `recurring` — recurring transaction rules.
+- `recurring_balances` — recurring balance rules.
+- `splits` — split definitions.
+- `trips` — trip entries.
 
-Reusable UI covers:
+### Transaction documents
 
-| Component area | Current status |
-|---|---|
-| Page shell/navbar | Shared through `templates/base.html`. |
-| Auth theme toggle | Shared macro. |
-| Protected/view-only badges | Shared macro. |
-| Compact badges | Shared macro and CSS variants. |
-| People picker | Shared macro and CSS. |
-| Choice panels | Shared macro and CSS. |
-| Tables | Shared `.table-shell`, `.table`, responsive labels, and action classes. |
-| Inputs/selects | Standard `.form-control` / `.form-select` styling. |
-| Modals | Bootstrap modal structure with shared app styling. |
+Each transaction document typically contains fields such as:
 
-## Security Notes
+- `amount`
+- `category`
+- `description`
+- `timestamp`
+- `created_at`
+- `updated_at`
+- `cost_type` (e.g. `individual`, `split`)
+- `split_id` (when a transaction belongs to a split)
 
-| Area | Current behavior |
-|---|---|
-| Flask secret | `FLASK_SECRET` is required for sessions/CSRF. |
-| Admin/full password | Stored as a Werkzeug-compatible password hash in Firestore. |
-| View-only password | Uses Firestore hash after it is set; can fall back to `VIEW_PASS` if no Firestore value exists. |
-| CSRF | Enabled for standard Flask forms and JSON requests where the frontend sends it. |
-| View-only writes | Protected controls are hidden and write routes check full login where required. |
-| Session cookies | HTTP-only, SameSite Lax, and Secure when `FORCE_HTTPS=true`. |
+### Split documents
 
-## Local Setup
+- `splits/{split_id}` store split metadata, including participant list and totals.
+- Each split may include a subcollection of entries or be referenced from transactions.
 
-Create and activate a virtual environment:
+### Trip documents
 
-```bash
+- `trips/{trip_id}` store trip details, including travel-related costs and assignment to splits.
+- Trips can create split expenses using `cost_type=split`.
+
+## Core feature flow
+
+### Authentication
+
+- Users log in with username and password via the `/login` route.
+- Authenticated sessions are stored in Flask session data.
+- Admin users may be provisioned via environment variables:
+  - `ADMIN_USER` — comma-separated list of admin usernames.
+  - `ADMIN_PASS` — fallback admin password used for env-admin logins.
+- View-only access is supported via `view_pass` and `VIEW_PASS` as a fallback.
+
+### View-only mode
+
+- Non-privileged view-only sessions can access read-only pages.
+- POST requests are blocked while `session['view_only']` is active.
+- Allowed view-only pages include dashboard and analytics routes.
+- This is useful for sharing financial summaries without edit access.
+
+### Transactions
+
+- Create / edit / delete transactions from `transactions.html`.
+- Transaction operations are routed through APIs like `/api/transactions/create`, `/api/transactions/<tx_id>/update`, and `/api/transactions/<tx_id>/delete`.
+- Duplicate form submissions are protected by a session-based timeout mechanism: identical payloads within a short period are rejected as duplicates.
+
+### Balances
+
+- Add balance rows on `balance.html`.
+- Sync balances with Firestore using `/api/balance/sync`.
+- Recurring balances are handled via `recurring_balances` and can generate future balance entries.
+
+### Recurring rules
+
+- Recurring transaction rules are managed in `recurring.html`.
+- Recurring balances are managed in a separate recurring balance form.
+- The app stores recurring rules in Firestore under `users/{username}/recurring`.
+
+### Splits and trips
+
+- `splits.html` lists active splits and split history.
+- `split_detail.html` shows individual split entries and participants.
+- `trips.html` lists trips and lets users assign costs to split payments.
+- Trip costs may be single-user or shared costs.
+- Split participants are managed from the management page.
+
+### Management
+
+- The management page (`/management`) controls:
+  - category names and default category selection
+  - split participant names
+  - view-only password configuration
+- Admin users can edit and delete categories or split persons.
+
+### Analytics
+
+- `analytics.html` and `balance_analytics.html` present charts for spending and balance trends.
+- The analytics pages use Firestore data pulled by the backend and rendered with Chart.js.
+
+## Page structure
+
+`templates/` includes:
+
+- `index.html` — main dashboard.
+- `login.html` — login form.
+- `view.html` — view-only entry.
+- `transactions.html` — transaction list and editor.
+- `balance.html` — balance entry page.
+- `recurring.html` — recurring planner.
+- `splits.html` — split overview.
+- `split_detail.html` — split details.
+- `trips.html` — trip management.
+- `management.html` — admin settings and user management.
+- `analytics.html` — spending analytics.
+- `balance_analytics.html` — balance analytics.
+- `forgot_password.html`, `reset_password.html`, `verify_otp.html` — admin password reset flow.
+- `base.html` — shared layout and UI macros.
+- `macros/ui.html` — shared UI components.
+
+## Static assets
+
+`static/` contains:
+
+- `css/styles.css` — app styling.
+- `js/analytics.js`, `js/balance_analytics.js`, `js/balance.js`, `js/flash.js`, `js/script.js`, `js/splits.js`, `js/utils.js` — UI helpers and page scripts.
+- `icons/` — icon assets.
+
+## Environment variables
+
+Set these for local development and deployment:
+
+- `FLASK_SECRET` — secret key for Flask sessions and CSRF protection.
+- `FIREBASE_CREDENTIALS` — JSON credentials string for Firestore service account.
+- `ADMIN_USER` — comma-separated admin usernames.
+- `ADMIN_PASS` — fallback admin password for env-admin users.
+- `VIEW_PASS` — optional fallback view-only password.
+- `FORCE_HTTPS` — if set, app may enforce HTTPS behavior.
+- `SESSION_LIFETIME_HOURS` — session expiry duration.
+- `FIRESTORE_TIMEOUT_SECONDS` — Firestore request timeout.
+- `ENABLE_DEBUG_ROUTES` — optionally enables debug routes.
+
+## Running locally
+
+1. Create and activate a virtual environment:
+
+```powershell
 python -m venv venv
 venv\Scripts\activate
 ```
 
-Install dependencies:
+2. Install dependencies:
 
-```bash
+```powershell
 pip install -r requirements.txt
 ```
 
-Set required environment variables:
+3. Configure environment variables:
 
-```bash
-set FLASK_SECRET=replace-with-long-random-secret
-set FIREBASE_CREDENTIALS={"type":"service_account",...}
-set ADMIN_USER=admin@example.com
-set VIEW_PASS=initial-view-only-password
+```powershell
+set FLASK_APP=app.py
+set FLASK_SECRET=replace-with-secret
+set FIREBASE_CREDENTIALS={"type":"service_account", ... }
+set ADMIN_USER=user@example.com
+set ADMIN_PASS=youradminpassword
+set VIEW_PASS=optionalviewpassword
 ```
 
-Run locally:
+4. Start the app:
 
-```bash
-set FLASK_APP=app.py
+```powershell
 flask run
 ```
 
-Open:
+5. Open the browser:
 
 ```text
 http://127.0.0.1:5000
+
+## Repair scripts
+
+- `scripts/repair_preview.py`: safe preview and optional apply for the balance->transaction repair flow. It now generates preview exports on demand and does not rely on repository-committed temporary CSV artifacts.
+- By default it runs as a dry-run and will not write to Firestore. To apply updates set the environment variable `ALLOW_FIRESTORE_WRITES=1` and run with `--apply`. The script enforces a conservative Firestore operation limit of 50000 combined reads/writes and will refuse to apply if the estimated operations exceed that limit.
 ```
 
-## Environment Variables
+## Deployment notes
 
-| Variable | Meaning |
-|---|---|
-| `FLASK_SECRET` | Required Flask session and CSRF signing secret. |
-| `FIREBASE_CREDENTIALS` | Required Firebase service account JSON string. |
-| `ADMIN_USER` | Comma-separated usernames allowed for admin password setup. |
-| `VIEW_PASS` | Optional initial view-only password fallback. |
-| `FORCE_HTTPS` | Set to `true` behind HTTPS so session cookies are secure. |
-| `SESSION_LIFETIME_HOURS` | Login duration. Default is 12. |
-| `OCCURRENCE_WINDOW_SECS` | Recurring duplicate-detection window. Default is 60. |
-| `FIRESTORE_TIMEOUT_SECONDS` | Timeout for critical Firestore reads. Default is 8. |
-| `ENABLE_DEBUG_ROUTES` | Optional diagnostics route switch. Keep unset or false in production. |
-| `LOG_LEVEL` | Flask log level. Default is INFO. |
-| `FLASK_DEBUG` | Local debug flag. Keep disabled in production. |
+- The app is compatible with WSGI servers like Gunicorn.
+- In production, do not store `FIREBASE_CREDENTIALS` in source control.
+- Use secure session secrets and HTTPS wherever possible.
+- Ensure Firestore region and project settings match your `FIREBASE_CREDENTIALS`.
 
-## Verification
+## Firestore schema reference
 
-Useful checks after changes:
+### Top-level collection
 
-```bash
-python -B -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8'), filename=p) for p in ('app.py','forms.py')]; print('python syntax ok')"
-python -B -c "from app import app; [app.jinja_env.get_template(t) for t in app.jinja_env.list_templates() if t.endswith('.html')]; print('templates ok')"
-node --check static\js\script.js
-node --check static\js\splits.js
-node --check static\js\analytics.js
-node --check static\js\balance_analytics.js
-node --check static\js\balance.js
-node --check static\js\flash.js
-```
+- `users` — one document per normalized username (email)
+
+### User document (`users/{username}`) fields
+
+- `password` — hashed login password
+- `view_pass` — hashed view-only password (optional)
+- `admin_pass` — hashed admin password (optional)
+- `categories` — map of category names to access type
+- `split_people` — array of split participant names
+- `default_category` — default category name (optional)
+
+### Per-user subcollections
+
+- `transactions` — expense/income records
+- `balances` — running balance entries
+- `recurring` — recurring transaction rules
+- `recurring_balances` — recurring balance rules
+- `splits` — split payment definitions
+- `trips` — trip records
+
+### Splits subcollections
+
+- `splits/{split_id}/entries` — individual split entries for each participant
+
+### Example Firestore paths
+
+- `users/nagpalmokesh@gmail.com`
+- `users/nagpalmokesh@gmail.com/transactions/{txn_id}`
+- `users/nagpalmokesh@gmail.com/splits/{split_id}`
+- `users/nagpalmokesh@gmail.com/splits/{split_id}/entries/{entry_id}`
+
+
+## Notes on duplicate request handling
+
+- The application no longer persists client action records in Firestore for duplicate detection.
+- Duplicate submissions are now blocked using a session-based payload signature and timeout window.
+- This prevents accidental double-posts on transaction creation/update/delete from the same session.
+
+## Troubleshooting
+
+- If login fails, verify `ADMIN_USER` and `ADMIN_PASS` values and the stored Firestore user record.
+- If Firestore access fails, confirm your `FIREBASE_CREDENTIALS` JSON is valid and has the correct permissions.
+- For session issues, ensure `FLASK_SECRET` is set and stable across app restarts.
+- If analytics or chart data are missing, refresh the page after adding transactions and balances.
+
+## Project files
+
+Key files and folders:
+
+- `app.py` — Flask backend and route handlers.
+- `forms.py` — Flask-WTF form definitions.
+- `requirements.txt` — Python dependencies.
+- `templates/` — HTML templates.
+- `static/` — CSS and JavaScript assets.
+- `README.md` — this documentation.
+
+---
+
+If you want, I can also add a separate `README-schema.md` with exact Firestore document field names and example payloads.
