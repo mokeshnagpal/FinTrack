@@ -830,8 +830,72 @@
     window.FinTrak.initUnifiedTable = initUnifiedTable;
 
     function initClientTableSorting() {
-        document.querySelectorAll('table:not(.server-sorted)').forEach(table => {
+        document.querySelectorAll('table:not(.server-sorted):not(.ajax-sorted)').forEach(table => {
             initUnifiedTable(table);
+        });
+    }
+
+    function initServerTableSorting() {
+        document.querySelectorAll('table.server-sorted').forEach(table => {
+            const headers = table.querySelectorAll('th.sortable-header');
+            const sortParam = table.getAttribute('data-sort-param') || 'sort';
+            const dirParam = table.getAttribute('data-dir-param') || 'dir';
+            const pageParam = table.getAttribute('data-page-param') || 'page';
+            
+            const params = new URLSearchParams(window.location.search);
+            const currentSort = params.get(sortParam);
+            const currentDir = params.get(dirParam);
+            
+            // Ensure client-side unified table behavior exists so we can sort/paginate in-memory
+            initUnifiedTable(table);
+
+            headers.forEach((header, colIndex) => {
+                const colKey = header.getAttribute('data-sort-key');
+                if (!colKey) return;
+
+                header.style.cursor = 'pointer';
+
+                let iconSpan = header.querySelector('.sort-icon');
+                if (!iconSpan) {
+                    iconSpan = document.createElement('span');
+                    iconSpan.className = 'sort-icon';
+                    header.appendChild(iconSpan);
+                }
+
+                // Initialize icon/state
+                header.classList.remove('active');
+                header.removeAttribute('data-dir');
+                iconSpan.innerHTML = doubleArrowSvg;
+
+                // Replace node to remove existing listeners
+                const newHeader = header.cloneNode(true);
+                header.parentNode.replaceChild(newHeader, header);
+
+                newHeader.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const currentDir = newHeader.getAttribute('data-dir') || 'none';
+                    const nextDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+                    // Reset other headers
+                    const freshHeaders = table.querySelectorAll('th.sortable-header');
+                    freshHeaders.forEach(h => {
+                        h.removeAttribute('data-dir');
+                        h.classList.remove('active');
+                        const hIcon = h.querySelector('.sort-icon');
+                        if (hIcon) hIcon.innerHTML = doubleArrowSvg;
+                    });
+
+                    newHeader.setAttribute('data-dir', nextDir);
+                    newHeader.classList.add('active');
+                    const freshIconSpan = newHeader.querySelector('.sort-icon');
+                    if (freshIconSpan) freshIconSpan.innerHTML = nextDir === 'asc' ? upArrowSvg : downArrowSvg;
+
+                    // Perform in-memory sort of visible rows (the table already contains the page-sized rows)
+                    sortRows(table, colIndex, nextDir);
+                    // Reset pagination to first page
+                    if (typeof table.refreshPagination === 'function') table.refreshPagination();
+                });
+            });
         });
     }
 
@@ -1014,6 +1078,390 @@
         });
     }
 
+    // --- Transactions AJAX search and pagination (minimal, non-breaking) ---
+    async function fetchJson(url, params = {}) {
+        const q = new URLSearchParams(params).toString();
+        const res = await fetch(url + (q ? `?${q}` : ''), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('Request failed ' + res.status);
+        return res.json();
+    }
+
+    async function postJson(url, payload = {}) {
+        const res = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || 'Request failed ' + res.status);
+        return data;
+    }
+
+    function getTransactionCategoryOptions(selectedValue = '') {
+        const categorySelect = document.querySelector('#addTransactionModal select[name="category"], select[name="category"]');
+        if (!categorySelect) return `<option value="${escapeHtml(selectedValue || 'Uncategorized')}">${escapeHtml(selectedValue || 'Uncategorized')}</option>`;
+        return Array.from(categorySelect.options).map((option) => {
+            const selected = String(option.value) === String(selectedValue) ? ' selected' : '';
+            return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(option.textContent || option.value)}</option>`;
+        }).join('');
+    }
+
+    function ensureAjaxTransactionEditModal() {
+        let modal = document.getElementById('ajaxTransactionEditModal');
+        if (modal) return modal;
+
+        modal = document.createElement('div');
+        modal.className = 'modal fade text-start';
+        modal.id = 'ajaxTransactionEditModal';
+        modal.tabIndex = -1;
+        modal.innerHTML = `
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Edit Transaction</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="ajaxTransactionEditForm">
+                            <input type="hidden" id="ajaxEditTxId">
+                            <div class="mb-3">
+                                <label class="form-label" for="ajaxEditTxAmount">Amount (Rs.)</label>
+                                <input class="form-control" id="ajaxEditTxAmount" name="amount" type="number" step="0.01" min="0.01" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="ajaxEditTxDescription">What was it for?</label>
+                                <input class="form-control" id="ajaxEditTxDescription" name="description" maxlength="120" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="ajaxEditTxCategory">Category</label>
+                                <select class="form-select" id="ajaxEditTxCategory" name="category"></select>
+                            </div>
+                            <div class="row g-2">
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="ajaxEditTxDate">Date (IST)</label>
+                                    <input class="form-control" id="ajaxEditTxDate" name="date" type="date" required>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="ajaxEditTxTime">Time (IST)</label>
+                                    <input class="form-control" id="ajaxEditTxTime" name="time" type="time" required>
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <button class="btn btn-primary w-100" type="submit">Update Transaction</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        modal.querySelector('#ajaxTransactionEditForm').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const txId = modal.querySelector('#ajaxEditTxId').value;
+            const payload = {
+                amount: Number(modal.querySelector('#ajaxEditTxAmount').value),
+                description: modal.querySelector('#ajaxEditTxDescription').value,
+                category: modal.querySelector('#ajaxEditTxCategory').value,
+                date: modal.querySelector('#ajaxEditTxDate').value,
+                time: modal.querySelector('#ajaxEditTxTime').value,
+            };
+
+            try {
+                await postJson(`/api/transactions/${encodeURIComponent(txId)}/update`, payload);
+                bootstrap.Modal.getOrCreateInstance(modal).hide();
+                showToast('Transaction updated', 'success');
+                window.FinTrak.transactionsSearch?.fetchPage(1);
+            } catch (error) {
+                showToast('Update failed', 'danger', error.message);
+            }
+        });
+
+        return modal;
+    }
+
+    async function openAjaxTransactionEdit(txId) {
+        const modal = ensureAjaxTransactionEditModal();
+        try {
+            const result = await fetchJson(`/api/transactions/${encodeURIComponent(txId)}/view`);
+            const txn = result.transaction || {};
+            modal.querySelector('#ajaxEditTxId').value = txId;
+            modal.querySelector('#ajaxEditTxAmount').value = txn.amount || '';
+            modal.querySelector('#ajaxEditTxDescription').value = txn.description || '';
+            modal.querySelector('#ajaxEditTxCategory').innerHTML = getTransactionCategoryOptions(txn.category || 'Uncategorized');
+            modal.querySelector('#ajaxEditTxDate').value = txn.date || '';
+            modal.querySelector('#ajaxEditTxTime').value = txn.time || '';
+            bootstrap.Modal.getOrCreateInstance(modal).show();
+        } catch (error) {
+            showToast('Unable to load transaction', 'danger', error.message);
+        }
+    }
+
+    async function deleteAjaxTransaction(txId) {
+        const confirmed = await window.FinTrak.confirm('Delete this transaction?', 'Delete');
+        if (!confirmed) return;
+        try {
+            await postJson(`/api/transactions/${encodeURIComponent(txId)}/delete`, {});
+            showToast('Transaction deleted', 'success');
+            window.FinTrak.transactionsSearch?.fetchPage(1);
+        } catch (error) {
+            showToast('Delete failed', 'danger', error.message);
+        }
+    }
+
+    function renderTransactionsRows(rows) {
+        const table = document.getElementById('transactionsTable');
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (!rows || rows.length === 0) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td colspan="6" class="text-center text-muted py-4">No transactions found.</td>';
+            tbody.appendChild(tr);
+            return;
+        }
+        for (const r of rows) {
+            const tr = document.createElement('tr');
+            const canManage = document.body.dataset.viewOnly !== 'true';
+            const isSplitTxn = Boolean(r.split_id);
+            const codeValue = String(r.id || '');
+            const splitUrl = String(r.split_url || (r.split_id ? `/splits/${encodeURIComponent(r.split_id)}` : ''));
+            const isSplitTxn = Boolean(r.split_id);
+            const modeBadge = isSplitTxn ? 'badge-split' : 'badge-add';
+            const modeLabel = isSplitTxn ? 'Split' : 'Txn';
+            let actions = '';
+            if (isSplitTxn) {
+                actions = `<div class="table-actions"><a class="btn btn-sm btn-outline-info" href="${escapeHtml(splitUrl)}">View Split</a></div>`;
+            } else if (canManage) {
+                actions = `<div class="table-actions">
+                    <button class="btn btn-sm btn-outline-primary ajax-txn-edit-btn" type="button" data-txn-id="${escapeHtml(r.id || '')}">Edit</button>
+                    <button class="btn btn-sm btn-danger ajax-txn-delete-btn" type="button" data-txn-id="${escapeHtml(r.id || '')}">Delete</button>
+                  </div>`;
+            } else {
+                actions = '<span class="badge">Read only</span>';
+            }
+            tr.innerHTML = `
+                <td data-label="Date"><small data-format-date>${escapeHtml(r.timestamp || '')}</small></td>
+                <td data-label="Mode"><span class="badge badge-compact ${modeBadge}">${modeLabel}</span></td>
+                <td data-label="Description"><small>${escapeHtml(r.description || '')}</small></td>
+                <td data-label="Category"><small>${escapeHtml(r.category || 'Uncategorized')}</small></td>
+                <td data-label="Amount (Rs.)" class="text-end"><small>${Number(r.amount).toFixed(2)}</small></td>
+                <td data-label="Actions" class="text-end">${actions}</td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
+    function renderSavedRows(rows) {
+        const table = document.getElementById('savedTransactionsTable');
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (!rows || rows.length === 0) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td colspan="5" class="text-center text-muted py-4">No saved transactions found.</td>';
+            tbody.appendChild(tr);
+            return;
+        }
+        for (const r of rows) {
+            const tr = document.createElement('tr');
+            const codeValue = String(r.id || '');
+            const actions = `<div class="table-actions">
+                    <button class="btn btn-sm btn-outline-primary ajax-saved-edit-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Edit</button>
+                    <button class="btn btn-sm btn-danger ajax-saved-delete-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Delete</button>
+                    <button class="btn btn-sm btn-success ajax-saved-submit-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Submit</button>
+                  </div>`;
+            tr.innerHTML = `
+                <td data-label="Date saved"><small data-format-date>${escapeHtml(r.timestamp || '')}</small></td>
+                <td data-label="Description"><small>${escapeHtml(r.description || '')}</small></td>
+                <td data-label="Category"><small>${escapeHtml(r.category || 'Uncategorized')}</small></td>
+                <td data-label="Amount (Rs.)" class="text-end"><small>${Number(r.amount).toFixed(2)}</small></td>
+                <td data-label="Actions" class="text-end">${actions}</td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
+    document.addEventListener('click', (event) => {
+        const savedEditBtn = event.target.closest('.ajax-saved-edit-btn');
+        if (savedEditBtn) {
+            // For now open the server-side edit modal by navigating to transactions page with edit params
+            const tid = savedEditBtn.dataset.templateId;
+            const params = new URLSearchParams(window.location.search);
+            params.set('saved_edit', 'true');
+            params.set('saved_edit_id', tid);
+            window.location.search = params.toString();
+            return;
+        }
+
+        const savedDeleteBtn = event.target.closest('.ajax-saved-delete-btn');
+        if (savedDeleteBtn) {
+            deleteAjaxSaved(savedDeleteBtn.dataset.templateId);
+            return;
+        }
+
+        const savedSubmitBtn = event.target.closest('.ajax-saved-submit-btn');
+        if (savedSubmitBtn) {
+            submitAjaxSaved(savedSubmitBtn.dataset.templateId);
+            return;
+        }
+
+        const editBtn = event.target.closest('.ajax-txn-edit-btn');
+        if (editBtn) {
+            openAjaxTransactionEdit(editBtn.dataset.txnId);
+            return;
+        }
+
+        const deleteBtn = event.target.closest('.ajax-txn-delete-btn');
+        if (deleteBtn) {
+            deleteAjaxTransaction(deleteBtn.dataset.txnId);
+        }
+    });
+
+    function renderAjaxPagination(container, currentPage, totalPages) {
+        if (!container) return;
+        container.innerHTML = '';
+        if (totalPages <= 1) return;
+        const ul = document.createElement('ul');
+        ul.className = 'pagination pagination-sm mb-0';
+
+        function addButton(label, page, disabled, active) {
+            const li = document.createElement('li');
+            li.className = 'page-item ' + (disabled ? 'disabled' : '') + ' ' + (active ? 'active' : '');
+            const btn = document.createElement('button');
+            btn.className = 'page-link';
+            btn.type = 'button';
+            btn.dataset.page = String(page);
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (disabled || active) return;
+                const target = Number(btn.dataset.page);
+                window.FinTrak.transactionsSearch && window.FinTrak.transactionsSearch.fetchPage(target);
+            });
+            li.appendChild(btn);
+            ul.appendChild(li);
+        }
+
+        addButton('Prev', Math.max(1, currentPage - 1), currentPage === 1, false);
+        const start = Math.max(1, currentPage - 2);
+        const end = Math.min(totalPages, currentPage + 2);
+        for (let p = start; p <= end; p++) addButton(String(p), p, false, p === currentPage);
+        addButton('Next', Math.min(totalPages, currentPage + 1), currentPage === totalPages, false);
+
+        container.appendChild(ul);
+    }
+
+    // Expose a small transactions search helper on the global FinTrak
+    window.FinTrak = window.FinTrak || {};
+    window.FinTrak.transactionsSearch = {
+        lastQuery: '',
+        lastTotal: 0,
+        async search(query) {
+            const serverContainer = document.getElementById('transactionsPaginationServer');
+            const ajaxContainer = document.getElementById('transactionsPaginationAjax');
+            try {
+                const countRes = await fetchJson('/api/transactions/search/count', { query });
+                const total = Number(countRes.totalRows || 0);
+                this.lastQuery = query;
+                this.lastTotal = total;
+                const totalPages = Math.max(1, Math.ceil(total / 12));
+                // show/hide pagination containers
+                if (total > 0) {
+                    if (serverContainer) serverContainer.classList.add('d-none');
+                    if (ajaxContainer) ajaxContainer.classList.remove('d-none');
+                    renderAjaxPagination(ajaxContainer, 1, totalPages);
+                } else {
+                    if (serverContainer) serverContainer.classList.remove('d-none');
+                    if (ajaxContainer) ajaxContainer.classList.add('d-none');
+                }
+                // fetch first page
+                await this.fetchPage(1);
+            } catch (err) {
+                console.error('Search error', err);
+            }
+        },
+        async fetchPage(page) {
+            const query = this.lastQuery || '';
+            const ajaxContainer = document.getElementById('transactionsPaginationAjax');
+            try {
+                const res = await fetchJson('/api/transactions/search', { query, page, pageSize: 12 });
+                const rows = res.rows || [];
+                const total = Number(res.totalRows || 0);
+                const totalPages = Math.max(1, Math.ceil(total / 12));
+                renderTransactionsRows(rows);
+                renderAjaxPagination(ajaxContainer, page, totalPages);
+            } catch (err) {
+                console.error('Page fetch error', err);
+            }
+        }
+    };
+
+    window.FinTrak.savedTransactions = {
+        lastTotal: 0,
+        lastPage: 1,
+        async init() {
+            try {
+                const countRes = await fetchJson('/api/saved_transactions/count');
+                const total = Number(countRes.totalRows || 0);
+                this.lastTotal = total;
+                const totalPages = Math.max(1, Math.ceil(total / 12));
+                const serverContainer = document.getElementById('savedPaginationServer');
+                const ajaxContainer = document.getElementById('savedPaginationAjax');
+                if (total > 0) {
+                    if (serverContainer) serverContainer.classList.add('d-none');
+                    if (ajaxContainer) ajaxContainer.classList.remove('d-none');
+                    renderAjaxPagination(ajaxContainer, 1, totalPages);
+                } else {
+                    if (serverContainer) serverContainer.classList.remove('d-none');
+                    if (ajaxContainer) ajaxContainer.classList.add('d-none');
+                }
+                await this.fetchPage(1);
+            } catch (err) {
+                console.error('Saved transactions init error', err);
+            }
+        },
+        async fetchPage(page) {
+            try {
+                const res = await fetchJson('/api/saved_transactions', { page, pageSize: 12 });
+                const rows = res.rows || [];
+                const total = Number(res.totalRows || 0);
+                const totalPages = Math.max(1, Math.ceil(total / 12));
+                renderSavedRows(rows);
+                const ajaxContainer = document.getElementById('savedPaginationAjax');
+                renderAjaxPagination(ajaxContainer, page, totalPages);
+                this.lastPage = page;
+            } catch (err) {
+                console.error('Saved transactions page fetch error', err);
+            }
+        }
+    };
+
+    async function deleteAjaxSaved(templateId) {
+        const confirmed = await window.FinTrak.confirm('Delete this saved template?', 'Delete');
+        if (!confirmed) return;
+        try {
+            await postJson(`/api/saved_transactions/${encodeURIComponent(templateId)}/delete`, {});
+            showToast('Saved template deleted', 'success');
+            window.FinTrak.savedTransactions.fetchPage(window.FinTrak.savedTransactions.lastPage || 1);
+        } catch (error) {
+            showToast('Delete failed', 'danger', error.message);
+        }
+    }
+
+    async function submitAjaxSaved(templateId) {
+        try {
+            await postJson(`/api/saved_transactions/${encodeURIComponent(templateId)}/submit`, {});
+            showToast('Saved template submitted', 'success');
+            window.FinTrak.transactionsSearch?.fetchPage(1);
+        } catch (error) {
+            showToast('Submit failed', 'danger', error.message);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         formatDateElements();
         initCopyButtons();
@@ -1023,6 +1471,7 @@
         initModalFormDismiss();
         initMobileNavbarDrawer();
         initClientTableSorting();
+        initServerTableSorting();
         initQueryParamModals();
         initParticipantChecklistValidation();
         autoDismissInlineAlerts();

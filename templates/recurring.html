@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge, friendly_date %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, badge, friendly_date, pagination %}
 {% block content %}
 
 {% if not session.get('view_only') %}
@@ -14,19 +14,19 @@
 <div class="row g-3 mb-5">
     <div class="col-12">
         <h4 class="page-title mb-3">Recurring Expenses</h4>
-        {% call table_shell() %}
+        {% call table_shell(extra_class='server-sorted') %}
             <thead>
                 <tr>
-                    <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Description <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Last Applied <span class="sort-icon">&#8597;</span></th>
+                    <th class="sortable-header" data-sort-key="amount">Amount</th>
+                    <th class="sortable-header" data-sort-key="description">Description</th>
+                    <th class="sortable-header" data-sort-key="start">Start</th>
+                    <th class="sortable-header" data-sort-key="frequency">Frequency</th>
+                    <th class="sortable-header" data-sort-key="last_applied">Last Applied</th>
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                {% for r in recs %}
+                {% for r in recs.items %}
                 {% set rid = (r.id or r._id) %}
                 <tr>
                     <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
@@ -86,25 +86,32 @@
                 {% endfor %}
             </tbody>
         {% endcall %}
+
+        <div id="recsPagination">
+            {{ pagination(recs.page, recs.total_pages) }}
+            <div class="text-center text-muted small mt-2">
+                Showing <strong>{{ ((recs.page - 1) * recs.per_page) + 1 if recs.total_items > 0 else 0 }}</strong>-<strong>{{ [recs.page * recs.per_page, recs.total_items] | min }}</strong> of <strong>{{ recs.total_items }}</strong>
+            </div>
+        </div>
     </div>
 </div>
 
 <div class="row g-3">
     <div class="col-12">
         <h4 class="page-title mb-3">Recurring Balance Adds</h4>
-        {% call table_shell() %}
+        {% call table_shell(extra_class='server-sorted', attrs={'data-sort-param': 'balance_sort', 'data-dir-param': 'balance_dir', 'data-page-param': 'balance_page'}) %}
             <thead>
                 <tr>
-                    <th class="sortable-header">Amount <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Note <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Start <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Frequency <span class="sort-icon">&#8597;</span></th>
-                    <th class="sortable-header">Last Added <span class="sort-icon">&#8597;</span></th>
+                    <th class="sortable-header" data-sort-key="amount">Amount</th>
+                    <th class="sortable-header" data-sort-key="description">Note</th>
+                    <th class="sortable-header" data-sort-key="start">Start</th>
+                    <th class="sortable-header" data-sort-key="frequency">Frequency</th>
+                    <th class="sortable-header" data-sort-key="last_applied">Last Added</th>
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                {% for r in balance_recs %}
+                {% for r in balance_recs.items %}
                 {% set rid = (r.id or r._id) %}
                 <tr>
                     <td data-label="Amount"><small>{{ '%.2f'|format(r.amount) }}</small></td>
@@ -163,6 +170,13 @@
                 {% endfor %}
             </tbody>
         {% endcall %}
+
+        <div id="balancePagination">
+            {{ pagination(balance_recs.page, balance_recs.total_pages) }}
+            <div class="text-center text-muted small mt-2">
+                Showing <strong>{{ ((balance_recs.page - 1) * balance_recs.per_page) + 1 if balance_recs.total_items > 0 else 0 }}</strong>-<strong>{{ [balance_recs.page * balance_recs.per_page, balance_recs.total_items] | min }}</strong> of <strong>{{ balance_recs.total_items }}</strong>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -206,5 +220,37 @@
     </form>
 {% endcall %}
 {% endif %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Recs pagination click
+    document.querySelectorAll('#recsPagination .pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (page) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('page', page);
+                window.location.search = params.toString();
+            }
+        });
+    });
+
+    // Balance pagination click
+    document.querySelectorAll('#balancePagination .pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (page) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('balance_page', page);
+                window.location.search = params.toString();
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
 
 {% endblock %}

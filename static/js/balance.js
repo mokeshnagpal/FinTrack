@@ -1,4 +1,5 @@
 const HISTORY_DISPLAY_LIMIT = Number(window.FinTrakConstants?.balance_history_table_limit || 12);
+let currentBalancePage = 1;
 
 async function fetchJSON(url, params = {}, opts = {}) {
   const query = new URLSearchParams(params).toString();
@@ -41,12 +42,26 @@ function formatDisplayNote(note) {
 
 function normalizeBalanceMode(entry) {
   const mode = String(entry?.balance_mode || '').toLowerCase();
-  if (mode === 'sync' || mode === 'add') return mode;
+  if (mode === 'sync' || mode === 'add' || mode === 'sub' || mode === 'add-rec' || mode === 'sub-rec' || mode === 'split') return mode;
   return String(entry?.type || '').toLowerCase() === 'sync' ? 'sync' : 'add';
 }
 
 function modeLabel(mode) {
-  return mode === 'sync' ? 'Sync' : 'Add';
+  if (mode === 'sync') return 'Sync';
+  if (mode === 'split') return 'Split';
+  if (mode === 'sub') return 'Subtract';
+  if (mode === 'add-rec') return 'Add-Rec';
+  if (mode === 'sub-rec') return 'Sub-Rec';
+  return 'Add';
+}
+
+function modeBadgeClass(mode) {
+  if (mode === 'sync') return 'badge-sync';
+  if (mode === 'split') return 'badge-split';
+  if (mode === 'sub') return 'badge-sub';
+  if (mode === 'add-rec') return 'badge-add-rec';
+  if (mode === 'sub-rec') return 'badge-sub-rec';
+  return 'badge-add';
 }
 
 function closeModal(id) {
@@ -78,11 +93,88 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
   const deleteBtn = document.getElementById('deleteTransactionBtn');
   const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
   let currentTxnId = null;
+  let currentTxnData = null;
+  const viewTransactionModal = document.getElementById('viewTransactionModal');
+  const splitLink = document.getElementById('txnSplitLink');
+
+  function setViewModalBlurred(blurred) {
+    viewTransactionModal?.classList.toggle('modal-background-blur', blurred);
+  }
+
+  ['editTransactionModal', 'deleteTransactionConfirmModal'].forEach((modalId) => {
+    const childModal = document.getElementById(modalId);
+    childModal?.addEventListener('hidden.bs.modal', () => setViewModalBlurred(false));
+  });
 
   if (editBtn) {
     editBtn.addEventListener('click', () => {
-      if (currentTxnId) {
-        window.location.href = `/edit/${encodeURIComponent(currentTxnId)}`;
+      if (currentTxnId && currentTxnData) {
+        setViewModalBlurred(true);
+
+        document.getElementById('editTxId').value = currentTxnId;
+        document.getElementById('editTxAmount').value = currentTxnData.amount;
+        document.getElementById('editTxDescription').value = currentTxnData.description;
+        document.getElementById('editTxCategory').value = currentTxnData.category;
+        document.getElementById('editTxDate').value = currentTxnData.date;
+        document.getElementById('editTxTime').value = currentTxnData.time;
+
+        // Trigger change event on category select to update any custom enhanced select UI
+        const catSelect = document.getElementById('editTxCategory');
+        if (catSelect) {
+          catSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        const editModal = document.getElementById('editTransactionModal');
+        if (editModal) {
+          if (window.bootstrap?.Modal) {
+            new window.bootstrap.Modal(editModal).show();
+          } else {
+            editModal.classList.add('show');
+            editModal.style.display = 'block';
+          }
+        }
+      }
+    });
+  }
+
+  const editTxnForm = document.getElementById('editTransactionForm');
+  if (editTxnForm) {
+    editTxnForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const txId = document.getElementById('editTxId').value;
+      const amount = parseFloat(document.getElementById('editTxAmount').value);
+      const description = document.getElementById('editTxDescription').value;
+      const category = document.getElementById('editTxCategory').value;
+      const date = document.getElementById('editTxDate').value;
+      const time = document.getElementById('editTxTime').value;
+
+      if (!txId || Number.isNaN(amount) || amount <= 0 || !description.trim()) {
+        showToast('Please fill all required fields correctly.', 'warning');
+        return;
+      }
+
+      try {
+        const payload = { amount, description, category, date, time };
+        const result = await fetchJSON(`/api/transactions/${encodeURIComponent(txId)}/update`, {}, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (result.ok) {
+          closeModal('editTransactionModal');
+          closeModal('viewTransactionModal');
+          setViewModalBlurred(false);
+          showToast('Transaction updated successfully.', 'success');
+          if (historyBody && balanceTimestampEl && currentBalanceEl) {
+            await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, Boolean(document.getElementById('showTxnsCheckbox')?.checked));
+          }
+        } else {
+          showToast(result.error || 'Failed to update transaction.', 'danger');
+        }
+      } catch (error) {
+        console.error('Update failed', error);
+        showToast('Update failed: ' + error.message, 'danger');
       }
     });
   }
@@ -91,6 +183,7 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
     deleteBtn.addEventListener('click', () => {
       const confirmModal = document.getElementById('deleteTransactionConfirmModal');
       if (confirmModal && window.bootstrap?.Modal) {
+        setViewModalBlurred(true);
         new window.bootstrap.Modal(confirmModal).show();
       }
     });
@@ -106,8 +199,9 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
           body: JSON.stringify({}),
         });
         if (result.ok) {
-          closeModal('viewTransactionModal');
           closeModal('deleteTransactionConfirmModal');
+          closeModal('viewTransactionModal');
+          setViewModalBlurred(false);
           showToast('Transaction deleted.', 'success');
           if (historyBody && balanceTimestampEl && currentBalanceEl) {
             await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, Boolean(document.getElementById('showTxnsCheckbox')?.checked));
@@ -124,6 +218,7 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
 
   window.openTransactionModal = async function(txnId) {
     currentTxnId = txnId;
+    currentTxnData = null;
     const modal = document.getElementById('viewTransactionModal');
     if (!modal) {
       console.error('Transaction modal not found');
@@ -138,11 +233,20 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
       }
 
       const txn = result.transaction;
+      currentTxnData = txn;
       document.getElementById('txnDescription').textContent = escapeHtml(txn.description || '-');
       document.getElementById('txnAmount').textContent = rupee(txn.amount);
       document.getElementById('txnCategory').textContent = escapeHtml(txn.category || '-');
       document.getElementById('txnDate').textContent = txn.date || '-';
       document.getElementById('txnTime').textContent = txn.time || '-';
+      const isSplitTxn = Boolean(txn.split_id);
+      if (editBtn) editBtn.classList.toggle('d-none', isSplitTxn);
+      if (deleteBtn) deleteBtn.classList.toggle('d-none', isSplitTxn);
+      if (splitLink) {
+        splitLink.classList.toggle('d-none', !isSplitTxn);
+        splitLink.href = txn.split_url || '#';
+        splitLink.textContent = txn.split_title ? `View Split: ${txn.split_title}` : 'View Split';
+      }
 
       if (window.bootstrap?.Modal) {
         new window.bootstrap.Modal(modal).show();
@@ -158,10 +262,81 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
 }
 
 
-async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false) {
+function renderBalancePagination(pagContainer, currentPage, totalPages, totalItems, perPage, onPageClick) {
+  if (!pagContainer) return;
+  if (totalPages <= 1) {
+    pagContainer.innerHTML = '';
+    pagContainer.classList.add('is-hidden');
+    return;
+  }
+  
+  pagContainer.classList.remove('is-hidden');
+
+  function pageItems(cur, tot) {
+    const p = [];
+    const add = (v) => { if (p[p.length - 1] !== v) p.push(v); };
+    add(1);
+    const start = Math.max(2, cur - 1);
+    const end = Math.min(tot - 1, cur + 1);
+    if (start > 2) add('ellipsis-left');
+    for (let i = start; i <= end; i++) add(i);
+    if (end < tot - 1) add('ellipsis-right');
+    if (tot > 1) add(tot);
+    return p;
+  }
+
+  function pageButton(label, pg, disabled = false, active = false, extraClass = '') {
+    const safeLabel = window.FinTrak?.escapeHtml ? window.FinTrak.escapeHtml(label) : label;
+    return `
+      <li class="page-item ${disabled ? 'disabled' : ''} ${active ? 'active' : ''} ${extraClass}">
+        <a class="page-link" href="#" data-page="${pg}" aria-label="${safeLabel}">${safeLabel}</a>
+      </li>
+    `;
+  }
+
+  const showingStart = (currentPage - 1) * perPage + 1;
+  const showingEnd = Math.min(currentPage * perPage, totalItems);
+
+  const pageLinks = pageItems(currentPage, totalPages).map((item) => {
+    if (String(item).startsWith('ellipsis')) {
+      return '<li class="page-item ellipsis"><span class="page-link">...</span></li>';
+    }
+    return pageButton(String(item), item, false, item === currentPage);
+  }).join('');
+
+  pagContainer.innerHTML = `
+    <div class="table-pagination-summary text-muted small">Showing <strong>${showingStart}</strong>-<strong>${showingEnd}</strong> of <strong>${totalItems}</strong></div>
+    <ul class="pagination pagination-sm mb-0">
+      ${pageButton('Prev', currentPage - 1, currentPage === 1, false, 'nav-btn')}
+      ${pageLinks}
+      ${pageButton('Next', currentPage + 1, currentPage === totalPages, false, 'nav-btn')}
+    </ul>
+  `;
+
+  pagContainer.querySelectorAll('.page-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (link.closest('.disabled') || link.closest('.ellipsis')) return;
+      const targetPage = parseInt(link.getAttribute('data-page'));
+      if (!isNaN(targetPage) && targetPage !== currentPage) {
+        onPageClick(targetPage);
+      }
+    });
+  });
+}
+
+async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false, page = 1) {
   let data;
+  const urlParams = new URLSearchParams(window.location.search);
+  const sort = urlParams.get('sort') || 'when';
+  const dir = urlParams.get('dir') || 'desc';
   try {
-    data = await fetchJSON('/api/balance_current', { show_txns: showTransactions ? 'true' : 'false' });
+    data = await fetchJSON('/api/balance_current', {
+      show_txns: showTransactions ? 'true' : 'false',
+      page: page,
+      sort: sort,
+      dir: dir
+    });
   } catch (error) {
     console.error('Failed to fetch balance history', error);
     throw error;
@@ -176,25 +351,22 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, sho
 
   if (!historyBody) return;
 
-  // Filter visible history (respect the showTransactions toggle)
-  const visibleHistory = (data.history || []).filter((entry) => {
-    const type = String(entry.type || '').toLowerCase();
-    return showTransactions || type === 'add' || type === 'sync';
-  });
+  const visibleHistory = data.history || [];
 
-  // Render all visible rows into the tbody; pagination/sorting handled by initUnifiedTable
-  console.debug('balance.refreshAll: rendering', visibleHistory.length, 'rows, showTransactions=', showTransactions);
+  console.debug('balance.refreshAll: rendering', visibleHistory.length, 'rows, showTransactions=', showTransactions, 'page=', page);
   historyBody.innerHTML = '';
   visibleHistory.forEach((entry) => {
     const tr = document.createElement('tr');
     const type = String(entry.type || '').toLowerCase();
+    const source = String(entry.source || entry.type || '').toLowerCase();
     const mode = normalizeBalanceMode(entry);
     const viewOnly = document.body.dataset.viewOnly === 'true';
     const isManual = type === 'add' || type === 'sync';
-    const hasActions = !viewOnly && isManual;
+    const hasActions = !viewOnly && (isManual || (mode === 'add-rec' && source === 'bnc'));
     const noteText = entry.note_display || entry.note || '';
     const transactionSearch = entry.transaction_search_text || entry.transaction_id || noteText;
 
+    const splitUrl = entry.split_url || (entry.split_id ? `/splits/${encodeURIComponent(entry.split_id)}` : '');
     const actionButtons = hasActions
       ? `<button class="btn btn-sm btn-outline-primary balance-edit-btn me-1"
             data-id="${escapeAttr(entry.id || '')}"
@@ -214,13 +386,15 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, sho
             data-note="${escapeAttr(entry.note || '')}">
             Delete
          </button>`
+      : (splitUrl
+          ? `<a class="btn btn-sm btn-outline-info" href="${escapeAttr(splitUrl)}">View Split</a>`
       : (entry.transaction_id
           ? `<button class="btn btn-sm btn-outline-secondary balance-view-transaction-btn" data-txn-id="${escapeAttr(entry.transaction_id || '')}">View Txn</button>`
-          : `<span class="text-muted small">${viewOnly ? 'View-only' : '-'}</span>`);
+          : `<span class="text-muted small">${viewOnly ? 'View-only' : '-'}</span>`));
 
     tr.innerHTML = `<td data-label="When">${formatDisplayDate(entry.timestamp || '')}</td>
-                    <td data-label="Source">${escapeHtml(entry.type || '')}</td>
-                    <td data-label="Mode"><span class="badge badge-compact ${mode === 'sync' ? 'badge-sync' : 'badge-add'}">${modeLabel(mode)}</span></td>
+            <td data-label="Source">${escapeHtml(source || '')}</td>
+                    <td data-label="Mode"><span class="badge badge-compact ${modeBadgeClass(mode)}">${modeLabel(mode)}</span></td>
                     <td data-label="Delta" class="text-end">${formatNumber(entry.delta)}</td>
                     <td data-label="Balance" class="text-end">${formatNumber(entry.balance)}</td>
                     <td data-label="Note">${escapeHtml(formatDisplayNote(noteText))}</td>
@@ -228,19 +402,11 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, sho
     historyBody.appendChild(tr);
   });
 
-  const parentTable = historyBody.closest('table');
-  if (parentTable && window.FinTrak && typeof window.FinTrak.initUnifiedTable === 'function') {
-    console.debug('balance.refreshAll: parentTable.dataset.unifiedInitialized=', parentTable.dataset.unifiedInitialized);
-    // If the unified table has already been initialized earlier, use its
-    // refreshPagination method to avoid re-initializing and losing state.
-    if (parentTable.dataset.unifiedInitialized === 'true' && typeof parentTable.refreshPagination === 'function') {
-      console.debug('balance.refreshAll: calling parentTable.refreshPagination()');
-      parentTable.refreshPagination();
-    } else {
-      console.debug('balance.refreshAll: calling initUnifiedTable()');
-      window.FinTrak.initUnifiedTable(parentTable);
-    }
-  }
+  const pagContainer = document.getElementById('paginationContainer');
+  renderBalancePagination(pagContainer, data.page, data.total_pages, data.total_items, data.per_page, (targetPage) => {
+    refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions, targetPage)
+      .catch((error) => showToast('Page load failed', 'danger', error.message));
+  });
 }
 
 
@@ -260,7 +426,7 @@ function ensureEditModal() {
       <input type="hidden" id="editBalanceOriginalBalance">
       <div class="mb-3">
         <label class="form-label" for="editBalanceMode">Mode</label>
-        <select id="editBalanceMode" class="form-select">
+        <select id="editBalanceMode" class="form-select balance-mode-select">
           <option value="add">Add / Change Amount</option>
           <option value="sync">Sync / Absolute Balance</option>
         </select>
@@ -354,7 +520,8 @@ function syncEditModeFields(modal, resetValue = false) {
 function openEditModal(button) {
   const modal = ensureEditModal();
   const type = button.dataset.type;
-  const mode = button.dataset.mode || (type === 'sync' ? 'sync' : 'add');
+  const rawMode = button.dataset.mode || (type === 'sync' ? 'sync' : 'add');
+  const mode = rawMode === 'sync' ? 'sync' : 'add';
   modal.querySelector('#editBalanceId').value = button.dataset.id || '';
   modal.querySelector('#editBalanceSourceType').value = type || '';
   modal.querySelector('#editBalanceMode').value = mode;
@@ -401,8 +568,9 @@ async function saveEditModal(currentBalanceEl, balanceTimestampEl, historyBody) 
   }
 }
 
-async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false) {
-  await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions);
+async function refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions = false, page = 1) {
+  currentBalancePage = page;
+  await refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions, page);
 }
 
 async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, historyBody) {
@@ -478,41 +646,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  if (syncBtn && syncAmount) {
-    syncBtn.addEventListener('click', async () => {
-      if (isEmptyInput(syncAmount)) {
-        showToast('Enter a balance to sync.', 'warning');
-        return;
-      }
+  async function handleSyncClick() {
+    if (!syncAmount) {
+      console.warn('Sync amount input not found');
+      return;
+    }
 
-      const balance = parseFloat(syncAmount.value);
-      if (Number.isNaN(balance) || !Number.isFinite(balance) || Math.abs(balance) > 999999999) {
-        showToast('Enter a valid balance value to sync.', 'warning');
-        return;
-      }
-      const syncNoteError = noteError(syncNote ? syncNote.value : '');
-      if (syncNoteError) {
-        showToast(syncNoteError, 'warning');
-        return;
-      }
+    if (isEmptyInput(syncAmount)) {
+      showToast('Enter a balance to sync.', 'warning');
+      return;
+    }
 
-      try {
-        const result = await fetchJSON('/api/balance/sync', {}, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ balance, note: syncNote ? syncNote.value || '' : '' }),
-        });
-        showToast(`Balance synced to ${rupee(result.balance)}`, 'success', `Delta ${formatNumber(result.delta)}`);
-        syncAmount.value = '';
-        if (syncNote) syncNote.value = '';
-        closeModal('syncBalanceModal');
-        await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());
-      } catch (error) {
-        console.error('sync failed', error);
-        showToast('Sync failed', 'danger', error.message);
-      }
-    });
+    const balance = parseFloat(syncAmount.value);
+    if (Number.isNaN(balance) || !Number.isFinite(balance) || Math.abs(balance) > 999999999) {
+      showToast('Enter a valid balance value to sync.', 'warning');
+      return;
+    }
+    const syncNoteError = noteError(syncNote ? syncNote.value : '');
+    if (syncNoteError) {
+      showToast(syncNoteError, 'warning');
+      return;
+    }
+
+    try {
+      const result = await fetchJSON('/api/balance/sync', {}, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ balance, note: syncNote ? syncNote.value || '' : '' }),
+      });
+      showToast(`Balance synced to ${rupee(result.balance)}`, 'success', `Delta ${formatNumber(result.delta)}`);
+      syncAmount.value = '';
+      if (syncNote) syncNote.value = '';
+      closeModal('syncBalanceModal');
+      await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions());
+    } catch (error) {
+      console.error('sync failed', error);
+      showToast('Sync failed', 'danger', error.message);
+    }
   }
+
+  if (syncBtn) {
+    syncBtn.addEventListener('click', handleSyncClick);
+  }
+
+  document.addEventListener('click', async (event) => {
+    const target = event.target.closest('#syncBtn');
+    if (!target) return;
+    event.preventDefault();
+    await handleSyncClick();
+  });
 
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => (

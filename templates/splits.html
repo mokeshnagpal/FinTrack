@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, edit_button, delete_button, friendly_date %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, edit_button, delete_button, friendly_date, pagination %}
 {% block content %}
 
 {% set header_desc = 'Open shared-spend bill splits and review live split totals in read-only mode.' if session.get('view_only') else 'Create trip or shared-spend bill splits, and open each split to manage entries.' %}
@@ -14,17 +14,17 @@
 
 <div class="row g-3">
     <div class="col-12">
-        {% call table_shell() %}
+        {% call table_shell(extra_class='server-sorted') %}
             <thead>
                 <tr>
-                    <th class="sortable-header">Name <span class="sort-icon">&#8597;</span></th>
+                    <th class="sortable-header" data-sort-key="name">Name</th>
                     <th class="sortable-header">Connected Trip</th>
-                    <th class="sortable-header">Updated <span class="sort-icon">&#8597;</span></th>
+                    <th class="sortable-header" data-sort-key="updated">Updated</th>
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                {% for split in splits %}
+                {% for split in splits.items %}
                 {% set sid = split.id or split._id %}
                 <tr>
                     <td data-label="Name">
@@ -108,6 +108,27 @@
                 {% endfor %}
             </tbody>
         {% endcall %}
+
+        {{ pagination(splits.page, splits.total_pages) }}
+        <div class="text-center text-muted small mt-2">
+            Showing <strong>{{ ((splits.page - 1) * splits.per_page) + 1 if splits.total_items > 0 else 0 }}</strong>-<strong>{{ [splits.page * splits.per_page, splits.total_items] | min }}</strong> of <strong>{{ splits.total_items }}</strong>
+        </div>
+
+        <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.pagination button.page-link').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const page = btn.dataset.page;
+                    if (page) {
+                        const params = new URLSearchParams(window.location.search);
+                        params.set('page', page);
+                        window.location.search = params.toString();
+                    }
+                });
+            });
+        });
+        </script>
     </div>
 </div>
 

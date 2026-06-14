@@ -65,17 +65,18 @@
                 </div>
 
                 <div class="tab-pane fade" id="rawPane">
-                    {% call table_shell(extra_class='analytics-table-wrap', id='rawTable', attrs={'data-can-edit': 'true' if not session.get('view_only') else 'false'}) %}
+                    {% call table_shell(extra_class='analytics-table-wrap ajax-sorted', id='rawTable', attrs={'data-can-edit': 'true' if not session.get('view_only') else 'false'}) %}
                         <thead>
                             <tr>
-                                <th class="sortable-header">When</th>
-                                <th class="sortable-header">Description</th>
-                                <th class="sortable-header">Category</th>
-                                <th class="sortable-header text-end">Amount</th>
+                                <th class="sortable-header" data-sort-key="when">When</th>
+                                <th class="sortable-header" data-sort-key="description">Description</th>
+                                <th class="sortable-header" data-sort-key="category">Category</th>
+                                <th class="sortable-header text-end" data-sort-key="amount">Amount</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     {% endcall %}
+                    <div id="analyticsPagination"></div>
                 </div>
             </div>
         {% endcall %}

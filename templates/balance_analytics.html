@@ -77,18 +77,19 @@
                 </div>
 
                 <div class="tab-pane fade" id="rawPane">
-                    {% call table_shell(extra_class='analytics-table-wrap', id='entriesTable') %}
+                    {% call table_shell(extra_class='analytics-table-wrap ajax-sorted', id='entriesTable') %}
                         <thead>
                             <tr>
-                                <th class="sortable-header">When</th>
-                                <th class="sortable-header">Type</th>
-                                <th class="sortable-header text-end">Delta</th>
-                                <th class="sortable-header text-end">Balance</th>
-                                <th class="sortable-header">Note</th>
+                                <th class="sortable-header" data-sort-key="when">When</th>
+                                <th class="sortable-header" data-sort-key="type">Type</th>
+                                <th class="sortable-header text-end" data-sort-key="delta">Delta</th>
+                                <th class="sortable-header text-end" data-sort-key="balance">Balance</th>
+                                <th class="sortable-header" data-sort-key="note">Note</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     {% endcall %}
+                    <div id="balanceAnalyticsPagination"></div>
                 </div>
             </div>
         {% endcall %}

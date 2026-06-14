@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input, button, link_button, pagination %}
+{% from "macros/ui.html" import page_header, card, table_shell, modal, form_input, form_select, button, link_button, pagination %}
 {% block content %}
 
 {% call page_header('Balance', kicker='Overview', description='Track current cashflow balance, adjustments, and recent history.') %}
@@ -54,15 +54,15 @@
                     <label class="form-check-label small text-muted fw-semibold ms-2" for="showTxnsCheckbox" style="cursor: pointer;">Show Transactions</label>
                 </div>
             </div>
-            {% call table_shell(extra_class='table-striped', id='balanceHistoryTable', attrs={'data-page-size': '12'}) %}
+            {% call table_shell(extra_class='table-striped server-sorted', id='balanceHistoryTable', attrs={'data-page-size': '12'}) %}
                 <thead>
                     <tr>
-                        <th class="sortable-header">When</th>
-                        <th class="sortable-header">Source</th>
-                        <th class="sortable-header">Mode</th>
-                        <th class="sortable-header text-end">Delta</th>
-                        <th class="sortable-header text-end">Balance</th>
-                        <th class="sortable-header">Note</th>
+                        <th class="sortable-header" data-sort-key="when">When</th>
+                        <th>Source</th>
+                        <th class="sortable-header" data-sort-key="balance_mode">Mode</th>
+                        <th class="sortable-header text-end" data-sort-key="delta">Delta</th>
+                        <th class="sortable-header text-end" data-sort-key="balance">Balance</th>
+                        <th class="sortable-header" data-sort-key="note">Note</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
@@ -126,6 +126,7 @@
         </div>
         <hr>
         <div class="d-flex gap-2 justify-content-end">
+            <a class="btn btn-outline-info px-4 d-none" id="txnSplitLink" href="#">View Split</a>
             {{ button('Close', kind='secondary', extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
             {{ button('Edit', kind='primary', extra_class='px-4', type='button', id='editTransactionBtn') }}
             {{ button('Delete', kind='danger', extra_class='px-4', type='button', id='deleteTransactionBtn') }}
@@ -152,6 +153,33 @@
         </div>
     </div>
 </div>
+
+<!-- Edit Transaction Modal -->
+{% if not session.get('view_only') %}
+{% call modal('editTransactionModal', 'Edit Transaction') %}
+    <form id="editTransactionForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" id="editTxId">
+        
+        {{ form_input('editTxAmount', 'Amount (Rs.)', 'amount', type='number', step='0.01', min='0.01', required=true) }}
+        {{ form_input('editTxDescription', 'What was it for?', 'description', placeholder='e.g. Grocery shopping', maxlength='120', required=true) }}
+        {{ form_select('editTxCategory', 'Category', 'category', form.category.choices) }}
+        
+        <div class="row g-2">
+            <div class="col-sm-6">
+                {{ form_input('editTxDate', 'Date (IST)', 'date', type='date', required=true) }}
+            </div>
+            <div class="col-sm-6">
+                {{ form_input('editTxTime', 'Time (IST)', 'time', type='time', required=true) }}
+            </div>
+        </div>
+        
+        <div class="mt-4">
+            {{ button('Update Transaction', kind='primary', extra_class='w-100', type='submit', id='updateTxnBtn') }}
+        </div>
+    </form>
+{% endcall %}
+{% endif %}
 
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
 {% endblock %}

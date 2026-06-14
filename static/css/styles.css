@@ -1711,6 +1711,21 @@ th.sortable-header.active .sort-icon{
   color:#2563eb;
   border-color:rgba(37,99,235,0.2);
 }
+.badge-sub{
+  background:rgba(239,68,68,0.1);
+  color:#ef4444;
+  border-color:rgba(239,68,68,0.18);
+}
+.badge-add-rec{
+  background:rgba(16,185,129,0.12);
+  color:#10b981;
+  border-color:rgba(16,185,129,0.22);
+}
+.badge-sub-rec{
+  background:rgba(236,72,153,0.12);
+  color:#ec4899;
+  border-color:rgba(236,72,153,0.22);
+}
 .badge-trip,
 .badge-split{
   background:rgba(32,139,122,0.12);
@@ -1887,6 +1902,9 @@ th.sortable-header.active .sort-icon{
 [data-theme="dark"] .badge-fixed{color:#dbeafe}
 [data-theme="dark"] .badge-add{color:#6ee7dc}
 [data-theme="dark"] .badge-sync{color:#93c5fd}
+[data-theme="dark"] .badge-sub{color:#f87171}
+[data-theme="dark"] .badge-add-rec{color:#34d399}
+[data-theme="dark"] .badge-sub-rec{color:#f472b6}
 [data-theme="dark"] .badge-trip,
 [data-theme="dark"] .badge-split{color:#6ee7dc}
 [data-theme="dark"] .badge-txn{color:#c084fc}
@@ -2008,6 +2026,24 @@ th.sortable-header.active .sort-icon{
 .balance-edit-content{
   text-align:left;
 }
+.balance-edit-content .balance-mode-select{
+  height:44px;
+  border-radius:12px;
+  border-color:rgba(32,139,122,0.22);
+  border-left:4px solid var(--primary);
+  background-color:var(--glass);
+  font-weight:650;
+  color:var(--text);
+  box-shadow:0 8px 22px rgba(15,23,36,0.06);
+}
+.balance-edit-content .balance-mode-select:hover{
+  border-color:var(--primary);
+  box-shadow:0 10px 24px rgba(32,139,122,0.14);
+}
+.balance-edit-content .balance-mode-select:focus{
+  border-color:var(--primary);
+  box-shadow:0 0 0 3px rgba(32,139,122,0.14), 0 10px 24px rgba(32,139,122,0.12);
+}
 .balance-edit-impact{
   display:grid;
   gap:.35rem;
@@ -2026,6 +2062,11 @@ th.sortable-header.active .sort-icon{
 [data-theme="dark"] .balance-edit-impact{
   border-color:rgba(42,168,157,0.22);
   background:rgba(42,168,157,0.1);
+}
+[data-theme="dark"] .balance-edit-content .balance-mode-select{
+  border-color:rgba(42,168,157,0.28);
+  background-color:rgba(255,255,255,0.04);
+  box-shadow:0 10px 24px rgba(0,0,0,0.22);
 }
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -2204,6 +2245,12 @@ th.sortable-header.active .sort-icon{
   border-radius: var(--radius-lg) !important;
   box-shadow: var(--shadow-md) !important;
   color: var(--text) !important;
+}
+.modal-background-blur .modal-content {
+  filter: blur(6px) !important;
+  opacity: 0.55 !important;
+  pointer-events: none;
+  transition: filter 0.25s ease, opacity 0.25s ease;
 }
 [data-theme="dark"] .modal-content {
   background: var(--surface) !important;

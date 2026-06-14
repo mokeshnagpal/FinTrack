@@ -74,6 +74,19 @@ Each transaction document typically contains fields such as:
 - `updated_at`
 - `cost_type` (e.g. `individual`, `split`)
 - `split_id` (when a transaction belongs to a split)
+- `split_title` (display helper for split-linked transactions)
+
+### Saved transaction templates
+
+Saved transaction templates are stored under `users/{username}/saved_transactions` and include:
+
+- `amount`
+- `category`
+- `description`
+- `created_at`
+- `updated_at`
+
+These templates can be created, edited, deleted, and submitted to the main `transactions` collection as normal transaction entries.
 
 ### Split documents
 
@@ -240,6 +253,26 @@ http://127.0.0.1:5000
 
 - `users` — one document per normalized username (email)
 
+## Current app state and recent changes
+
+This website currently supports:
+
+- transaction history with edit/delete workflows
+- saved transaction templates that can be added, edited, deleted, and submitted as regular transactions
+- split expense management with split-linked transaction navigation
+- running balances and balance sync entries
+- recurring transaction and balance rules
+- analytics dashboards and spending charts
+
+Recent changes included:
+
+- added support for `users/{username}/saved_transactions` to store saved templates.
+- added `split_id`, `split_title`, and `split_url` metadata so split-linked transactions can be displayed with a "View Split" action.
+- restricted split-linked transactions so they can only be managed from the split detail page, preventing edit/delete from the general history UI.
+- preserved 12-row pagination behavior and count-based page math for both transactions and saved transaction templates.
+- added explicit transaction/balance sync logic so updates and deletions resynchronize associated balance entries.
+- implemented duplicate request protection for transaction update/delete actions.
+
 ### User document (`users/{username}`) fields
 
 - `password` — hashed login password
@@ -261,6 +294,7 @@ http://127.0.0.1:5000
 ### Splits subcollections
 
 - `splits/{split_id}/entries` — individual split entries for each participant
+- `users/{username}/saved_transactions/{template_id}` — saved transaction templates
 
 ### Example Firestore paths
 
@@ -272,9 +306,27 @@ http://127.0.0.1:5000
 
 ## Notes on duplicate request handling
 
-- The application no longer persists client action records in Firestore for duplicate detection.
 - Duplicate submissions are now blocked using a session-based payload signature and timeout window.
 - This prevents accidental double-posts on transaction creation/update/delete from the same session.
+
+## Table behaviour, pagination, sorting and transaction search
+
+- Per-table pagination: each table uses a 12-row page size. The UI loads a limited set of documents (up to `page * 12`) and displays a single page slice in the table. Pagination widgets are independent per table so each table maintains its own current page and controls.
+- Client-side sorting: clicking a sortable column header sorts only the rows currently loaded into the table (the 12 rows shown or the set of rows present in the DOM). Sorting is performed in-memory in the browser; no additional sort parameters or requests are sent to the server.
+- In-memory sorting guarantees instant responses for header clicks and avoids requiring composite Firestore indexes for ordered queries. For larger datasets, the server still provides paginated results; the client sorts only the visible page.
+- Transactions search: searching transactions is performed server-side (Firestore queries) to find matching documents by description, category, or amount. Search endpoints return a paginated set of matching rows; once results are received, the client will render and allow in-memory sorting of the returned page. Common search patterns implemented:
+  - Prefix search on `description` using range queries (`description >= term` and `description <= term + "\uf8ff"`).
+  - Exact-match queries for `category` and `amount` where applicable.
+- UX notes: split-linked transactions include `split_id` and `split_url` metadata and are shown with a "View Split" action; edit/delete are restricted for split-linked rows and must be handled from the split detail page.
+
+## Math and pagination formulas
+
+- Page count: `total_pages = ceil(total_items / 12)`
+- Display range: `from = ((page - 1) * per_page) + 1`
+- Display upper bound: `to = min(page * per_page, total_items)`
+- Transaction update delta: `balance_delta = round(old_amount - new_amount, 2)`
+- Split share: `share_amount = round(total_spent / num_people, 2)`
+- Amount normalization: transaction amounts are rounded to two decimals for display and storage.
 
 ## Troubleshooting
 

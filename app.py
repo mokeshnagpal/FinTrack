@@ -271,6 +271,9 @@ def user_doc_ref(username=None):
 def tx_collection(username=None):
     return user_doc_ref(username).collection('transactions')
 
+def saved_transaction_collection(username=None):
+    return user_doc_ref(username).collection('saved_tranaction')
+
 def rec_collection(username=None):
     return user_doc_ref(username).collection('recurring')
 
@@ -822,6 +825,54 @@ def render_management(
 ):
     current_user = get_current_username()
     is_admin = current_user in ADMIN_USERS if current_user else False
+
+    # Get raw categories list
+    raw_categories = categories if categories is not None else get_categories()
+    raw_categories = list(raw_categories)
+    
+    # Sorting for categories in memory
+    cat_sort = request.args.get('cat_sort')
+    cat_dir = request.args.get('cat_dir', 'asc')
+    if cat_sort == 'category':
+        raw_categories.sort(key=lambda x: x.lower(), reverse=(cat_dir == 'desc'))
+    
+    # Paginate categories in memory
+    cat_page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+    total_cats = len(raw_categories)
+    total_cat_pages = max(1, math.ceil(total_cats / limit))
+    sliced_cats = raw_categories[(cat_page - 1) * limit : cat_page * limit]
+    cat_pagination = SimpleNamespace(
+        items=sliced_cats,
+        page=cat_page,
+        total_pages=total_cat_pages,
+        total_items=total_cats,
+        per_page=limit
+    )
+
+    # Get raw split people list
+    raw_people = split_people if split_people is not None else get_split_people()
+    raw_people = list(raw_people)
+
+    # Sorting for split people in memory
+    people_sort = request.args.get('people_sort')
+    people_dir = request.args.get('people_dir', 'asc')
+    if people_sort == 'person':
+        raw_people.sort(key=lambda x: x.lower(), reverse=(people_dir == 'desc'))
+
+    # Paginate split people in memory
+    people_page = parse_positive_int(request.args.get('people_page'), default=1)
+    total_people = len(raw_people)
+    total_people_pages = max(1, math.ceil(total_people / limit))
+    sliced_people = raw_people[(people_page - 1) * limit : people_page * limit]
+    people_pagination = SimpleNamespace(
+        items=sliced_people,
+        page=people_page,
+        total_pages=total_people_pages,
+        total_items=total_people,
+        per_page=limit
+    )
+
     return render_template(
         'management.html',
         form=view_form or ViewPasswordForm(prefix='view_password'),
@@ -831,11 +882,12 @@ def render_management(
         password_form=password_form or ChangePasswordForm(prefix='account_password'),
         current_username=current_user or '',
         category_form=category_form or CategoryForm(prefix='category'),
-        categories=categories if categories is not None else get_categories(),
+        categories=cat_pagination,
+        all_categories=raw_categories,
         default_category=get_default_category(),
         editing_category=editing_category,
         split_person_form=split_person_form or SplitPersonForm(prefix='split_person'),
-        split_people=split_people if split_people is not None else get_split_people(),
+        split_people=people_pagination,
         editing_split_person=editing_split_person,
         is_admin=is_admin,
         **view_password_status_context(),
@@ -913,7 +965,12 @@ def stream_with_timeout(query):
             for doc in stream_iter:
                 yield doc
         except Exception as e:
-            app.logger.exception("Firestore stream iteration failed: %s", e)
+            # Don't spam full stack traces for common Firestore precondition errors
+            msg = str(e)
+            if 'requires an index' in msg or 'The query requires an index' in msg:
+                app.logger.error("Firestore query requires a composite index: %s", msg)
+            else:
+                app.logger.exception("Firestore stream iteration failed: %s", e)
             return
 
     return safe_stream()
@@ -983,6 +1040,9 @@ def doc_to_txn(doc):
                 pass
 
     return d
+
+def is_split_transaction(transaction):
+    return bool(transaction and transaction.get('split_id'))
 
 # ---------------------------------------------------------------------
 # Firestore helpers (same as your existing functions)
@@ -1171,7 +1231,12 @@ def apply_recurring_up_to_today():
                     app.logger.info("Created transaction (txn + last_applied updated) for recurring %s at %s (user=%s) with txn_id=%s", rec_id, next_occ, username, new_txn_id)
                     # Create balance entry with type='txn' and include the transaction ID
                     try:
-                        append_balance(-float(txn_doc.get('amount', 0.0)), 'txn', username=username, extra_fields={'txn_id': new_txn_id})
+                        append_balance(
+                            -float(txn_doc.get('amount', 0.0)),
+                            'txn',
+                            username=username,
+                            extra_fields={'txn_id': new_txn_id, 'timestamp': next_occ},
+                        )
                     except Exception:
                         app.logger.exception("Failed to append balance for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                 except Exception as e_tx:
@@ -1186,10 +1251,21 @@ def apply_recurring_up_to_today():
                         # Create balance entry with type='txn' and include the transaction ID
                         try:
                             if fallback_txn_id:
-                                append_balance(-float(txn_doc.get('amount', 0.0)), 'txn', username=username, extra_fields={'txn_id': fallback_txn_id})
+                                append_balance(
+                                    -float(txn_doc.get('amount', 0.0)),
+                                    'txn',
+                                    username=username,
+                                    extra_fields={'txn_id': fallback_txn_id, 'timestamp': next_occ},
+                                )
                             else:
                                 app.logger.warning("Failed to get txn_id from fallback add for recurring %s", rec_id)
-                                append_balance(-float(txn_doc.get('amount', 0.0)), 'add', username=username, notes=f"recurring:{rec_id}")
+                                append_balance(
+                                    -float(txn_doc.get('amount', 0.0)),
+                                    'add',
+                                    username=username,
+                                    notes=f"recurring:{rec_id}",
+                                    extra_fields={'timestamp': next_occ},
+                                )
                         except Exception:
                             app.logger.exception("Failed to append balance (fallback) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
                         try:
@@ -1272,6 +1348,7 @@ def apply_recurring_balances_up_to_today():
                             'recurring_balance_id': str(rec_id),
                             'recurring_balance_key': occurrence_key,
                             'scheduled_for': next_occ,
+                            'timestamp': next_occ,
                         },
                     )
                     rec_ref.update({'last_applied': next_occ})
@@ -1506,9 +1583,21 @@ def build_transaction_doc_from_payload(payload):
 
 def create_transaction(username, txn_doc):
     txn_doc = dict(txn_doc)
-    doc_ref, _ = tx_collection(username).add(txn_doc)
+    _, doc_ref = tx_collection(username).add(txn_doc)
     txn_id = getattr(doc_ref, 'id', '')
-    append_balance(-float(txn_doc['amount']), 'txn', username=username, extra_fields={'txn_id': txn_id})
+    balance_extra = {
+        'txn_id': txn_id,
+        'timestamp': txn_doc.get('timestamp') or datetime.now(UTC),
+    }
+    for field in ('split_id', 'split_title'):
+        if txn_doc.get(field):
+            balance_extra[field] = txn_doc.get(field)
+    append_balance(
+        -float(txn_doc['amount']),
+        'txn',
+        username=username,
+        extra_fields=balance_extra,
+    )
     return txn_id
 
 
@@ -1662,14 +1751,24 @@ def api_transaction_update(tx_id):
             return jsonify({'ok': False, 'error': 'Transaction not found.'}), 404
 
         existing_txn = doc_to_txn(doc)
+        if is_split_transaction(existing_txn):
+            return jsonify({'ok': False, 'error': 'Split transactions must be updated from the Split detail page.'}), 400
+
         updated_doc = build_transaction_doc_from_payload(payload)
         old_amount = float(existing_txn.get('amount', 0.0))
         new_amount = float(updated_doc.get('amount', 0.0))
         balance_delta = round(old_amount - new_amount, 2)
+        timestamp_changed = existing_txn.get('timestamp') != updated_doc.get('timestamp')
 
         doc_ref.update(updated_doc)
-        if balance_delta:
-            update_transaction_balance_entry(tx_id, old_amount, new_amount, username=username)
+        if balance_delta or timestamp_changed:
+            update_transaction_balance_entry(
+                tx_id,
+                old_amount,
+                new_amount,
+                username=username,
+                new_timestamp=updated_doc.get('timestamp'),
+            )
 
         record_request_signature(f'api_transaction_update:{tx_id}', payload)
         app.logger.info("Transaction API update id=%s user=%s", tx_id, username)
@@ -1700,6 +1799,10 @@ def api_transaction_delete(tx_id):
         doc = doc_ref.get()
         if not doc.exists:
             return jsonify({'ok': False, 'error': 'Transaction not found.'}), 404
+
+        existing_txn = doc_to_txn(doc)
+        if is_split_transaction(existing_txn):
+            return jsonify({'ok': False, 'error': 'Split transactions must be deleted from the Split detail page.'}), 400
 
         delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
@@ -1740,6 +1843,9 @@ def api_get_transaction(tx_id):
                 'date': txn_time.date().isoformat(),
                 'time': txn_time.time().isoformat()[:5],
                 'timestamp': format_ist(txn.get('timestamp')) if txn.get('timestamp') else None,
+                'split_id': txn.get('split_id') or '',
+                'split_title': txn.get('split_title') or '',
+                'split_url': url_for('split_detail', split_id=txn.get('split_id')) if txn.get('split_id') else '',
             }
         })
     except Exception:
@@ -1760,6 +1866,10 @@ def edit_transaction(tx_id):
         return redirect(url_for('transactions'))
 
     existing_txn = doc_to_txn(doc)
+    if is_split_transaction(existing_txn):
+        flash('Split transactions must be managed from the Split detail page.', 'warning')
+        return redirect(url_for('transactions'))
+
     form = TransactionForm()
     apply_category_choices(form, include=existing_txn.get('category'))
     form.submit.label.text = 'Update Transaction'
@@ -1769,11 +1879,18 @@ def edit_transaction(tx_id):
         old_amount = float(existing_txn.get('amount', 0.0))
         new_amount = float(updated_doc.get('amount', 0.0))
         balance_delta = round(old_amount - new_amount, 2)
+        timestamp_changed = existing_txn.get('timestamp') != updated_doc.get('timestamp')
 
         try:
             doc_ref.update(updated_doc)
-            if balance_delta:
-                update_transaction_balance_entry(tx_id, old_amount, new_amount, username=username)
+            if balance_delta or timestamp_changed:
+                update_transaction_balance_entry(
+                    tx_id,
+                    old_amount,
+                    new_amount,
+                    username=username,
+                    new_timestamp=updated_doc.get('timestamp'),
+                )
             app.logger.info(
                 "Transaction updated id=%s user=%s old_amount=%.2f new_amount=%.2f",
                 tx_id,
@@ -1796,43 +1913,584 @@ def edit_transaction(tx_id):
             flash(f"{form[fieldName].label.text}: {err}", "danger")
     return redirect(url_for('transactions', edit='true', edit_id=tx_id))
 
+def transaction_search_terms(search_query):
+    if not search_query:
+        return []
+    return [term.strip().lower() for term in search_query.split() if term.strip()]
+
+
+@app.route('/api/transactions/search/count', methods=['GET'])
+@login_required
+def api_transactions_search_count():
+    """Return an approximate count of transactions matching the search query.
+    This endpoint re-uses the same memory-safe candidate-limited search as
+    the main `transactions` view (candidates limited to `limit * 2`).
+    """
+    username = require_user()
+    search = (request.args.get('query') or request.args.get('q') or '').strip()
+    limit = 12
+
+    if not search:
+        return jsonify({'totalRows': 0})
+
+    search_terms = transaction_search_terms(search)
+    transactions = []
+    seen_ids = set()
+
+    def add_candidates(query):
+        for doc in stream_with_timeout(query.limit(limit * 2)):
+            if getattr(doc, 'id', None) in seen_ids:
+                continue
+            if getattr(doc, 'id', None) is not None:
+                seen_ids.add(doc.id)
+            transactions.append(doc_to_txn(doc))
+
+    search_term = search.strip()
+    if search_term:
+        try:
+            add_candidates(
+                tx_collection(username)
+                .where('description', '>=', search_term)
+                .where('description', '<=', search_term + '\uf8ff')
+            )
+        except Exception:
+            app.logger.debug("description search query failed")
+
+        try:
+            add_candidates(tx_collection(username).where('category', '==', search_term))
+        except Exception:
+            app.logger.debug("category search query failed")
+
+        try:
+            amount_value = float(search_term)
+            add_candidates(tx_collection(username).where('amount', '==', amount_value))
+        except (ValueError, TypeError):
+            pass
+        except Exception:
+            app.logger.debug("amount search query failed")
+
+    filtered_txns = []
+    for txn in transactions:
+        haystack = ' '.join([
+            str(txn.get('id') or ''),
+            str(txn.get('description') or ''),
+            str(txn.get('category') or ''),
+            str(txn.get('amount') or ''),
+            format_ist(txn.get('timestamp')) or '',
+            friendly_date_text(txn.get('timestamp')),
+        ]).lower()
+        if any(term in haystack for term in search_terms):
+            filtered_txns.append(txn)
+
+    return jsonify({'totalRows': len(filtered_txns)})
+
+
+@app.route('/api/transactions/search', methods=['GET'])
+@login_required
+def api_transactions_search():
+    """Return a single page of transaction search results (memory-safe).
+    Query params: `query` (or `q`), `page` (default 1), `pageSize` (default 12, max 12)
+    """
+    username = require_user()
+    search = (request.args.get('query') or request.args.get('q') or '').strip()
+    page = parse_positive_int(request.args.get('page'), default=1)
+    page_size = parse_positive_int(request.args.get('pageSize') or request.args.get('page_size') or request.args.get('per_page'), default=12, max_value=12)
+    limit = page_size or 12
+
+    if not search:
+        return jsonify({'page': page, 'pageSize': limit, 'totalRows': 0, 'rows': []})
+
+    # Reuse the same candidate-limited search as the transactions view
+    search_terms = transaction_search_terms(search)
+    transactions = []
+    seen_ids = set()
+
+    def add_candidates(query):
+        for doc in stream_with_timeout(query.limit(limit * 2)):
+            if getattr(doc, 'id', None) in seen_ids:
+                continue
+            if getattr(doc, 'id', None) is not None:
+                seen_ids.add(doc.id)
+            transactions.append(doc_to_txn(doc))
+
+    search_term = search.strip()
+    if search_term:
+        try:
+            add_candidates(
+                tx_collection(username)
+                .where('description', '>=', search_term)
+                .where('description', '<=', search_term + '\uf8ff')
+            )
+        except Exception:
+            app.logger.debug("description search query failed")
+
+        try:
+            add_candidates(tx_collection(username).where('category', '==', search_term))
+        except Exception:
+            app.logger.debug("category search query failed")
+
+        try:
+            amount_value = float(search_term)
+            add_candidates(tx_collection(username).where('amount', '==', amount_value))
+        except (ValueError, TypeError):
+            pass
+        except Exception:
+            app.logger.debug("amount search query failed")
+
+    filtered_txns = []
+    for txn in transactions:
+        haystack = ' '.join([
+            str(txn.get('id') or ''),
+            str(txn.get('description') or ''),
+            str(txn.get('category') or ''),
+            str(txn.get('amount') or ''),
+            format_ist(txn.get('timestamp')) or '',
+            friendly_date_text(txn.get('timestamp')),
+        ]).lower()
+        if any(term in haystack for term in search_terms):
+            filtered_txns.append(txn)
+
+    # Sort and paginate in-memory (page limited to `limit`)
+    sort_arg = request.args.get('sort', 'date')
+    dir_arg = request.args.get('dir', 'desc')
+    sort_mapping = {
+        'date': 'timestamp', 'timestamp': 'timestamp', 'description': 'description', 'category': 'category', 'amount': 'amount'
+    }
+    sort_field = sort_mapping.get(sort_arg, 'timestamp')
+    sliced, total_items, total_pages = unified_sort_and_paginate(filtered_txns, sort_field, dir_arg, page=page, limit=limit)
+
+    # Serialize rows for JSON
+    rows = []
+    for t in sliced:
+        split_id = t.get('split_id') or ''
+        rows.append({
+            'id': t.get('_id') or t.get('id'),
+            'description': t.get('description') or '',
+            'category': t.get('category') or '',
+            'amount': round(float(t.get('amount') or 0.0), 2),
+            'timestamp': format_ist(t.get('timestamp')) if t.get('timestamp') else None,
+            'split_id': split_id,
+            'split_url': url_for('split_detail', split_id=split_id) if split_id else '',
+        })
+
+    return jsonify({
+        'page': page,
+        'pageSize': limit,
+        'totalRows': total_items,
+        'total_pages': total_pages,
+        'rows': rows,
+    })
+
+
+@app.route('/api/saved_transactions/count', methods=['GET'])
+@login_required
+def api_saved_transactions_count():
+    username = require_user()
+    try:
+        # Use the same fetch_sorted_page helper to get a reliable total count
+        _, total_items, _ = fetch_sorted_page(
+            saved_transaction_collection(username), 'created_at', firestore.Query.DESCENDING, page=1, limit=12
+        )
+        return jsonify({'totalRows': total_items})
+    except Exception:
+        app.logger.exception('Failed to fetch saved transactions count for user %s', username)
+        return jsonify({'totalRows': 0}), 500
+
+
+@app.route('/api/saved_transactions', methods=['GET'])
+@login_required
+def api_saved_transactions():
+    username = require_user()
+    page = parse_positive_int(request.args.get('page'), default=1)
+    page_size = parse_positive_int(request.args.get('pageSize') or request.args.get('page_size') or request.args.get('per_page'), default=12, max_value=12)
+    limit = page_size or 12
+    try:
+        items, total_items, total_pages = fetch_sorted_page(
+            saved_transaction_collection(username), 'created_at', firestore.Query.DESCENDING, page=page, limit=limit
+        )
+        rows = []
+        for s in items:
+            rows.append({
+                'id': s.get('_id') or s.get('id'),
+                'description': s.get('description') or '',
+                'category': s.get('category') or '',
+                'amount': round(float(s.get('amount') or 0.0), 2),
+                'timestamp': format_ist(s.get('created_at')) if s.get('created_at') else None,
+            })
+        return jsonify({
+            'page': page,
+            'pageSize': limit,
+            'totalRows': total_items,
+            'total_pages': total_pages,
+            'rows': rows,
+        })
+    except Exception:
+        app.logger.exception('Failed to fetch saved transactions for user %s', username)
+        return jsonify({'page': page, 'pageSize': limit, 'totalRows': 0, 'total_pages': 1, 'rows': []}), 500
+
+
+@app.route('/api/saved_transactions/<string:template_id>/delete', methods=['POST'])
+@login_required
+def api_delete_saved_transaction(template_id):
+    username = require_user()
+    try:
+        doc_ref = saved_transaction_collection(username).document(template_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return jsonify({'ok': False, 'error': 'Saved transaction not found.'}), 404
+        doc_ref.delete()
+        app.logger.info('Saved transaction deleted id=%s user=%s', template_id, username)
+        return jsonify({'ok': True, 'template_id': template_id})
+    except Exception:
+        app.logger.exception('Failed to delete saved transaction %s for user %s', template_id, username)
+        return jsonify({'ok': False, 'error': 'Failed to delete saved transaction.'}), 500
+
+
+@app.route('/api/saved_transactions/<string:template_id>/submit', methods=['POST'])
+@login_required
+def api_submit_saved_transaction(template_id):
+    username = require_user()
+    try:
+        doc_ref = saved_transaction_collection(username).document(template_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return jsonify({'ok': False, 'error': 'Saved transaction not found.'}), 404
+        txn_doc = doc_to_txn(doc)
+        create_transaction(username, txn_doc)
+        app.logger.info('Saved transaction submitted id=%s user=%s', template_id, username)
+        return jsonify({'ok': True, 'template_id': template_id})
+    except Exception:
+        app.logger.exception('Failed to submit saved transaction %s for user %s', template_id, username)
+        return jsonify({'ok': False, 'error': 'Failed to submit saved transaction.'}), 500
+
+def friendly_date_text(timestamp):
+    if not timestamp:
+        return ""
+    dt = utc_to_ist(timestamp)
+    if not dt:
+        return ""
+    return dt.strftime("%d %B %Y %A %b").lower()
+
+def unified_sort_and_paginate(items, sort_key, dir_arg, page=None, limit=12):
+    """
+    Sorts a list of dictionaries/SimpleNamespaces in-place and paginates them.
+    Returns: (sliced_items, total_items, total_pages)
+    """
+    reverse = (dir_arg == 'desc')
+
+    # Determine dynamic key mapping
+    key_mapping = {
+        'date': 'timestamp',
+        'when': 'timestamp',
+        'start': 'start_datetime',
+        'note': 'note',
+        'notes': 'note'
+    }
+    normalized_key = key_mapping.get(sort_key, sort_key)
+
+    # Determine type fallback for datetime/date vs string to avoid comparisons of different types
+    fallback_val = ""
+    for x in items:
+        v = None
+        if hasattr(x, 'get'):
+            if normalized_key == 'note':
+                v = x.get('notes') or x.get('note')
+            else:
+                v = x.get(normalized_key)
+        else:
+            if normalized_key == 'note':
+                v = getattr(x, 'notes', None) or getattr(x, 'note', None)
+            else:
+                v = getattr(x, normalized_key, None)
+        if v is not None:
+            if isinstance(v, (datetime, date)):
+                fallback_val = datetime.min.replace(tzinfo=UTC)
+            break
+
+    def sort_fn(x):
+        val = None
+        if hasattr(x, 'get'):
+            if normalized_key == 'note':
+                val = x.get('notes') or x.get('note')
+            else:
+                val = x.get(normalized_key)
+        else:
+            if normalized_key == 'note':
+                val = getattr(x, 'notes', None) or getattr(x, 'note', None)
+            else:
+                val = getattr(x, normalized_key, None)
+
+        if normalized_key in ('amount', 'delta', 'balance'):
+            try:
+                return float(val or 0.0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        if normalized_key in ('timestamp', 'start_datetime', 'last_applied', 'created_at', 'updated_at', 'start_date'):
+            if val is None:
+                return fallback_val
+            if isinstance(val, (int, float)):
+                try:
+                    return ts_to_dt(val)
+                except Exception:
+                    return fallback_val
+            return val
+
+        return str(val or '').lower()
+
+    items.sort(key=sort_fn, reverse=reverse)
+
+    total_items = len(items)
+    total_pages = max(1, math.ceil(total_items / limit))
+
+    if page is not None:
+        offset = (page - 1) * limit
+        sliced_items = items[offset : offset + limit]
+    else:
+        sliced_items = items
+
+    return sliced_items, total_items, total_pages
+
+
+def fetch_sorted_page(collection_ref, sort_key, dir_arg, page=1, limit=12, filter_query_fn=None, force_in_memory=True):
+    """
+    Fetches exactly `limit` items for the given page directly from the database,
+    using Firestore limit/offset/order_by. If it fails due to missing indexes,
+    it falls back to fetching all documents, sorting in memory, and slicing.
+    Returns: (sliced_items, total_items, total_pages)
+    """
+    reverse = (dir_arg == 'desc')
+
+    # 1. Resolve key mapping
+    key_mapping = {
+        'date': 'timestamp',
+        'when': 'timestamp',
+        'start': 'start_datetime',
+        'note': 'note',
+        'notes': 'note'
+    }
+    normalized_key = key_mapping.get(sort_key, sort_key)
+    direction = firestore.Query.DESCENDING if reverse else firestore.Query.ASCENDING
+
+    # 2. Get base query
+    base_q = collection_ref
+    if filter_query_fn:
+        base_q = filter_query_fn(base_q)
+
+    # Normalize page/limit to safe integers
+    try:
+        page = int(page) if page is not None else 1
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 12
+    limit = max(1, min(limit, 12))
+
+    # If caller requests in-memory sorting, do a limited fetch and sort locally.
+    if force_in_memory:
+        try:
+            # Try to get total count if available
+            try:
+                total_items = base_q.count().get()[0][0].value
+            except Exception:
+                total_items = 0
+
+            fetch_limit = max(limit, page * limit)
+            docs = list(stream_with_timeout(base_q.limit(fetch_limit)))
+            items = [doc_to_txn(doc) for doc in docs]
+            items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=fetch_limit)
+            offset = (page - 1) * limit
+            sliced = items[offset: offset + limit]
+            total_items = len(items) if total_items == 0 else total_items
+            total_pages = max(1, math.ceil(total_items / limit))
+            return sliced, total_items, total_pages
+        except Exception:
+            app.logger.warning("Forced in-memory fetch_sorted_page failed, falling back to DB query")
+
+    # 3. Try database-level sorting and pagination
+    try:
+        # First check the count using Firestore count query (very cheap & fast)
+        try:
+            total_items = base_q.count().get()[0][0].value
+        except Exception:
+            total_items = 0
+
+        total_pages = max(1, math.ceil(total_items / limit))
+        offset = (page - 1) * limit
+
+        q = base_q.order_by(normalized_key, direction=direction).offset(offset).limit(limit)
+        docs = list(stream_with_timeout(q))
+        items = [doc_to_txn(doc) for doc in docs]
+
+        # If count indicates there are items but ordered fetch returned none
+        # (often due to missing composite index causing stream to abort early),
+        # attempt a best-effort unordered full fallback to return correct rows.
+        if not items and total_items > 0:
+            try:
+                app.logger.warning("Ordered fetch returned no docs but count>0; attempting unordered full fallback")
+                # Fetch all matching documents and sort them in memory by the requested field.
+                docs2 = list(stream_with_timeout(base_q))
+                items2 = [doc_to_txn(doc) for doc in docs2]
+                if items2:
+                    items2, _, _ = unified_sort_and_paginate(items2, normalized_key, dir_arg, page=None, limit=len(items2))
+                    offset = (page - 1) * limit
+                    sliced = items2[offset: offset + limit]
+                    total_pages = max(1, math.ceil(total_items / limit))
+                    return sliced, total_items, total_pages
+            except Exception:
+                app.logger.warning("Unordered full fallback also failed")
+        return items, total_items, total_pages
+
+    except Exception as e:
+        msg = str(e)
+        if 'requires an index' in msg or 'The query requires an index' in msg:
+            app.logger.warning("Firestore composite index required; falling back to in-memory sort. Error: %s", msg)
+            try:
+                app.logger.warning("Attempting in-memory fallback after missing index error")
+                fetch_limit = max(limit, page * limit)
+                docs = list(stream_with_timeout(base_q.limit(fetch_limit)))
+                items = [doc_to_txn(doc) for doc in docs]
+                items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=fetch_limit)
+                offset = (page - 1) * limit
+                sliced = items[offset: offset + limit]
+                total_items = len(items)
+                total_pages = max(1, math.ceil(total_items / limit))
+                return sliced, total_items, total_pages
+            except Exception as e2:
+                app.logger.warning("In-memory fallback after missing index error failed: %s", str(e2))
+                return [], 0, 1
+        app.logger.warning("Firestore query failed, falling back to limited memory page: %s", msg)
+
+        try:
+            offset = (page - 1) * limit
+            q = base_q.order_by(normalized_key, direction=direction).offset(offset).limit(limit)
+            docs = list(stream_with_timeout(q))
+            items = [doc_to_txn(doc) for doc in docs]
+            total_items = len(items)
+            total_pages = max(1, math.ceil(total_items / limit))
+            return items, total_items, total_pages
+        except Exception as fallback_error:
+            app.logger.warning("Limited fallback query also failed: %s", str(fallback_error))
+            return [], 0, 1
+
+
+
+
 @app.route('/transactions')
 @login_required
 def transactions():
     search = (request.args.get('q') or '').strip()
     username = require_user()
-    base_query = tx_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING)
-    docs = list(stream_with_timeout(base_query))
+
+    page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+
+    # Sorting
+    sort_arg = request.args.get('sort', 'date')
+    dir_arg = request.args.get('dir', 'desc')
+
+    sort_mapping = {
+        'date': 'timestamp',
+        'timestamp': 'timestamp',
+        'description': 'description',
+        'category': 'category',
+        'amount': 'amount'
+    }
+    sort_field = sort_mapping.get(sort_arg, 'timestamp')
+    direction = firestore.Query.DESCENDING if dir_arg == 'desc' else firestore.Query.ASCENDING
 
     if search:
         search_terms = transaction_search_terms(search)
+        transactions = []
+        seen_ids = set()
+
+        def add_candidates(query):
+            for doc in stream_with_timeout(query.limit(limit * 2)):
+                if getattr(doc, 'id', None) in seen_ids:
+                    continue
+                if getattr(doc, 'id', None) is not None:
+                    seen_ids.add(doc.id)
+                transactions.append(doc_to_txn(doc))
+
+        search_term = search.strip()
+        if search_term:
+            try:
+                add_candidates(
+                    tx_collection(username)
+                    .where('description', '>=', search_term)
+                    .where('description', '<=', search_term + '\uf8ff')
+                )
+            except Exception as e:
+                app.logger.warning("Transaction description search query failed: %s", str(e))
+
+            try:
+                add_candidates(tx_collection(username).where('category', '==', search_term))
+            except Exception as e:
+                app.logger.warning("Transaction category search query failed: %s", str(e))
+
+            try:
+                amount_value = float(search_term)
+                add_candidates(tx_collection(username).where('amount', '==', amount_value))
+            except (ValueError, TypeError):
+                pass
+            except Exception as e:
+                app.logger.warning("Transaction amount search query failed: %s", str(e))
+
         filtered_txns = []
-        for doc in docs:
-            data = doc.to_dict() or {}
+        for txn in transactions:
             haystack = ' '.join([
-                str(doc.id or ''),
-                str(data.get('description') or ''),
-                str(data.get('category') or ''),
-                str(data.get('amount') or ''),
-                format_ist(data.get('timestamp')) or '',
-                friendly_date_text(data.get('timestamp')),
+                str(txn.get('id') or ''),
+                str(txn.get('description') or ''),
+                str(txn.get('category') or ''),
+                str(txn.get('amount') or ''),
+                format_ist(txn.get('timestamp')) or '',
+                friendly_date_text(txn.get('timestamp')),
             ]).lower()
             if any(term in haystack for term in search_terms):
-                filtered_txns.append(doc_to_txn(doc))
-        txns_list = filtered_txns
+                filtered_txns.append(txn)
+
+        txns_list, total_items, total_pages = unified_sort_and_paginate(
+            filtered_txns, sort_field, dir_arg, page=page, limit=limit
+        )
     else:
-        txns_list = [doc_to_txn(doc) for doc in docs]
+        txns_list, total_items, total_pages = fetch_sorted_page(
+            tx_collection(username), sort_field, dir_arg, page=page, limit=limit
+        )
+
+
+    saved_page = parse_positive_int(request.args.get('saved_page'), default=1)
+    saved_txns_list, saved_total_items, saved_total_pages = fetch_sorted_page(
+        saved_transaction_collection(username), 'created_at', firestore.Query.DESCENDING, page=saved_page, limit=limit
+    )
+    saved_paginate_obj = SimpleNamespace(
+        items=saved_txns_list,
+        page=saved_page,
+        total_pages=saved_total_pages,
+        total_items=saved_total_items,
+        per_page=limit,
+    )
 
     paginate_obj = SimpleNamespace(
         items=txns_list,
         search=search,
+        page=page,
+        total_pages=total_pages,
+        total_items=total_items,
+        per_page=limit,
         latest_transaction_id=get_latest_transaction_id(username=username),
     )
 
     form = TransactionForm()
     apply_category_choices(form)
 
-    return render_template('transactions.html', txns=paginate_obj, form=form)
+    return render_template(
+        'transactions.html',
+        txns=paginate_obj,
+        saved_txns=saved_paginate_obj,
+        form=form,
+    )
 
 @app.route('/delete/<string:tx_id>', methods=['POST'])
 @login_required
@@ -1844,8 +2502,12 @@ def delete(tx_id):
         flash('Transaction not found.', 'warning')
         return redirect(url_for('transactions'))
 
+    txn = doc_to_txn(doc)
+    if is_split_transaction(txn):
+        flash('Split transactions must be deleted from the Split detail page.', 'warning')
+        return redirect(url_for('transactions'))
+
     try:
-        txn = doc_to_txn(doc)
         delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
         flash('Transaction deleted.', 'info')
@@ -1853,6 +2515,87 @@ def delete(tx_id):
         app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
         flash('Failed to delete transaction.', 'warning')
 
+    return redirect(url_for('transactions'))
+
+@app.route('/saved_transactions/add', methods=['POST'])
+@login_required
+def add_saved_transaction():
+    username = require_user()
+    form = TransactionForm()
+    apply_category_choices(form)
+    if form.validate_on_submit():
+        txn_doc = build_transaction_doc(form)
+        txn_doc['created_at'] = datetime.now(UTC)
+        txn_doc['updated_at'] = txn_doc['created_at']
+        try:
+            saved_transaction_collection(username).add(txn_doc)
+            flash('Saved transaction template added.', 'success')
+        except Exception as e:
+            app.logger.exception('Failed to add saved transaction template: %s', e)
+            flash('Failed to add saved transaction template.', 'warning')
+    else:
+        flash('Please correct the saved transaction form errors.', 'warning')
+    return redirect(url_for('transactions'))
+
+@app.route('/saved_transactions/<string:template_id>/edit', methods=['POST'])
+@login_required
+def edit_saved_transaction(template_id):
+    username = require_user()
+    doc_ref = saved_transaction_collection(username).document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        flash('Saved transaction not found.', 'warning')
+        return redirect(url_for('transactions'))
+
+    form = TransactionForm()
+    apply_category_choices(form)
+    if form.validate_on_submit():
+        updated_doc = build_transaction_doc(form)
+        updated_doc['updated_at'] = datetime.now(UTC)
+        try:
+            doc_ref.update(updated_doc)
+            flash('Saved transaction template updated.', 'success')
+        except Exception as e:
+            app.logger.exception('Failed to update saved transaction template %s: %s', template_id, e)
+            flash('Failed to update saved transaction template.', 'warning')
+    else:
+        flash('Please correct the edit form errors.', 'warning')
+    return redirect(url_for('transactions'))
+
+@app.route('/saved_transactions/<string:template_id>/delete', methods=['POST'])
+@login_required
+def delete_saved_transaction(template_id):
+    username = require_user()
+    doc_ref = saved_transaction_collection(username).document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        flash('Saved transaction not found.', 'warning')
+        return redirect(url_for('transactions'))
+    try:
+        doc_ref.delete()
+        flash('Saved transaction template deleted.', 'info')
+    except Exception as e:
+        app.logger.exception('Failed to delete saved transaction template %s: %s', template_id, e)
+        flash('Failed to delete saved transaction template.', 'warning')
+    return redirect(url_for('transactions'))
+
+@app.route('/saved_transactions/<string:template_id>/submit', methods=['POST'])
+@login_required
+def submit_saved_transaction(template_id):
+    username = require_user()
+    doc_ref = saved_transaction_collection(username).document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        flash('Saved transaction not found.', 'warning')
+        return redirect(url_for('transactions'))
+
+    txn_doc = doc_to_txn(doc)
+    try:
+        create_transaction(username, txn_doc)
+        flash('Saved transaction submitted to transactions.', 'success')
+    except Exception as e:
+        app.logger.exception('Failed to submit saved transaction %s: %s', template_id, e)
+        flash('Failed to submit saved transaction.', 'warning')
     return redirect(url_for('transactions'))
 
 # ---------------------------------------------------------------------
@@ -1907,23 +2650,28 @@ def populate_recurring_balance_form(form, recurring_rule):
     form.description.data = recurring_rule.get('description') or ''
     form.frequency.data = recurring_rule.get('frequency') or 'monthly'
 
-def get_recurring_rules_for_page(username):
-    return [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            rec_collection(username)
-            .order_by('start_datetime', direction=firestore.Query.DESCENDING)
-        )
-    ]
+def get_recurring_rules_for_page(username, page=None, limit=12, sort_field='start_datetime', direction=firestore.Query.DESCENDING):
+    dir_arg = 'desc' if direction == firestore.Query.DESCENDING else 'asc'
+    sliced, _, _ = fetch_sorted_page(rec_collection(username), sort_field, dir_arg, page=page, limit=limit)
+    return sliced
 
-def get_recurring_balance_rules_for_page(username):
-    return [
-        doc_to_txn(doc)
-        for doc in stream_with_timeout(
-            rec_balance_collection(username)
-            .order_by('start_datetime', direction=firestore.Query.DESCENDING)
-        )
-    ]
+def get_recurring_rules_count(username):
+    try:
+        return rec_collection(username).count().get()[0][0].value
+    except Exception:
+        return 0
+
+def get_recurring_balance_rules_for_page(username, page=None, limit=12, sort_field='start_datetime', direction=firestore.Query.DESCENDING):
+    dir_arg = 'desc' if direction == firestore.Query.DESCENDING else 'asc'
+    sliced, _, _ = fetch_sorted_page(rec_balance_collection(username), sort_field, dir_arg, page=page, limit=limit)
+    return sliced
+
+
+def get_recurring_balance_rules_count(username):
+    try:
+        return rec_balance_collection(username).count().get()[0][0].value
+    except Exception:
+        return 0
 
 
 def build_recurring_doc_from_payload(payload, last_applied=None):
@@ -2005,12 +2753,61 @@ def recurring():
             return redirect(url_for('recurring', add='true'))
 
     username = require_user()
+
+    # Sorting for recurring expenses
+    sort_arg = request.args.get('sort', 'start')
+    dir_arg = request.args.get('dir', 'desc')
+
+    sort_mapping = {
+        'start': 'start_datetime',
+        'amount': 'amount',
+        'description': 'description',
+        'frequency': 'frequency',
+        'last_applied': 'last_applied'
+    }
+    sort_field = sort_mapping.get(sort_arg, 'start_datetime')
+    direction = firestore.Query.DESCENDING if dir_arg == 'desc' else firestore.Query.ASCENDING
+
+    # Pagination for recurring expenses
+    page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+    total_recs = get_recurring_rules_count(username)
+    total_recs_pages = max(1, math.ceil(total_recs / limit))
+    recs_list = get_recurring_rules_for_page(username, page=page, limit=limit, sort_field=sort_field, direction=direction)
+    recs_pagination = SimpleNamespace(
+        items=recs_list,
+        page=page,
+        total_pages=total_recs_pages,
+        total_items=total_recs,
+        per_page=limit
+    )
+
+    # Sorting for recurring balance rules
+    balance_sort_arg = request.args.get('balance_sort', 'start')
+    balance_dir_arg = request.args.get('balance_dir', 'desc')
+
+    balance_sort_field = sort_mapping.get(balance_sort_arg, 'start_datetime')
+    balance_direction = firestore.Query.DESCENDING if balance_dir_arg == 'desc' else firestore.Query.ASCENDING
+
+    # Pagination for recurring balance rules
+    balance_page = parse_positive_int(request.args.get('balance_page'), default=1)
+    total_balance_recs = get_recurring_balance_rules_count(username)
+    total_balance_pages = max(1, math.ceil(total_balance_recs / limit))
+    balance_list = get_recurring_balance_rules_for_page(username, page=balance_page, limit=limit, sort_field=balance_sort_field, direction=balance_direction)
+    balance_pagination = SimpleNamespace(
+        items=balance_list,
+        page=balance_page,
+        total_pages=total_balance_pages,
+        total_items=total_balance_recs,
+        per_page=limit
+    )
+
     return render_template(
         'recurring.html',
         form=form,
         balance_form=balance_form,
-        recs=get_recurring_rules_for_page(username),
-        balance_recs=get_recurring_balance_rules_for_page(username),
+        recs=recs_pagination,
+        balance_recs=balance_pagination,
         editing=False,
         edit_id=None,
         balance_editing=False,
@@ -2257,16 +3054,13 @@ def populate_split_entry_form(form, entry):
     form.time.data = entry_time.time().replace(second=0, microsecond=0, tzinfo=None)
 
 
-def get_trip_documents(username=None):
+def get_trip_documents(username=None, page=None, limit=12):
     if username is None:
         username = require_user()
-    docs = stream_with_timeout(
-        trips_collection(username)
-        .order_by('start_date', direction=firestore.Query.DESCENDING)
-    )
+    sliced, _, _ = fetch_sorted_page(trips_collection(username), 'start_date', 'desc', page=page, limit=limit)
+
     trips = []
-    for doc in docs:
-        t = doc_to_txn(doc)
+    for t in sliced:
         if t.get('cost_type') == 'split' and t.get('split_id'):
             try:
                 split_doc = splits_collection(username).document(t['split_id']).get()
@@ -2284,6 +3078,15 @@ def get_trip_documents(username=None):
         trips.append(t)
     return trips
 
+
+def get_trips_count(username=None):
+    if username is None:
+        username = require_user()
+    try:
+        return trips_collection(username).count().get()[0][0].value
+    except Exception:
+        return 0
+
 def get_trip_split_map(username):
     docs = stream_with_timeout(trips_collection(username))
     split_map = {}
@@ -2296,14 +3099,20 @@ def get_trip_split_map(username):
             }
     return split_map
 
-def get_split_documents(username=None):
+def get_splits_count(username=None):
     if username is None:
         username = require_user()
-    docs = stream_with_timeout(
-        splits_collection(username)
-        .order_by('updated_at', direction=firestore.Query.DESCENDING)
-    )
-    return [doc_to_txn(doc) for doc in docs]
+    try:
+        return splits_collection(username).count().get()[0][0].value
+    except Exception:
+        return 0
+
+def get_split_documents(username=None, page=None, limit=12, sort_field='updated_at', direction=firestore.Query.DESCENDING):
+    if username is None:
+        username = require_user()
+    dir_arg = 'desc' if direction == firestore.Query.DESCENDING else 'asc'
+    sliced, _, _ = fetch_sorted_page(splits_collection(username), sort_field, dir_arg, page=page, limit=limit)
+    return sliced
 
 def get_live_split(username=None):
     if username is None:
@@ -2323,14 +3132,20 @@ def set_live_split(split_id, username=None):
             splits_collection(username).document(doc.id).set({'is_live': False, 'updated_at': now}, merge=True)
     splits_collection(username).document(str(split_id)).set({'is_live': True, 'updated_at': now}, merge=True)
 
-def get_split_entries(split_id, username=None, limit=None):
+def get_split_entries_count(split_id, username=None):
     if username is None:
         username = require_user()
-    q = split_entries_collection(split_id, username).order_by('timestamp', direction=firestore.Query.DESCENDING)
-    if limit is not None:
-        q = q.limit(limit)
-    docs = stream_with_timeout(q)
-    return [doc_to_txn(doc) for doc in docs]
+    try:
+        return split_entries_collection(split_id, username).count().get()[0][0].value
+    except Exception:
+        return 0
+
+def get_split_entries(split_id, username=None, page=None, limit=12, sort_field='timestamp', direction=firestore.Query.DESCENDING):
+    if username is None:
+        username = require_user()
+    dir_arg = 'desc' if direction == firestore.Query.DESCENDING else 'asc'
+    sliced, _, _ = fetch_sorted_page(split_entries_collection(split_id, username), sort_field, dir_arg, page=page, limit=limit)
+    return sliced
 
 def get_split_totals(split_id, username=None):
     if username is None:
@@ -2432,7 +3247,32 @@ def splits():
                     flash(f"{form[fieldName].label.text}: {err}", "danger")
             return redirect(url_for('splits', add='true'))
 
-    splits_list = get_split_documents(username=username)
+    page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+
+    # Sorting
+    sort_arg = request.args.get('sort', 'updated')
+    dir_arg = request.args.get('dir', 'desc')
+
+    sort_mapping = {
+        'name': 'title',
+        'title': 'title',
+        'updated': 'updated_at',
+        'updated_at': 'updated_at'
+    }
+    sort_field = sort_mapping.get(sort_arg, 'updated_at')
+    direction = firestore.Query.DESCENDING if dir_arg == 'desc' else firestore.Query.ASCENDING
+
+    total_items = get_splits_count(username=username)
+    total_pages = max(1, math.ceil(total_items / limit))
+
+    splits_list = get_split_documents(
+        username=username,
+        page=page,
+        limit=limit,
+        sort_field=sort_field,
+        direction=direction
+    )
     for s in splits_list:
         sid = s.get('_id') or s.get('id')
         totals = get_split_totals(sid, username=username)
@@ -2440,10 +3280,18 @@ def splits():
         num_people = len(s.get('people', [])) or len(totals)
         s['share_amount'] = round(total_spent / num_people, 2) if num_people > 0 else 0.0
 
+    paginate_obj = SimpleNamespace(
+        items=splits_list,
+        page=page,
+        total_pages=total_pages,
+        total_items=total_items,
+        per_page=limit
+    )
+
     return render_template(
         'splits.html',
         form=form,
-        splits=splits_list,
+        splits=paginate_obj,
         live_split=get_live_split(username=username),
         trip_map=get_trip_split_map(username=username),
         all_people=get_split_people(),
@@ -2464,14 +3312,62 @@ def split_detail(split_id):
         return redirect(url_for('splits'))
 
     split_data = doc_to_txn(split_doc)
+
+    page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+
+    # Sorting
+    sort_arg = request.args.get('sort', 'when')
+    dir_arg = request.args.get('dir', 'desc')
+
+    sort_mapping = {
+        'when': 'timestamp',
+        'timestamp': 'timestamp',
+        'person': 'person',
+        'for': 'description',
+        'description': 'description',
+        'category': 'category',
+        'amount': 'amount'
+    }
+    sort_field = sort_mapping.get(sort_arg, 'timestamp')
+    direction = firestore.Query.DESCENDING if dir_arg == 'desc' else firestore.Query.ASCENDING
+
+    total_items = get_split_entries_count(split_id, username=username)
+    total_pages = max(1, math.ceil(total_items / limit))
+
+    entries_list = get_split_entries(
+        split_id,
+        username=username,
+        page=page,
+        limit=limit,
+        sort_field=sort_field,
+        direction=direction
+    )
+
+    entries_pagination = SimpleNamespace(
+        items=entries_list,
+        page=page,
+        total_pages=total_pages,
+        total_items=total_items,
+        per_page=limit
+    )
+
+    totals = get_split_totals(split_id, username=username)
+    total_spent = sum(totals.values())
+    num_people = len(split_data.get('people', [])) or len(totals)
+    share_amount = round(total_spent / num_people, 2) if num_people > 0 else 0.0
+
     entry_form = SplitEntryForm()
     apply_split_entry_choices(entry_form, split_people_override=split_data.get('people'))
     return render_template(
         'split_detail.html',
         split_doc=split_data,
         entry_form=entry_form,
-        entries=get_split_entries(split_id, username=username),
-        totals=get_split_totals(split_id, username=username),
+        entries=entries_pagination,
+        totals=totals,
+        total_spent=total_spent,
+        num_people=num_people,
+        share_amount=share_amount,
         editing_entry=False,
         entry_id=None,
     )
@@ -2903,7 +3799,7 @@ def split_record_txn(split_id):
         return redirect(url_for('splits'))
 
     share_amount = round(total_spent / num_people, 2)
-    txn_amount = -share_amount
+    txn_amount = share_amount
 
     overwrite = request.form.get('overwrite') == 'true'
     existing_txn_id = split_data.get('transaction_id')
@@ -2920,14 +3816,28 @@ def split_record_txn(split_id):
             balance_delta = round(old_amount - new_amount, 2)
 
             if balance_delta:
-                update_transaction_balance_entry(txn_id, old_amount, new_amount, username=username)
+                update_transaction_balance_entry(
+                    txn_id,
+                    old_amount,
+                    new_amount,
+                    username=username,
+                    new_timestamp=existing_txn.get('timestamp'),
+                )
 
             txn_ref.update({
                 'amount': float(txn_amount),
                 'description': f"Split share: {split_data.get('title')}",
-                'category': 'Trip',
+                'category': 'Split',
+                'split_id': split_id,
+                'split_title': split_data.get('title') or 'Untitled split',
                 'updated_at': datetime.now(UTC)
             })
+            for balance_doc in find_balance_entries_for_transaction(txn_id, username=username):
+                bal_collection(username).document(balance_doc.id).update({
+                    'split_id': split_id,
+                    'split_title': split_data.get('title') or 'Untitled split',
+                    'updated_at': datetime.now(UTC),
+                })
             split_ref.update({
                 'recorded_amount': float(share_amount),
                 'updated_at': datetime.now(UTC)
@@ -2942,14 +3852,16 @@ def split_record_txn(split_id):
         txn_doc = {
             'amount': float(txn_amount),
             'description': f"Split share: {split_data.get('title')}",
-            'category': 'Trip',
+            'category': 'Split',
+            'split_id': split_id,
+            'split_title': split_data.get('title') or 'Untitled split',
             'timestamp': datetime.now(UTC),
             'created_at': datetime.now(UTC),
             'updated_at': datetime.now(UTC)
         }
 
         # We call create_transaction helper to add and adjust balance
-        txn_id, _ = create_transaction(username, txn_doc)
+        txn_id = create_transaction(username, txn_doc)
         split_ref.update({
             'transaction_id': txn_id,
             'recorded_amount': float(share_amount),
@@ -3076,12 +3988,25 @@ def trips():
             return redirect(url_for('trips'))
 
     # GET request
-    trips_list = get_trip_documents(username=username)
+    page = parse_positive_int(request.args.get('page'), default=1)
+    limit = 12
+    total_items = get_trips_count(username=username)
+    total_pages = max(1, math.ceil(total_items / limit))
+    trips_list = get_trip_documents(username=username, page=page, limit=limit)
+
+    paginate_obj = SimpleNamespace(
+        items=trips_list,
+        page=page,
+        total_pages=total_pages,
+        total_items=total_items,
+        per_page=limit
+    )
+
     splits_list = get_split_documents(username=username)
     return render_template(
         'trips.html',
         form=form,
-        trips=trips_list,
+        trips=paginate_obj,
         splits=splits_list,
         all_people=get_split_people(),
     )
@@ -4273,14 +5198,43 @@ def api_category_breakdown():
 def api_transactions_range():
     start_dt, end_dt, _ = _parse_period_args(request.args)
     txns = get_txns_in_range(start_dt, end_dt, order_desc=True)
+    
+    sort_arg = request.args.get('sort', 'date')
+    dir_arg = request.args.get('dir', 'desc')
+    page_str = request.args.get('page')
+    
+    page = parse_positive_int(page_str, default=1) if page_str else None
+    
+    sliced_txns, total_items, total_pages = unified_sort_and_paginate(
+        txns, sort_arg, dir_arg, page=page, limit=12
+    )
+    
+    if page_str:
+        out = [{
+            "id": t.get('_id'),
+            "timestamp": format_ist(t.get('timestamp')),
+            "description": t.get('description'),
+            "category": t.get('category') or 'Uncategorized',
+            "amount": round(float(t.get('amount', 0.0)), 2)
+        } for t in sliced_txns]
+        
+        return jsonify({
+            "transactions": out,
+            "page": page,
+            "total_pages": total_pages,
+            "total_items": total_items,
+            "per_page": 12
+        })
+        
     out = [{
         "id": t.get('_id'),
         "timestamp": format_ist(t.get('timestamp')),
         "description": t.get('description'),
         "category": t.get('category') or 'Uncategorized',
         "amount": round(float(t.get('amount', 0.0)), 2)
-    } for t in txns]
+    } for t in sliced_txns]
     return jsonify({"transactions": out})
+
 
 @app.route('/export/transactions_csv')
 @login_required
@@ -4359,7 +5313,7 @@ def export_all_data_zip():
         try:
             # 1. Transactions
             txns = [doc_to_txn(d) for d in stream_with_timeout(tx_collection(username))]
-            zip_file.writestr('transactions.csv', dicts_to_csv_string(txns, ['id', 'timestamp', 'description', 'category', 'amount', 'recurring_id', 'client_action_id']))
+            zip_file.writestr('transactions.csv', dicts_to_csv_string(txns, ['id', 'timestamp', 'description', 'category', 'amount', 'recurring_id']))
         except Exception as e:
             app.logger.error("ZIP export transactions failed: %s", e)
 
@@ -4496,32 +5450,113 @@ def shift_balance_entries_after(timestamp, delta, username=None):
     if not delta:
         return 0
 
+    previous = get_previous_balance_before(timestamp, username=username)
+    starting_balance = float(previous.get('balance', 0.0)) if previous else 0.0
+    current_doc = None
+    try:
+        current_docs = list(
+            stream_with_timeout(
+                bal_collection(username)
+                .where('timestamp', '==', timestamp)
+                .limit(1)
+            )
+        )
+        current_doc = current_docs[0] if current_docs else None
+    except Exception:
+        current_doc = None
+
+    if current_doc:
+        current_data = current_doc.to_dict() or {}
+        starting_balance = float(current_data.get('balance', starting_balance))
+
+    return recompute_balance_entries_after(timestamp, starting_balance, username=username)
+
+
+def recompute_balance_entries_after(timestamp, starting_balance, username=None):
+    if username is None:
+        username = require_user()
+
     q = (
         bal_collection(username)
         .where('timestamp', '>', timestamp)
         .order_by('timestamp', direction=firestore.Query.ASCENDING)
     )
     count = 0
+    previous_balance = round(float(starting_balance or 0.0), 2)
     for doc in stream_with_timeout(q):
         data = doc.to_dict() or {}
+        entry_type = str(data.get('type') or '').lower()
+        current_delta = parse_money(
+            data.get('delta', 0),
+            field_name='Delta',
+            allow_negative=True,
+        )
         current_balance = parse_money(
             data.get('balance', 0),
             field_name='Balance value',
             allow_zero=True,
             allow_negative=True,
         )
-        bal_collection(username).document(doc.id).update({
-            'balance': round(current_balance + delta, 2),
-        })
+
+        new_delta = round(current_delta, 2)
+        new_balance = round(previous_balance + new_delta, 2)
+        update_payload = {}
+        if round(current_balance, 2) != new_balance:
+            update_payload['balance'] = float(new_balance)
+
+        if update_payload:
+            bal_collection(username).document(doc.id).update(update_payload)
+        count += 1
+        previous_balance = new_balance
+    return count
+
+
+def recompute_balance_entries_from(timestamp, username=None):
+    if username is None:
+        username = require_user()
+
+    previous = get_previous_balance_before(timestamp, username=username)
+    previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
+    q = (
+        bal_collection(username)
+        .where('timestamp', '>=', timestamp)
+        .order_by('timestamp', direction=firestore.Query.ASCENDING)
+    )
+    count = 0
+    for doc in stream_with_timeout(q):
+        data = doc.to_dict() or {}
+        entry_type = str(data.get('type') or '').lower()
+        current_delta = parse_money(
+            data.get('delta', 0),
+            field_name='Delta',
+            allow_negative=True,
+        )
+        current_balance = parse_money(
+            data.get('balance', 0),
+            field_name='Balance value',
+            allow_zero=True,
+            allow_negative=True,
+        )
+
+        new_delta = round(current_delta, 2)
+        new_balance = round(previous_balance + new_delta, 2)
+        update_payload = {'balance': float(new_balance)}
+
+        bal_collection(username).document(doc.id).update(update_payload)
+        previous_balance = new_balance
         count += 1
     return count
 
 def append_balance(delta, type_, note='', notes=None, username=None, extra_fields=None):
     if username is None:
         username = require_user()
+    extra_fields = dict(extra_fields or {})
+    entry_timestamp = extra_fields.pop('timestamp', None) or datetime.now(UTC)
+    if entry_timestamp.tzinfo is None:
+        entry_timestamp = entry_timestamp.replace(tzinfo=UTC)
     try:
-        latest = get_latest_balance(username=username)
-        base = float(latest.get('balance', 0.0)) if latest else 0.0
+        previous = get_previous_balance_before(entry_timestamp, username=username)
+        base = float(previous.get('balance', 0.0)) if previous else 0.0
     except Exception:
         base = 0.0
     try:
@@ -4535,18 +5570,19 @@ def append_balance(delta, type_, note='', notes=None, username=None, extra_field
         'type': str(type_),
         'delta': float(round(float(delta), 2)),
         'notes': (balance_notes or '')[:1024],
-        'timestamp': datetime.now(UTC)
+        'timestamp': entry_timestamp
     }
     if extra_fields:
         doc.update(extra_fields)
     try:
         add_res = bal_collection(username).add(doc)
-        if isinstance(add_res, tuple) and len(add_res) >= 1:
-            ref = add_res[0]
+        if isinstance(add_res, tuple) and len(add_res) >= 2:
+            ref = add_res[1]
             doc_id = getattr(ref, 'id', None)
         else:
             ref = add_res
             doc_id = getattr(ref, 'id', None)
+        recompute_balance_entries_after(entry_timestamp, new_bal, username=username)
         app.logger.debug("append_balance created %s -> %s (doc id: %s) for user %s", delta, new_bal, doc_id, username)
         return doc_id, doc
     except Exception as e:
@@ -4556,7 +5592,9 @@ def append_balance(delta, type_, note='', notes=None, username=None, extra_field
 @app.route('/balance')
 @login_required
 def balance():
-    return render_template('balance.html')
+    form = TransactionForm()
+    apply_category_choices(form)
+    return render_template('balance.html', form=form)
 
 @app.route('/balance/analytics')
 @login_required
@@ -4585,10 +5623,11 @@ def delete_balance_entry_document(doc, username=None):
         username = require_user()
 
     entry = doc_to_txn(doc)
-    delta = float(entry.get('delta', 0.0))
     timestamp = entry.get('timestamp')
+    previous = get_previous_balance_before(timestamp, username=username)
+    previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
     bal_collection(username).document(doc.id).delete()
-    shift_balance_entries_after(timestamp, -delta, username=username)
+    recompute_balance_entries_after(timestamp, previous_balance, username=username)
     return entry
 
 
@@ -4602,13 +5641,21 @@ def delete_balance_entries_for_transaction(tx_id, username=None):
     return len(entries)
 
 
-def update_transaction_balance_entry(tx_id, old_amount, new_amount, username=None):
+def update_transaction_balance_entry(tx_id, old_amount, new_amount, username=None, new_timestamp=None):
     if username is None:
         username = require_user()
 
     entries = find_balance_entries_for_transaction(tx_id, username=username)
     if not entries:
-        append_balance(-float(new_amount), 'txn', username=username, extra_fields={'txn_id': tx_id})
+        append_balance(
+            -float(new_amount),
+            'txn',
+            username=username,
+            extra_fields={
+                'txn_id': tx_id,
+                'timestamp': new_timestamp or datetime.now(UTC),
+            },
+        )
         return 0
 
     if len(entries) > 1:
@@ -4622,20 +5669,26 @@ def update_transaction_balance_entry(tx_id, old_amount, new_amount, username=Non
     entry = doc_to_txn(doc)
     old_delta = -float(old_amount)
     new_delta = -float(new_amount)
-    if old_delta == new_delta:
+    old_timestamp = entry.get('timestamp')
+    if old_timestamp and old_timestamp.tzinfo is None:
+        old_timestamp = old_timestamp.replace(tzinfo=UTC)
+    target_timestamp = new_timestamp or old_timestamp or datetime.now(UTC)
+    if target_timestamp.tzinfo is None:
+        target_timestamp = target_timestamp.replace(tzinfo=UTC)
+    timestamp_changed = bool(old_timestamp and target_timestamp and old_timestamp != target_timestamp)
+    if old_delta == new_delta and not timestamp_changed:
         return 0
 
-    previous = get_previous_balance_before(entry.get('timestamp'), username=username)
-    previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
-    new_balance = round(previous_balance + new_delta, 2)
-    balance_diff = round(new_balance - float(entry.get('balance', 0.0)), 2)
-
     bal_collection(username).document(doc.id).update({
-        'balance': float(new_balance),
         'delta': float(new_delta),
+        'timestamp': target_timestamp,
         'updated_at': datetime.now(UTC),
     })
-    shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+    recompute_start = min(
+        [dt for dt in (old_timestamp, target_timestamp) if dt],
+        default=target_timestamp,
+    )
+    recompute_balance_entries_from(recompute_start, username=username)
     return 1
 
 
@@ -4670,17 +5723,36 @@ def serialize_balance_history_entry(d, txn_lookup):
     else:
         note_display = notes
         transaction_search_text = tx_id or notes
+
+    split_id = d.get('split_id') or (txn.get('split_id') if txn else '')
+    split_title = d.get('split_title') or (txn.get('split_title') if txn else '')
+
+    # Determine balance mode
+    d_type = d.get('type')
+    if split_id:
+        balance_mode = 'split'
+    elif d_type == 'recurring_balance':
+        balance_mode = 'add-rec'
+    elif (txn and txn.get('recurring_id')) or notes.startswith('recurring:'):
+        balance_mode = 'sub-rec'
+    else:
+        balance_mode = d.get('balance_mode') or ('sync' if d_type == 'sync' else 'add')
+
     return {
         'id': d.get('_id') or d.get('id'),
         'timestamp': format_ist(d.get('timestamp')) if d.get('timestamp') else None,
         'type': d.get('type') or 'add',
-        'balance_mode': d.get('balance_mode') or ('sync' if d.get('type') == 'sync' else 'add'),
+        'source': 'txn' if d_type == 'txn' else 'bnc',
+        'balance_mode': balance_mode,
         'delta': round(float(d.get('delta', 0.0)), 2),
         'balance': round(float(d.get('balance', 0.0)), 2),
         'note': notes,
         'note_display': note_display,
         'transaction_id': tx_id or '',
         'transaction_search_text': transaction_search_text,
+        'split_id': split_id or '',
+        'split_title': split_title or '',
+        'split_url': url_for('split_detail', split_id=split_id) if split_id else '',
     }
 
 @app.route('/api/balance_current')
@@ -4688,43 +5760,134 @@ def serialize_balance_history_entry(d, txn_lookup):
 def api_balance_current():
     username = require_user()
     latest = get_latest_balance(username=username)
-    q = (
-        bal_collection(username)
-        .order_by('timestamp', direction=firestore.Query.DESCENDING)
-        .limit(500)
-    )
-    raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
     show_txns = request.args.get('show_txns') == 'true'
-    allowed_types = ('add', 'sync', 'txn') if show_txns else ('add', 'sync')
-    default_limit = 12 * (12 if show_txns else 8)
-    limit = parse_positive_int(request.args.get('limit'), default=default_limit, max_value=200)
+    page = parse_positive_int(request.args.get('page'), default=1)
+    sort_arg = request.args.get('sort', 'when')
+    dir_arg = request.args.get('dir', 'desc')
+    limit = 12
+    # When show_txns is false: return only balance entries (Add/Sync)
+    if not show_txns:
+        # Fetch pages 1..page to avoid relying on Firestore offset (which can fail when indexes are missing)
+        bal_all = []
+        bal_count = 0
+        for p in range(1, page + 1):
+            def filter_query_fn(q):
+                return q.where('type', 'in', ('add', 'sync', 'recurring_balance', 'add_txn', 'txn_edit', 'txn_delete', 'recurring'))
 
-    docs = [d for d in raw_docs if d.get('type') in allowed_types]
-    txn_lookup = {}
+            docs_p, total_items_p, _ = fetch_sorted_page(
+                bal_collection(username),
+                sort_arg,
+                dir_arg,
+                page=p,
+                limit=limit,
+                filter_query_fn=filter_query_fn,
+                force_in_memory=True,
+            )
+            if p == 1:
+                bal_count = total_items_p or 0
+            bal_all.extend(docs_p or [])
 
-    if show_txns:
-        txn_ids = [balance_transaction_id(d) for d in docs if str(d.get('type') or '').lower() == 'txn']
-        txn_lookup = load_transactions_by_id(username, txn_ids)
+        # Slice to requested page
+        offset = (page - 1) * limit
+        page_items = bal_all[offset: offset + limit]
 
-        filtered_docs = []
-        for d in docs:
-            if str(d.get('type') or '').lower() == 'txn':
-                tx_id = balance_transaction_id(d)
-                if not tx_id or tx_id not in txn_lookup:
-                    continue
-            filtered_docs.append(d)
-        docs = filtered_docs[:limit]
-    else:
-        docs = docs[:limit]
+        txn_lookup = {}
+        history = [serialize_balance_history_entry(d, txn_lookup) for d in page_items]
 
-    history = [serialize_balance_history_entry(d, txn_lookup) for d in docs]
+        total_pages = max(1, math.ceil((bal_count or 0) / limit))
+
+        out = {
+            'current': {
+                'balance': round(float(latest.get('balance', 0.0)), 2) if latest else 0.0,
+                'timestamp': format_ist(latest.get('timestamp')) if latest and latest.get('timestamp') else None
+            } if latest else {'balance': 0.0, 'timestamp': None},
+            'history': history,
+            'page': page,
+            'total_pages': total_pages,
+            'total_items': bal_count,
+            'per_page': limit
+        }
+        return jsonify(out)
+
+    # When show_txns is true: merge recent balance entries and recent transactions,
+    # sort by timestamp (latest first by default) and return server-limited page (12 rows)
+    # Fetch up to `limit` from each collection, then merge+slice to limit to ensure server-side cap.
+    # Collect pages 1..page from each collection (each DB call limited to `limit`)
+    bal_all = []
+    tx_all = []
+    bal_count = 0
+    tx_count = 0
+    for p in range(1, page + 1):
+        b_docs, b_total, _ = fetch_sorted_page(bal_collection(username), sort_arg, dir_arg, page=p, limit=limit, filter_query_fn=None, force_in_memory=True)
+        t_docs, t_total, _ = fetch_sorted_page(tx_collection(username), sort_arg, dir_arg, page=p, limit=limit, filter_query_fn=None)
+        if p == 1:
+            bal_count = b_total or 0
+            tx_count = t_total or 0
+        bal_all.extend(b_docs or [])
+        tx_all.extend(t_docs or [])
+
+    # Build txn lookup for serializing balance entries that reference transactions
+    txn_lookup = { (t.get('_id') or t.get('id')): t for t in tx_all if (t.get('_id') or t.get('id')) }
+
+    combined = []
+
+    # Normalize balance docs (they are balance entries)
+    for d in bal_all:
+        combined.append({'_source': 'balance', 'raw': d, 'ts': d.get('timestamp')})
+
+    # Normalize transactions into balance-like entries
+    for t in tx_all:
+        combined.append({'_source': 'txn', 'raw': t, 'ts': t.get('timestamp')})
+
+    # Sort combined by timestamp
+    reverse = (dir_arg == 'desc')
+    combined.sort(key=lambda x: (x.get('ts') or datetime.min.replace(tzinfo=UTC)), reverse=reverse)
+
+    # Total items should reflect the available items in both collections
+    total_items = (bal_count or 0) + (tx_count or 0)
+    total_pages = max(1, math.ceil(total_items / limit))
+    offset = (page - 1) * limit
+    paged = combined[offset: offset + limit]
+
+    # Serialize entries into the frontend shape
+    history = []
+    for item in paged:
+        if item['_source'] == 'balance':
+            history.append(serialize_balance_history_entry(item['raw'], txn_lookup))
+        else:
+            t = item['raw']
+            note_display = f"{t.get('description','')}({t.get('category','')})"
+            split_id = t.get('split_id') or ''
+            entry = {
+                'id': t.get('_id') or t.get('id'),
+                'timestamp': format_ist(t.get('timestamp')) if t.get('timestamp') else None,
+                'type': 'txn',
+                'source': 'txn',
+                'balance_mode': 'split' if split_id else ('sub-rec' if t.get('recurring_id') else 'sub'),
+                'delta': round(-float(t.get('amount', 0.0)), 2),
+                'balance': None,
+                'note': t.get('description') or '',
+                'note_display': note_display,
+                'transaction_id': t.get('_id') or t.get('id'),
+                'transaction_search_text': ' '.join(str(p or '') for p in (t.get('_id') or t.get('id'), t.get('description'), t.get('category'))).strip(),
+                'split_id': split_id,
+                'split_title': t.get('split_title') or '',
+                'split_url': url_for('split_detail', split_id=split_id) if split_id else '',
+            }
+            history.append(entry)
+
     out = {
         'current': {
             'balance': round(float(latest.get('balance', 0.0)), 2) if latest else 0.0,
             'timestamp': format_ist(latest.get('timestamp')) if latest and latest.get('timestamp') else None
         } if latest else {'balance': 0.0, 'timestamp': None},
-        'history': history
+        'history': history,
+        'page': page,
+        'total_pages': total_pages,
+        'total_items': total_items,
+        'per_page': limit
     }
+
     return jsonify(out)
 
 def _generate_period_labels(start_dt, end_dt, period):
@@ -4894,8 +6057,6 @@ def api_balance_analytics():
 
     top_type = by_type[0] if by_type else None
 
-    entries = [_serialize_balance_entry(entry) for entry in reversed(bal_docs)]
-
     summary = {
         'current_balance': current_balance,
         'opening_balance': opening_balance,
@@ -4911,6 +6072,35 @@ def api_balance_analytics():
         'top_type': top_type,
         'largest_entry': largest_entry,
     }
+
+    page_str = request.args.get('page')
+    sort_arg = request.args.get('sort', 'when')
+    dir_arg = request.args.get('dir', 'desc')
+    
+    page = parse_positive_int(page_str, default=1) if page_str else None
+    docs_to_sort = list(reversed(bal_docs))
+    
+    sliced_docs, total_items, total_pages = unified_sort_and_paginate(
+        docs_to_sort, sort_arg, dir_arg, page=page, limit=12
+    )
+
+    if page_str:
+        entries = [_serialize_balance_entry(entry) for entry in sliced_docs]
+        
+        return jsonify({
+            'labels': labels,
+            'balance_values': balance_values,
+            'delta_values': delta_values,
+            'summary': summary,
+            'by_type': by_type,
+            'entries': entries,
+            'page': page,
+            'total_pages': total_pages,
+            'total_items': total_items,
+            'per_page': 12
+        })
+
+    entries = [_serialize_balance_entry(entry) for entry in sliced_docs]
 
     return jsonify({
         'labels': labels,
@@ -4983,7 +6173,8 @@ def api_balance_sync():
     delta = round(new_balance - base, 2)
     doc = {
         'balance': float(round(new_balance, 2)),
-        'type': 'add',
+        'type': 'sync',
+        'balance_mode': 'sync',
         'delta': float(delta),
         'notes': note,
         'timestamp': now
@@ -4992,7 +6183,7 @@ def api_balance_sync():
     result = {
         "balance": round(new_balance, 2),
         "timestamp": format_ist(now),
-        "type": "add",
+        "type": "sync",
         "delta": delta,
     }
     record_request_signature('api_balance_sync', data)
@@ -5015,48 +6206,58 @@ def api_balance_update(entry_id):
 
     entry = doc_to_txn(doc)
     entry_type = (entry.get('type') or '').lower()
-    if entry_type not in {'add', 'sync'}:
+    if entry_type not in {'add', 'sync', 'recurring_balance'}:
         app.logger.warning("Balance update blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
-        return jsonify({"error": "Only manual add/sync balance entries can be edited."}), 400
+        return jsonify({"error": "Only manual add/sync/recurring_balance balance entries can be edited."}), 400
 
     try:
         note = validate_optional_note(data.get('note'))
-        old_balance = parse_money(
-            entry.get('balance', 0),
-            field_name='Balance value',
-            allow_zero=True,
-            allow_negative=True,
-        )
+        requested_mode = str(data.get('mode') or '').lower()
+        previous = get_previous_balance_before(entry.get('timestamp'), username=username)
+        previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
+        update_type = entry_type
+        balance_mode_value = entry.get('balance_mode')
 
-        if entry_type == 'add':
+        if entry_type == 'recurring_balance':
+            if requested_mode == 'sync':
+                raise ValueError('Recurring balance entries must stay as change amounts.')
             new_delta = parse_money(data.get('delta'), field_name='Delta', allow_negative=True)
-            old_delta = parse_money(entry.get('delta', 0), field_name='Delta', allow_negative=True)
-            balance_diff = round(new_delta - old_delta, 2)
-            new_balance = round(old_balance + balance_diff, 2)
-        else:
+            new_balance = round(previous_balance + new_delta, 2)
+        elif requested_mode == 'sync' or (not requested_mode and entry_type == 'sync'):
+            update_type = 'sync'
+            balance_mode_value = 'sync'
             new_balance = parse_money(
                 data.get('balance'),
                 field_name='Balance value',
                 allow_zero=True,
                 allow_negative=True,
             )
-            previous = get_previous_balance_before(entry.get('timestamp'), username=username)
-            previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
             new_delta = round(new_balance - previous_balance, 2)
-            balance_diff = round(new_balance - old_balance, 2)
+        else:
+            update_type = 'add'
+            balance_mode_value = None
+            new_delta = parse_money(data.get('delta'), field_name='Delta', allow_negative=True)
+            new_balance = round(previous_balance + new_delta, 2)
 
-        doc_ref.update({
+        update_payload = {
             'balance': float(new_balance),
             'delta': float(new_delta),
             'notes': note,
+            'type': update_type,
             'updated_at': datetime.now(UTC),
-        })
-        shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+        }
+        if balance_mode_value:
+            update_payload['balance_mode'] = balance_mode_value
+        elif entry_type == 'sync' or entry.get('balance_mode'):
+            update_payload['balance_mode'] = firestore.DELETE_FIELD
+
+        doc_ref.update(update_payload)
+        shifted = recompute_balance_entries_after(entry.get('timestamp'), new_balance, username=username)
         app.logger.info(
             "Balance entry updated id=%s user=%s type=%s shifted=%s",
             entry_id,
             username,
-            entry_type,
+            update_type,
             shifted,
         )
         return jsonify({
@@ -5087,19 +6288,20 @@ def api_balance_delete(entry_id):
 
     entry = doc_to_txn(doc)
     entry_type = (entry.get('type') or '').lower()
-    if entry_type not in {'add', 'sync'}:
+    if entry_type not in {'add', 'sync', 'recurring_balance'}:
         app.logger.warning("Balance delete blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
-        return jsonify({"error": "Only manual add/sync balance entries can be deleted."}), 400
+        return jsonify({"error": "Only manual add/sync/recurring_balance balance entries can be deleted."}), 400
 
     try:
-        delta = float(entry.get('delta', 0.0))
-        balance_diff = -delta
+        timestamp = entry.get('timestamp')
+        previous = get_previous_balance_before(timestamp, username=username)
+        previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
 
         # Delete the document
         doc_ref.delete()
 
         # Shift all subsequent entries
-        shifted = shift_balance_entries_after(entry.get('timestamp'), balance_diff, username=username)
+        shifted = recompute_balance_entries_after(timestamp, previous_balance, username=username)
         app.logger.info(
             "Balance entry deleted id=%s user=%s type=%s shifted=%s",
             entry_id,
@@ -5161,10 +6363,10 @@ def api_balance_undo():
 @login_required
 def api_balance_history():
     username = require_user()
-    limit = parse_positive_int(request.args.get('limit'), default=50, max_value=200)
-    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200)
+    limit = parse_positive_int(request.args.get('limit'), default=12, max_value=12)
+    q = bal_collection(username).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
     raw_docs = [doc_to_txn(d) for d in stream_with_timeout(q)]
-    docs = [d for d in raw_docs if d.get('type') not in ('txn', 'transaction')][:limit]
+    docs = [d for d in raw_docs if d.get('type') not in ('txn', 'transaction')]
     out = [{
         "id": d.get('_id'),
         "timestamp": format_ist(d.get('timestamp')) if d.get('timestamp') else None,

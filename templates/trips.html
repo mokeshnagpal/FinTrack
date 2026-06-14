@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, modal, form_field, form_input, form_select, form_textarea, button, link_button, card, friendly_date %}
+{% from "macros/ui.html" import compact_badge, people_picker, choice_panel, page_header, modal, form_field, form_input, form_select, form_textarea, button, link_button, card, friendly_date, pagination %}
 {% block content %}
 
 {% set header_desc = 'Review travel itineraries, photos, and live cost distributions in read-only mode.' if session.get('view_only') else 'Plan your trips, manage photo albums, and track approximate fixed budgets or split-spend bills.' %}
@@ -18,7 +18,7 @@
 {% endif %}
 
 <div class="row g-3" id="tripsContainer">
-    {% for trip in trips %}
+    {% for trip in trips.items %}
     {% set tid = trip.id or trip._id %}
     <div class="col-12 col-md-6 col-lg-4 trip-card-wrapper" data-trip-id="{{ tid }}">
         {% call card(extra_class='trip-card h-100 shadow-sm position-relative', no_body=true) %}
@@ -165,6 +165,27 @@
     </div>
     {% endfor %}
 </div>
+
+{{ pagination(trips.page, trips.total_pages) }}
+<div class="text-center text-muted small mt-2">
+    Showing <strong>{{ ((trips.page - 1) * trips.per_page) + 1 if trips.total_items > 0 else 0 }}</strong>-<strong>{{ [trips.page * trips.per_page, trips.total_items] | min }}</strong> of <strong>{{ trips.total_items }}</strong>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (page) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('page', page);
+                window.location.search = params.toString();
+            }
+        });
+    });
+});
+</script>
 
 <!-- New Trip Modal -->
 {% if not session.get('view_only') %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import card, delete_button, edit_button, modal, form_input, table_shell, protected_badge, page_header, form_field, link_button, button, badge %}
+{% from "macros/ui.html" import card, delete_button, edit_button, modal, form_input, table_shell, protected_badge, page_header, form_field, link_button, button, badge, pagination %}
 {% block content %}
 {% if editing_category or editing_split_person %}
 <div class="edit-backdrop"></div>
@@ -127,7 +127,7 @@
                 <label class="form-label mb-0 fw-semibold" for="defaultCategorySelect">Default selected category</label>
                 <div class="d-flex align-items-center gap-2 flex-grow-1">
                     <select id="defaultCategorySelect" name="default_category" class="form-select form-select-sm" onchange="this.form.submit()">
-                        {% for category in categories %}
+                        {% for category in all_categories %}
                         <option value="{{ category }}" {% if category == default_category %}selected{% endif %}>{{ category }}</option>
                         {% endfor %}
                     </select>
@@ -135,15 +135,15 @@
                 </div>
             </form>
 
-            {% call table_shell() %}
+            {% call table_shell(extra_class='server-sorted', attrs={'data-sort-param': 'cat_sort', 'data-dir-param': 'cat_dir', 'data-page-param': 'page'}) %}
                 <thead>
                     <tr>
-                        <th class="sortable-header">Category <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header" data-sort-key="category">Category</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for category in categories %}
+                    {% for category in categories.items %}
                     {% set cat_slug = category|replace(' ', '_')|replace('&', '_')|replace('(', '_')|replace(')', '_')|replace('.', '_')|replace('/', '_') %}
                     <tr>
                         <td data-label="Category">{{ category }}</td>
@@ -153,7 +153,7 @@
                             {% else %}
                                 <div class="table-actions">
                                     {{ edit_button('editCategoryModal' ~ cat_slug) }}
-                                    {{ delete_button(url_for('management_category_delete', category_name=category), 'Delete this category from future dropdowns?', disabled=(categories|length <= 1), extra_attrs={'category-name': category}) }}
+                                    {{ delete_button(url_for('management_category_delete', category_name=category), 'Delete this category from future dropdowns?', disabled=(categories.total_items <= 1), extra_attrs={'category-name': category}) }}
                                 </div>
 
                                 {% call modal('editCategoryModal' ~ cat_slug, 'Edit Category') %}
@@ -173,6 +173,13 @@
                     {% endfor %}
                 </tbody>
             {% endcall %}
+
+            <div id="catPagination">
+                {{ pagination(categories.page, categories.total_pages) }}
+                <div class="text-center text-muted small mt-2">
+                    Showing <strong>{{ ((categories.page - 1) * categories.per_page) + 1 if categories.total_items > 0 else 0 }}</strong>-<strong>{{ [categories.page * categories.per_page, categories.total_items] | min }}</strong> of <strong>{{ categories.total_items }}</strong>
+                </div>
+            </div>
         {% endcall %}
     </div>
 
@@ -186,17 +193,17 @@
                 {{ button('Add Person', kind='primary', size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addPersonModal'}) }}
             </div>
 
-            {% call table_shell() %}
+            {% call table_shell(extra_class='server-sorted', attrs={'data-sort-param': 'people_sort', 'data-dir-param': 'people_dir', 'data-page-param': 'people_page'}) %}
                 <thead>
                     <tr>
-                        <th class="sortable-header">Person <span class="sort-icon">&#8597;</span></th>
+                        <th class="sortable-header" data-sort-key="person">Person</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for person in split_people %}
+                    {% for person in split_people.items %}
                     {% set pers_slug = person|replace(' ', '_')|replace('&', '_')|replace('(', '_')|replace(')', '_')|replace('.', '_')|replace('/', '_') %}
-                    {% set is_account_person = loop.first %}
+                    {% set is_account_person = (split_people.page == 1 and loop.first) %}
                     <tr>
                         <td data-label="Person">
                             <span class="fw-semibold">{{ person }}</span>
@@ -207,7 +214,7 @@
                         <td data-label="Actions" class="text-end">
                             <div class="table-actions">
                                 {{ edit_button('editPersonModal' ~ pers_slug) }}
-                                {{ delete_button(url_for('management_split_person_delete', person_name=person), 'Delete this person from future split dropdowns?', disabled=(split_people|length <= 1), extra_attrs={'person-name': person}) }}
+                                {{ delete_button(url_for('management_split_person_delete', person_name=person), 'Delete this person from future split dropdowns?', disabled=(split_people.total_items <= 1), extra_attrs={'person-name': person}) }}
                             </div>
 
                             <!-- Edit Person Modal -->
@@ -227,6 +234,13 @@
                     {% endfor %}
                 </tbody>
             {% endcall %}
+
+            <div id="peoplePagination">
+                {{ pagination(split_people.page, split_people.total_pages) }}
+                <div class="text-center text-muted small mt-2">
+                    Showing <strong>{{ ((split_people.page - 1) * split_people.per_page) + 1 if split_people.total_items > 0 else 0 }}</strong>-<strong>{{ [split_people.page * split_people.per_page, split_people.total_items] | min }}</strong> of <strong>{{ split_people.total_items }}</strong>
+                </div>
+            </div>
         {% endcall %}
     </div>
 </div>
@@ -250,4 +264,36 @@
         {{ button('Save Person', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Categories pagination click
+    document.querySelectorAll('#catPagination .pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (page) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('page', page);
+                window.location.search = params.toString();
+            }
+        });
+    });
+
+    // People pagination click
+    document.querySelectorAll('#peoplePagination .pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (page) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('people_page', page);
+                window.location.search = params.toString();
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
+
 {% endblock %}

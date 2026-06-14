@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, badge, card, delete_button, friendly_date %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, badge, card, delete_button, friendly_date, pagination %}
 {% block content %}
 {% set split_id = split_doc.id or split_doc._id %}
 
@@ -74,19 +74,19 @@
         {% call card(extra_class='shadow-sm', no_body=true) %}
             <div class="card-body">
                 <h4 class="page-title mb-3">Latest Entries</h4>
-                {% call table_shell() %}
+                {% call table_shell(extra_class='server-sorted') %}
                     <thead>
                         <tr>
-                            <th class="sortable-header">When <span class="sort-icon">&#8597;</span></th>
-                            <th class="sortable-header">Person <span class="sort-icon">&#8597;</span></th>
-                            <th class="sortable-header">For <span class="sort-icon">&#8597;</span></th>
-                            <th class="sortable-header">Category <span class="sort-icon">&#8597;</span></th>
-                            <th class="sortable-header text-end">Amount <span class="sort-icon">&#8597;</span></th>
+                            <th class="sortable-header" data-sort-key="when">When</th>
+                            <th class="sortable-header" data-sort-key="person">Person</th>
+                            <th class="sortable-header" data-sort-key="for">For</th>
+                            <th class="sortable-header" data-sort-key="category">Category</th>
+                            <th class="sortable-header text-end" data-sort-key="amount">Amount</th>
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="splitEntryBody">
-                        {% for entry in entries %}
+                        {% for entry in entries.items %}
                         {% set eid = entry.id or entry._id %}
                         <tr>
                             <td data-label="When"><small>{{ friendly_date(entry.timestamp) }}</small></td>
@@ -140,6 +140,27 @@
                         {% endfor %}
                     </tbody>
                 {% endcall %}
+
+                {{ pagination(entries.page, entries.total_pages) }}
+                <div class="text-center text-muted small mt-2">
+                    Showing <strong>{{ ((entries.page - 1) * entries.per_page) + 1 if entries.total_items > 0 else 0 }}</strong>-<strong>{{ [entries.page * entries.per_page, entries.total_items] | min }}</strong> of <strong>{{ entries.total_items }}</strong>
+                </div>
+
+                <script>
+                document.addEventListener('DOMContentLoaded', () => {
+                    document.querySelectorAll('.pagination button.page-link').forEach(btn => {
+                        btn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const page = btn.dataset.page;
+                            if (page) {
+                                const params = new URLSearchParams(window.location.search);
+                                params.set('page', page);
+                                window.location.search = params.toString();
+                            }
+                        });
+                    });
+                });
+                </script>
             </div>
         {% endcall %}
     </div>

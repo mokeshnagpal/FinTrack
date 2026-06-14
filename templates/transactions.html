@@ -1,9 +1,12 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, edit_button, modal, form_field, form_input, form_select, button, link_button, badge %}
+{% from "macros/ui.html" import page_header, table_shell, edit_button, modal, form_field, form_input, form_select, button, link_button, badge, pagination %}
 {% block content %}
 {% if not session.get('view_only') %}
     {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
-        {{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addTransactionModal'}) }}
+        <div class="d-flex gap-2 flex-wrap">
+            {{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addTransactionModal'}) }}
+            {{ button('Add Saved Transaction', kind='secondary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addSavedTransactionModal'}) }}
+        </div>
     {% endcall %}
 {% else %}
     {{ page_header('Transaction History', kicker='Records', description='Review recent spending activity.') }}
@@ -17,13 +20,14 @@
     {% endif %}
 </form>
 
-{% call table_shell(extra_class='table-striped') %}
+{% call table_shell(extra_class='table-striped server-sorted', attrs={'id': 'transactionsTable', 'data-page-size': '12'}) %}
     <thead>
         <tr>
-            <th class="sortable-header active" data-dir="desc">Date</th>
-            <th class="sortable-header">Description</th>
-            <th class="sortable-header">Category</th>
-            <th class="sortable-header text-end">Amount (Rs.)</th>
+            <th class="sortable-header" data-sort-key="date">Date</th>
+            <th>Mode</th>
+            <th class="sortable-header" data-sort-key="description">Description</th>
+            <th class="sortable-header" data-sort-key="category">Category</th>
+            <th class="sortable-header text-end" data-sort-key="amount">Amount (Rs.)</th>
             <th class="text-end">Actions</th>
         </tr>
     </thead>
@@ -32,11 +36,24 @@
         {% set can_manage_txn = not session.get('view_only') %}
         <tr>
             <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+            <td data-label="Mode">
+                {% if txn.split_id %}
+                    <span class="badge badge-compact badge-split">Split</span>
+                {% elif txn.recurring_id %}
+                    <span class="badge badge-compact badge-add-rec">Recurring</span>
+                {% else %}
+                    <span class="badge badge-compact badge-add">Txn</span>
+                {% endif %}
+            </td>
             <td data-label="Description"><small>{{ txn.description }}</small></td>
             <td data-label="Category"><small>{{ txn.category or 'Uncategorized' }}</small></td>
             <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(txn.amount) }}</small></td>
             <td data-label="Actions" class="text-end">
-                {% if can_manage_txn %}
+                {% if txn.split_id %}
+                <div class="table-actions">
+                    <a class="btn btn-sm btn-outline-info" href="{{ url_for('split_detail', split_id=txn.split_id) }}">View Split</a>
+                </div>
+                {% elif can_manage_txn %}
                 <div class="table-actions">
                     {{ edit_button('editTransactionModal' ~ txn.id) }}
                     <form method="post" action="{{ url_for('delete', tx_id=txn.id) }}"
@@ -88,11 +105,134 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="5" class="text-center text-muted py-4">No transactions found.</td>
+            <td colspan="6" class="text-center text-muted py-4">No transactions found.</td>
         </tr>
         {% endfor %}
     </tbody>
 {% endcall %}
+
+<!-- Transactions pagination (server + AJAX) - placed directly under the transactions table -->
+<div id="transactionsPaginationServer">{{ pagination(txns.page, txns.total_pages) }}</div>
+<!-- AJAX pagination container (used when JS intercepts search) -->
+<div id="transactionsPaginationAjax" class="d-none table-pagination-controls"></div>
+
+
+<div class="saved-transactions-section mt-5">
+    <h2 class="h5 mb-3">Saved Transaction Templates</h2>
+    {% call table_shell(extra_class='table-striped', attrs={'id': 'savedTransactionsTable', 'data-page-size': '12'}) %}
+        <thead>
+            <tr>
+                <th>Date saved</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th class="text-end">Amount (Rs.)</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for saved in saved_txns.items %}
+            {% set can_manage_saved = not session.get('view_only') %}
+            <tr>
+                <td data-label="Date saved"><small data-format-date>{{ saved.created_at|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
+                <td data-label="Description"><small>{{ saved.description }}</small></td>
+                <td data-label="Category"><small>{{ saved.category or 'Uncategorized' }}</small></td>
+                <td data-label="Amount (Rs.)" class="text-end"><small>{{ '%.2f'|format(saved.amount) }}</small></td>
+                <td data-label="Actions" class="text-end">
+                    {% if can_manage_saved %}
+                    <div class="table-actions">
+                        {{ edit_button('editSavedTransactionModal' ~ saved.id) }}
+                        <form method="post" action="{{ url_for('delete_saved_transaction', template_id=saved.id) }}" class="delete-form d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {{ button('Delete', kind='danger', size='sm', type='submit') }}
+                        </form>
+                        <form method="post" action="{{ url_for('submit_saved_transaction', template_id=saved.id) }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {{ button('Submit', kind='success', size='sm', type='submit') }}
+                        </form>
+                    </div>
+
+                    {% call modal('editSavedTransactionModal' ~ saved.id, 'Edit Saved Transaction') %}
+                        <form method="post" action="{{ url_for('edit_saved_transaction', template_id=saved.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {{ form_input('amount_saved_' ~ saved.id, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(saved.amount), step='0.01', min='0.01', required=true) }}
+                            {{ form_input('description_saved_' ~ saved.id, 'What was it for?', 'description', placeholder='e.g. Grocery shopping', maxlength='120', value=saved.description, required=true) }}
+                            {{ form_select('category_saved_' ~ saved.id, 'Category', 'category', form.category.choices, selected_value=saved.category) }}
+                            <div class="row g-2">
+                                <div class="col-sm-6">
+                                    {{ form_input('date_saved_' ~ saved.id, 'Date (IST)', 'date', type='date', value=saved.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
+                                </div>
+                                <div class="col-sm-6">
+                                    {{ form_input('time_saved_' ~ saved.id, 'Time (IST)', 'time', type='time', value=saved.timestamp|ist_datetime('%H:%M'), required=true) }}
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                {{ button('Update Saved Transaction', kind='primary', extra_class='w-100', type='submit') }}
+                            </div>
+                        </form>
+                    {% endcall %}
+                    {% else %}
+                    {{ badge('Read only') }}
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-center text-muted py-4">No saved transactions found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    {% endcall %}
+    <div id="savedPaginationServer" class="text-center">{{ pagination(saved_txns.page, saved_txns.total_pages) }}</div>
+    <!-- Placeholder AJAX pagination container for saved transactions (currently unused but reserved) -->
+    <div id="savedPaginationAjax" class="d-none table-pagination-controls"></div>
+</div>
+
+<!-- AJAX pagination container (used when JS intercepts search) -->
+<div id="transactionsPaginationAjax" class="d-none table-pagination-controls"></div>
+<div class="text-center text-muted small mt-2">
+    Showing <strong>{{ ((txns.page - 1) * txns.per_page) + 1 if txns.total_items > 0 else 0 }}</strong>-<strong>{{ [txns.page * txns.per_page, txns.total_items] | min }}</strong> of <strong>{{ txns.total_items }}</strong>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.pagination button.page-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = btn.dataset.page;
+            if (!page) return;
+            const params = new URLSearchParams(window.location.search);
+            const savedWrapper = btn.closest('#savedPaginationServer');
+            if (savedWrapper) {
+                params.set('saved_page', page);
+            } else {
+                params.set('page', page);
+            }
+            window.location.search = params.toString();
+        });
+    });
+});
+
+// AJAX-search wiring: intercept transaction toolbar form if JS is available
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.querySelector('.transaction-toolbar');
+    if (!form) return;
+    const input = form.querySelector('input[name="q"]') || form.querySelector('input[name="transactionSearch"]');
+    if (!input) return;
+
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const q = (input.value || '').trim();
+        if (!q) {
+            // fallback to normal navigation when empty
+            form.submit();
+            return;
+        }
+        if (window.FinTrak && window.FinTrak.transactionsSearch) {
+            window.FinTrak.transactionsSearch.search(q);
+        }
+    });
+});
+</script>
 
 <!-- Add Transaction Modal -->
 {% if not session.get('view_only') %}
