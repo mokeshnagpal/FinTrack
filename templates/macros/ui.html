@@ -351,12 +351,16 @@
             {% endfor %}
         {% else %}
             <script>
-                const messages = {{ messages | tojson }};
-                for (const [category, msg] of messages) {
-                    if (window.FinTrak && typeof window.FinTrak.showFlash === 'function') {
+                const flashMessages = JSON.parse('{{ messages | tojson | safe }}');
+
+                flashMessages.forEach(([category, msg]) => {
+                    if (
+                        window.FinTrak &&
+                        typeof window.FinTrak.showFlash === "function"
+                    ) {
                         window.FinTrak.showFlash(msg, category);
                     }
-                }
+                });
             </script>
         {% endif %}
     {% endif %}

@@ -1223,35 +1223,56 @@
             return;
         }
         for (const r of rows) {
-            const tr = document.createElement('tr');
-            const canManage = document.body.dataset.viewOnly !== 'true';
-            const isSplitTxn = Boolean(r.split_id);
-            const codeValue = String(r.id || '');
-            const splitUrl = String(r.split_url || (r.split_id ? `/splits/${encodeURIComponent(r.split_id)}` : ''));
-            const isSplitTxn = Boolean(r.split_id);
-            const modeBadge = isSplitTxn ? 'badge-split' : 'badge-add';
-            const modeLabel = isSplitTxn ? 'Split' : 'Txn';
-            let actions = '';
-            if (isSplitTxn) {
-                actions = `<div class="table-actions"><a class="btn btn-sm btn-outline-info" href="${escapeHtml(splitUrl)}">View Split</a></div>`;
-            } else if (canManage) {
-                actions = `<div class="table-actions">
-                    <button class="btn btn-sm btn-outline-primary ajax-txn-edit-btn" type="button" data-txn-id="${escapeHtml(r.id || '')}">Edit</button>
-                    <button class="btn btn-sm btn-danger ajax-txn-delete-btn" type="button" data-txn-id="${escapeHtml(r.id || '')}">Delete</button>
-                  </div>`;
-            } else {
-                actions = '<span class="badge">Read only</span>';
-            }
-            tr.innerHTML = `
-                <td data-label="Date"><small data-format-date>${escapeHtml(r.timestamp || '')}</small></td>
-                <td data-label="Mode"><span class="badge badge-compact ${modeBadge}">${modeLabel}</span></td>
-                <td data-label="Description"><small>${escapeHtml(r.description || '')}</small></td>
-                <td data-label="Category"><small>${escapeHtml(r.category || 'Uncategorized')}</small></td>
-                <td data-label="Amount (Rs.)" class="text-end"><small>${Number(r.amount).toFixed(2)}</small></td>
-                <td data-label="Actions" class="text-end">${actions}</td>
-            `;
-            tbody.appendChild(tr);
-        }
+    const tr = document.createElement('tr');
+    const canManage = document.body.dataset.viewOnly !== 'true';
+    const isSplitTxn = Boolean(r.split_id);
+
+    const codeValue = String(r.id || '');
+    const splitUrl = String(
+        r.split_url || (r.split_id ? `/splits/${encodeURIComponent(r.split_id)}` : '')
+    );
+
+    const modeBadge = isSplitTxn ? 'badge-split' : 'badge-add';
+    const modeLabel = isSplitTxn ? 'Split' : 'Txn';
+
+    let actions = '';
+
+    if (isSplitTxn) {
+        actions = `
+            <div class="table-actions">
+                <a class="btn btn-sm btn-outline-info" href="${escapeHtml(splitUrl)}">
+                    View Split
+                </a>
+            </div>`;
+    } else if (canManage) {
+        actions = `
+            <div class="table-actions">
+                <button class="btn btn-sm btn-outline-primary ajax-txn-edit-btn"
+                        type="button"
+                        data-txn-id="${escapeHtml(r.id || '')}">
+                    Edit
+                </button>
+                <button class="btn btn-sm btn-danger ajax-txn-delete-btn"
+                        type="button"
+                        data-txn-id="${escapeHtml(r.id || '')}">
+                    Delete
+                </button>
+            </div>`;
+    } else {
+        actions = '<span class="badge">Read only</span>';
+    }
+
+    tr.innerHTML = `
+        <td data-label="Date"><small data-format-date>${escapeHtml(r.timestamp || '')}</small></td>
+        <td data-label="Mode"><span class="badge badge-compact ${modeBadge}">${modeLabel}</span></td>
+        <td data-label="Description"><small>${escapeHtml(r.description || '')}</small></td>
+        <td data-label="Category"><small>${escapeHtml(r.category || 'Uncategorized')}</small></td>
+        <td data-label="Amount (Rs.)" class="text-end"><small>${Number(r.amount).toFixed(2)}</small></td>
+        <td data-label="Actions" class="text-end">${actions}</td>
+    `;
+
+    tbody.appendChild(tr);
+}
     }
 
     function renderSavedRows(rows) {
