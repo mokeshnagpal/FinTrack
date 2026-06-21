@@ -2535,3 +2535,15 @@ th.sortable-header.active .sort-icon{
 .modal-header-success .modal-title {
   color: #fff !important;
 }
+
+/* Info help buttons */
+.info-help-trigger {
+  color: var(--muted) !important;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+.info-help-trigger:hover, .info-help-trigger:focus {
+  color: var(--primary) !important;
+  opacity: 1;
+  transform: scale(1.15);
+}
