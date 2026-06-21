@@ -467,7 +467,7 @@ a:hover{text-decoration:none}
 .split-total-card strong{
   display:block;
   margin-top:.45rem;
-  color:var(--success);
+  color:var(--text);
   font-size:1.35rem;
   line-height:1.15;
 }
