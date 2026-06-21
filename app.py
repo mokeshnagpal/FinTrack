@@ -2593,7 +2593,7 @@ def delete_saved_transaction(template_id):
         return redirect(url_for('transactions'))
     try:
         doc_ref.delete()
-        flash('Saved transaction template deleted.', 'info')
+        flash('Saved transaction template deleted.', 'danger')
     except Exception as e:
         app.logger.exception('Failed to delete saved transaction template %s: %s', template_id, e)
         flash('Failed to delete saved transaction template.', 'warning')
@@ -2902,7 +2902,7 @@ def recurring_delete(r_id):
 
     doc_ref.delete()
     app.logger.info("Recurring rule deleted id=%s user=%s", r_id, username)
-    flash('Recurring rule deleted.', 'info')
+    flash('Recurring rule deleted.', 'danger')
     return redirect(url_for('recurring'))
 
 @app.route('/recurring/balance', methods=['POST'])
@@ -3003,7 +3003,7 @@ def recurring_balance_delete(r_id):
 
     doc_ref.delete()
     app.logger.info("Recurring balance rule deleted id=%s user=%s", r_id, username)
-    flash('Recurring balance deleted.', 'info')
+    flash('Recurring balance deleted.', 'danger')
     return redirect(url_for('recurring'))
 
 
@@ -3467,7 +3467,7 @@ def split_delete(split_id):
         split_entries_collection(split_id, username).document(entry.id).delete()
     doc_ref.delete()
     app.logger.info("Split deleted id=%s user=%s", split_id, username)
-    flash('Split deleted.', 'info')
+    flash('Split deleted.', 'danger')
     return redirect(url_for('splits'))
 
 
@@ -3513,7 +3513,7 @@ def split_remove_live(split_id):
 
     doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
     app.logger.info("Split live removed id=%s user=%s", split_id, username)
-    flash('Live split status removed.', 'info')
+    flash('Live split status removed.', 'danger')
     return redirect(url_for('splits'))
 
 
@@ -3612,7 +3612,7 @@ def split_entry_delete(split_id, entry_id):
     entry_ref.delete()
     splits_collection(username).document(split_id).set({'updated_at': datetime.now(UTC)}, merge=True)
     app.logger.info("Split entry deleted split=%s entry=%s user=%s", split_id, entry_id, username)
-    flash('Split entry deleted.', 'info')
+    flash('Split entry deleted.', 'danger')
     return redirect(url_for('split_detail', split_id=split_id))
 
 
@@ -4175,7 +4175,7 @@ def trip_delete(trip_id):
     if request.is_json:
         return jsonify({'ok': True})
 
-    flash('Trip deleted.', 'info')
+    flash('Trip deleted.', 'danger')
     return redirect(url_for('trips'))
 
 
@@ -4211,9 +4211,9 @@ def trip_disconnect(trip_id):
                 split_entries_collection(split_id, username).document(entry.id).delete()
             splits_collection(username).document(split_id).delete()
             app.logger.info("Split deleted during disconnect split_id=%s user=%s", split_id, username)
-            flash('Connected split deleted successfully.', 'info')
+            flash('Connected split deleted successfully.', 'danger')
         else:
-            flash('Split disconnected successfully.', 'info')
+            flash('Split disconnected successfully.', 'danger')
 
     # Update trip to be fixed cost and clear split_id
     doc_ref.set({
@@ -4265,9 +4265,9 @@ def split_disconnect_trip(split_id):
             app.logger.info("Trip disconnected during split disconnect trip_id=%s user=%s", trip_id, username)
 
     if action == 'delete':
-        flash('Connected trip deleted successfully.', 'info')
+        flash('Connected trip deleted successfully.', 'danger')
     else:
-        flash('Trip disconnected successfully.', 'info')
+        flash('Trip disconnected successfully.', 'danger')
 
     if request.is_json:
         return jsonify({'ok': True})
@@ -4607,6 +4607,12 @@ def management_category_edit(category_name):
         default_cat = get_default_category(username)
         if category_key(default_cat) == category_key(original):
             default_cat = updated
+        try:
+            user_doc_ref(username).update({
+                f'categories.{original}': firestore.DELETE_FIELD
+            })
+        except Exception:
+            app.logger.exception("Failed to delete original category key during JSON rename for %s", username)
         save_categories(renamed, updated_by=username)
         user_doc_ref(username).set({
             'default_category': default_cat,
@@ -4624,6 +4630,12 @@ def management_category_edit(category_name):
         default_cat = get_default_category(username)
         if category_key(default_cat) == category_key(original):
             default_cat = updated
+        try:
+            user_doc_ref(username).update({
+                f'categories.{original}': firestore.DELETE_FIELD
+            })
+        except Exception:
+            app.logger.exception("Failed to delete original category key during rename for %s", username)
         save_categories(renamed, updated_by=username)
         user_doc_ref(username).set({
             'default_category': default_cat,
@@ -4668,6 +4680,12 @@ def management_category_delete(category_name):
         default_cat = get_default_category(username)
         if category_key(default_cat) == category_key(category):
             default_cat = remaining[0] if remaining else 'Other'
+        try:
+            user_doc_ref(username).update({
+                f'categories.{category}': firestore.DELETE_FIELD
+            })
+        except Exception:
+            app.logger.exception("Failed to delete category key via JSON for %s", username)
         save_categories(remaining, updated_by=username)
         user_doc_ref(username).set({
             'default_category': default_cat,
@@ -4678,12 +4696,18 @@ def management_category_delete(category_name):
     default_cat = get_default_category(username)
     if category_key(default_cat) == category_key(category):
         default_cat = remaining[0] if remaining else 'Other'
+    try:
+        user_doc_ref(username).update({
+            f'categories.{category}': firestore.DELETE_FIELD
+        })
+    except Exception:
+        app.logger.exception("Failed to delete category key for %s", username)
     save_categories(remaining, updated_by=username)
     user_doc_ref(username).set({
         'default_category': default_cat,
     }, merge=True)
     app.logger.info("Category deleted name=%s user=%s", category, username)
-    flash('Category deleted.', 'info')
+    flash('Category deleted.', 'danger')
     return redirect(url_for('management'))
 
 
@@ -4782,7 +4806,7 @@ def management_split_person_delete(person_name):
 
     save_split_people(remaining, updated_by=username)
     app.logger.info("Split person deleted name=%s user=%s", person, username)
-    flash('Person deleted.', 'info')
+    flash('Person deleted.', 'danger')
     return redirect(url_for('management'))
 
 
@@ -5055,7 +5079,7 @@ def logout():
     session.pop('logged_in', None)
     session.pop('username', None)
     session.pop('view_only', None)
-    flash('You have been logged out.', 'info')
+    flash('You have been logged out.', 'danger')
     return redirect(url_for('login'))
 
 # ---------------------------------------------------------------------
