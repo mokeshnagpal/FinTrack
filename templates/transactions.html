@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, edit_button, modal, form_field, form_input, form_select, button, link_button, badge, pagination %}
+{% from "macros/ui.html" import page_header, table_shell, edit_button, modal, form_field, form_input, form_select, button, link_button, badge, pagination, type_mode_help_modal %}
 {% block content %}
 {% if not session.get('view_only') %}
     {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
@@ -23,7 +23,12 @@
     <thead>
         <tr>
             <th class="sortable-header" data-sort-key="date">Date</th>
-            <th>Mode</th>
+            <th>
+                Mode
+                <button type="button" class="btn btn-link p-0 ms-1 text-decoration-none lh-1 align-middle" data-bs-toggle="modal" data-bs-target="#typeModeHelpModal" style="font-size: 0.85rem;" title="Show Types & Modes Info">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="feather feather-info"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                </button>
+            </th>
             <th class="sortable-header" data-sort-key="description">Description</th>
             <th class="sortable-header" data-sort-key="category">Category</th>
             <th class="sortable-header text-end" data-sort-key="amount">Amount (Rs.)</th>
@@ -285,5 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
     </form>
 {% endcall %}
 {% endif %}
+
+{{ type_mode_help_modal() }}
 
 {% endblock %}
