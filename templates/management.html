@@ -159,7 +159,7 @@
                                 {% call modal('editCategoryModal' ~ cat_slug, 'Edit Category') %}
                                     <form method="post" action="{{ url_for('management_category_edit', category_name=category) }}" novalidate>
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        {{ form_input('cat_name' ~ cat_slug, 'Category name', 'name', value=category, placeholder='Category name', required=true, max_length=40) }}
+                                        {{ form_input('cat_name' ~ cat_slug, 'Category name', 'category-name', value=category, placeholder='Category name', required=true, max_length=40) }}
                                         {{ button('Update Category', kind='primary', extra_class='w-100', type='submit') }}
                                     </form>
                                 {% endcall %}
@@ -221,7 +221,7 @@
                             {% call modal('editPersonModal' ~ pers_slug, 'Edit Person') %}
                                 <form method="post" action="{{ url_for('management_split_person_edit', person_name=person) }}" novalidate>
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    {{ form_input('pers_name' ~ pers_slug, 'Person name', 'name', value=person, placeholder='Person name', required=true, max_length=40) }}
+                                    {{ form_input('pers_name' ~ pers_slug, 'Person name', 'split_person-name', value=person, placeholder='Person name', required=true, max_length=40) }}
                                     {{ button('Update Person', kind='primary', extra_class='w-100', type='submit') }}
                                 </form>
                             {% endcall %}
