@@ -5881,72 +5881,38 @@ def api_balance_current():
         }
         return jsonify(out)
 
-    # When show_txns is true: merge recent balance entries and recent transactions,
-    # sort by timestamp (latest first by default) and return server-limited page (12 rows)
-    # Fetch up to `limit` from each collection, then merge+slice to limit to ensure server-side cap.
-    # Collect pages 1..page from each collection (each DB call limited to `limit`)
+    # When show_txns is true: return all balance entries (both manual adjustments and transaction-driven changes)
     bal_all = []
-    tx_all = []
     bal_count = 0
-    tx_count = 0
     for p in range(1, page + 1):
-        b_docs, b_total, _ = fetch_sorted_page(bal_collection(username), sort_arg, dir_arg, page=p, limit=limit, filter_query_fn=None, force_in_memory=True)
-        t_docs, t_total, _ = fetch_sorted_page(tx_collection(username), sort_arg, dir_arg, page=p, limit=limit, filter_query_fn=None)
+        docs_p, total_items_p, _ = fetch_sorted_page(
+            bal_collection(username),
+            sort_arg,
+            dir_arg,
+            page=p,
+            limit=limit,
+            filter_query_fn=None,
+            force_in_memory=True,
+        )
         if p == 1:
-            bal_count = b_total or 0
-            tx_count = t_total or 0
-        bal_all.extend(b_docs or [])
-        tx_all.extend(t_docs or [])
+            bal_count = total_items_p or 0
+        bal_all.extend(docs_p or [])
 
-    # Build txn lookup for serializing balance entries that reference transactions
-    txn_lookup = { (t.get('_id') or t.get('id')): t for t in tx_all if (t.get('_id') or t.get('id')) }
-
-    combined = []
-
-    # Normalize balance docs (they are balance entries)
-    for d in bal_all:
-        combined.append({'_source': 'balance', 'raw': d, 'ts': d.get('timestamp')})
-
-    # Normalize transactions into balance-like entries
-    for t in tx_all:
-        combined.append({'_source': 'txn', 'raw': t, 'ts': t.get('timestamp')})
-
-    # Sort combined by timestamp
-    reverse = (dir_arg == 'desc')
-    combined.sort(key=lambda x: (x.get('ts') or datetime.min.replace(tzinfo=UTC)), reverse=reverse)
-
-    # Total items should reflect the available items in both collections
-    total_items = (bal_count or 0) + (tx_count or 0)
-    total_pages = max(1, math.ceil(total_items / limit))
+    # Slice to requested page
     offset = (page - 1) * limit
-    paged = combined[offset: offset + limit]
+    page_items = bal_all[offset: offset + limit]
 
-    # Serialize entries into the frontend shape
-    history = []
-    for item in paged:
-        if item['_source'] == 'balance':
-            history.append(serialize_balance_history_entry(item['raw'], txn_lookup))
-        else:
-            t = item['raw']
-            note_display = f"{t.get('description','')}({t.get('category','')})"
-            split_id = t.get('split_id') or ''
-            entry = {
-                'id': t.get('_id') or t.get('id'),
-                'timestamp': format_ist(t.get('timestamp')) if t.get('timestamp') else None,
-                'type': 'txn',
-                'source': 'txn',
-                'balance_mode': 'split' if split_id else ('sub-rec' if t.get('recurring_id') else 'sub'),
-                'delta': round(-float(t.get('amount', 0.0)), 2),
-                'balance': None,
-                'note': t.get('description') or '',
-                'note_display': note_display,
-                'transaction_id': t.get('_id') or t.get('id'),
-                'transaction_search_text': ' '.join(str(p or '') for p in (t.get('_id') or t.get('id'), t.get('description'), t.get('category'))).strip(),
-                'split_id': split_id,
-                'split_title': t.get('split_title') or '',
-                'split_url': url_for('split_detail', split_id=split_id) if split_id else '',
-            }
-            history.append(entry)
+    # Extract transaction IDs to build lookup
+    txn_ids = []
+    for d in page_items:
+        tx_id = balance_transaction_id(d)
+        if tx_id:
+            txn_ids.append(tx_id)
+
+    txn_lookup = load_transactions_by_id(username, txn_ids)
+    history = [serialize_balance_history_entry(d, txn_lookup) for d in page_items]
+
+    total_pages = max(1, math.ceil((bal_count or 0) / limit))
 
     out = {
         'current': {
@@ -5956,7 +5922,7 @@ def api_balance_current():
         'history': history,
         'page': page,
         'total_pages': total_pages,
-        'total_items': total_items,
+        'total_items': bal_count,
         'per_page': limit
     }
 
