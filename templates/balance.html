@@ -76,7 +76,7 @@
 <!-- Add Manual Entry Modal -->
 {% if not session.get('view_only') %}
 {% call modal('addBalanceModal', 'Add Manual Entry') %}
-    {{ form_input('addAmount', 'Amount (Rs.)', 'amount', type='number', step='0.01', placeholder='e.g. 500 or -250') }}
+    {{ form_input('addAmount', 'Amount (Rs.)', 'amount', type='number', step='0.01', placeholder='e.g. 500 or -250', required=true) }}
     <div class="form-text small text-muted mb-3 mt-n3">Use positive values to add, negative values to subtract.</div>
     {{ form_input('addNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
     <div class="mt-4">
@@ -86,7 +86,7 @@
 
 <!-- Sync Absolute Balance Modal -->
 {% call modal('syncBalanceModal', 'Sync Absolute Balance') %}
-    {{ form_input('syncAmount', 'Absolute Balance (Rs.)', 'amount', type='number', step='0.01', placeholder='Set absolute balance') }}
+    {{ form_input('syncAmount', 'Absolute Balance (Rs.)', 'amount', type='number', step='0.01', placeholder='Set absolute balance', required=true) }}
     <div class="form-text small text-muted mb-3 mt-n3">Set the exact current balance amount.</div>
     {{ form_input('syncNote', 'Note (optional)', 'note', placeholder='Note description', maxlength=120) }}
     <div class="mt-4">

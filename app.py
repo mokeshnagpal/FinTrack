@@ -1202,7 +1202,8 @@ def apply_recurring_up_to_today():
                     'description': (r.get('description') or '').strip(),
                     'category': r.get('category') or 'Uncategorized',
                     'timestamp': next_occ,
-                    'recurring_id': str(rec_id)
+                    'recurring_id': str(rec_id),
+                    'mode_name': 'recurring'
                 }
                 try:
                     rec_ref = rec_collection(username).document(rec_id)
@@ -1236,6 +1237,7 @@ def apply_recurring_up_to_today():
                             'txn',
                             username=username,
                             extra_fields={'txn_id': new_txn_id, 'timestamp': next_occ},
+                            mode_name='recurring',
                         )
                     except Exception:
                         app.logger.exception("Failed to append balance for recurring %s at %s (user=%s)", rec_id, next_occ, username)
@@ -1256,15 +1258,17 @@ def apply_recurring_up_to_today():
                                     'txn',
                                     username=username,
                                     extra_fields={'txn_id': fallback_txn_id, 'timestamp': next_occ},
+                                    mode_name='recurring',
                                 )
                             else:
                                 app.logger.warning("Failed to get txn_id from fallback add for recurring %s", rec_id)
                                 append_balance(
                                     -float(txn_doc.get('amount', 0.0)),
-                                    'add',
+                                    'balance',
                                     username=username,
                                     notes=f"recurring:{rec_id}",
                                     extra_fields={'timestamp': next_occ},
+                                    mode_name='recurring',
                                 )
                         except Exception:
                             app.logger.exception("Failed to append balance (fallback) for recurring %s at %s (user=%s)", rec_id, next_occ, username)
@@ -1341,7 +1345,7 @@ def apply_recurring_balances_up_to_today():
                 try:
                     append_balance(
                         amount,
-                        'recurring_balance',
+                        'balance',
                         note=balance_note,
                         username=username,
                         extra_fields={
@@ -1350,6 +1354,7 @@ def apply_recurring_balances_up_to_today():
                             'scheduled_for': next_occ,
                             'timestamp': next_occ,
                         },
+                        mode_name='recurring',
                     )
                     rec_ref.update({'last_applied': next_occ})
                     app.logger.info(
@@ -1515,7 +1520,7 @@ def index():
 
 
 
-def build_transaction_doc(form):
+def build_transaction_doc(form, mode_name='txn-spent'):
     txn_datetime = local_datetime_to_utc(
         form.date.data or now_ist().date(),
         form.time.data or now_ist().time(),
@@ -1524,7 +1529,8 @@ def build_transaction_doc(form):
         'amount': parse_money(form.amount.data),
         'description': validate_short_text(form.description.data, 'Description'),
         'category': form.category.data or 'Uncategorized',
-        'timestamp': txn_datetime
+        'timestamp': txn_datetime,
+        'mode_name': mode_name
     }
 
 def request_payload_signature(payload):
@@ -1558,7 +1564,7 @@ def record_request_signature(session_key, payload):
     }
 
 
-def build_transaction_doc_from_payload(payload):
+def build_transaction_doc_from_payload(payload, mode_name='txn-spent'):
     txn_date = parse_iso_date(payload.get('date'))
     if txn_date is None:
         raise ValueError('Date must use YYYY-MM-DD format.')
@@ -1579,12 +1585,29 @@ def build_transaction_doc_from_payload(payload):
         'description': description,
         'category': category,
         'timestamp': local_datetime_to_utc(txn_date, txn_time),
+        'mode_name': mode_name
     }
 
 def create_transaction(username, txn_doc):
     txn_doc = dict(txn_doc)
+    if 'mode_name' not in txn_doc:
+        if txn_doc.get('recurring_id'):
+            txn_doc['mode_name'] = 'recurring'
+        elif txn_doc.get('split_id'):
+            txn_doc['mode_name'] = 'split'
+        else:
+            txn_doc['mode_name'] = 'txn-spent'
+
     _, doc_ref = tx_collection(username).add(txn_doc)
     txn_id = getattr(doc_ref, 'id', '')
+    
+    # Determine mode_name for the balance entry
+    balance_mode_name = 'txn-add'
+    if txn_doc.get('mode_name') == 'recurring':
+        balance_mode_name = 'recurring'
+    elif txn_doc.get('mode_name') == 'split':
+        balance_mode_name = 'split'
+    
     balance_extra = {
         'txn_id': txn_id,
         'timestamp': txn_doc.get('timestamp') or datetime.now(UTC),
@@ -1597,6 +1620,7 @@ def create_transaction(username, txn_doc):
         'txn',
         username=username,
         extra_fields=balance_extra,
+        mode_name=balance_mode_name,
     )
     return txn_id
 
@@ -1755,6 +1779,8 @@ def api_transaction_update(tx_id):
             return jsonify({'ok': False, 'error': 'Split transactions must be updated from the Split detail page.'}), 400
 
         updated_doc = build_transaction_doc_from_payload(payload)
+        if 'mode_name' in existing_txn:
+            updated_doc['mode_name'] = existing_txn['mode_name']
         old_amount = float(existing_txn.get('amount', 0.0))
         new_amount = float(updated_doc.get('amount', 0.0))
         balance_delta = round(old_amount - new_amount, 2)
@@ -1876,6 +1902,8 @@ def edit_transaction(tx_id):
 
     if form.validate_on_submit():
         updated_doc = build_transaction_doc(form)
+        if 'mode_name' in existing_txn:
+            updated_doc['mode_name'] = existing_txn['mode_name']
         old_amount = float(existing_txn.get('amount', 0.0))
         new_amount = float(updated_doc.get('amount', 0.0))
         balance_delta = round(old_amount - new_amount, 2)
@@ -2252,7 +2280,7 @@ def unified_sort_and_paginate(items, sort_key, dir_arg, page=None, limit=12):
     return sliced_items, total_items, total_pages
 
 
-def fetch_sorted_page(collection_ref, sort_key, dir_arg, page=1, limit=12, filter_query_fn=None, force_in_memory=True):
+def fetch_sorted_page(collection_ref, sort_key, dir_arg, page=1, limit=12, filter_query_fn=None, force_in_memory=False):
     """
     Fetches exactly `limit` items for the given page directly from the database,
     using Firestore limit/offset/order_by. If it fails due to missing indexes,
@@ -2288,22 +2316,15 @@ def fetch_sorted_page(collection_ref, sort_key, dir_arg, page=1, limit=12, filte
         limit = 12
     limit = max(1, min(limit, 12))
 
-    # If caller requests in-memory sorting, do a limited fetch and sort locally.
+    # If caller requests in-memory sorting, do a full fetch and sort locally.
     if force_in_memory:
         try:
-            # Try to get total count if available
-            try:
-                total_items = base_q.count().get()[0][0].value
-            except Exception:
-                total_items = 0
-
-            fetch_limit = max(limit, page * limit)
-            docs = list(stream_with_timeout(base_q.limit(fetch_limit)))
+            docs = list(stream_with_timeout(base_q))
             items = [doc_to_txn(doc) for doc in docs]
-            items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=fetch_limit)
+            total_items = len(items)
+            items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=total_items)
             offset = (page - 1) * limit
             sliced = items[offset: offset + limit]
-            total_items = len(items) if total_items == 0 else total_items
             total_pages = max(1, math.ceil(total_items / limit))
             return sliced, total_items, total_pages
         except Exception:
@@ -2349,13 +2370,12 @@ def fetch_sorted_page(collection_ref, sort_key, dir_arg, page=1, limit=12, filte
             app.logger.warning("Firestore composite index required; falling back to in-memory sort. Error: %s", msg)
             try:
                 app.logger.warning("Attempting in-memory fallback after missing index error")
-                fetch_limit = max(limit, page * limit)
-                docs = list(stream_with_timeout(base_q.limit(fetch_limit)))
+                docs = list(stream_with_timeout(base_q))
                 items = [doc_to_txn(doc) for doc in docs]
-                items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=fetch_limit)
+                total_items = len(items)
+                items, _, _ = unified_sort_and_paginate(items, normalized_key, dir_arg, page=None, limit=total_items)
                 offset = (page - 1) * limit
                 sliced = items[offset: offset + limit]
-                total_items = len(items)
                 total_pages = max(1, math.ceil(total_items / limit))
                 return sliced, total_items, total_pages
             except Exception as e2:
@@ -2510,7 +2530,7 @@ def delete(tx_id):
     try:
         delete_balance_entries_for_transaction(tx_id, username=username)
         doc_ref.delete()
-        flash('Transaction deleted.', 'info')
+        flash('Transaction deleted.', 'danger')
     except Exception as e:
         app.logger.exception("Failed to delete transaction %s: %s", tx_id, e)
         flash('Failed to delete transaction.', 'warning')
@@ -5273,7 +5293,7 @@ def export_balances_csv():
         cw.writerow([
             b.get('_id'),
             format_ist(b.get('timestamp')),
-            _balance_type_label(b.get('type')),
+            _balance_type_label(b.get('type'), b.get('mode_name')),
             f"{float(b.get('delta', 0.0)):.2f}",
             f"{float(b.get('balance', 0.0)):.2f}",
             b.get('notes') or b.get('note') or ''
@@ -5547,7 +5567,7 @@ def recompute_balance_entries_from(timestamp, username=None):
         count += 1
     return count
 
-def append_balance(delta, type_, note='', notes=None, username=None, extra_fields=None):
+def append_balance(delta, type_, note='', notes=None, username=None, extra_fields=None, mode_name=None):
     if username is None:
         username = require_user()
     extra_fields = dict(extra_fields or {})
@@ -5572,6 +5592,20 @@ def append_balance(delta, type_, note='', notes=None, username=None, extra_field
         'notes': (balance_notes or '')[:1024],
         'timestamp': entry_timestamp
     }
+    # Add mode_name if provided, or determine fallback
+    if mode_name is None:
+        if type_ == 'txn':
+            if extra_fields and extra_fields.get('split_id'):
+                mode_name = 'split'
+            else:
+                mode_name = 'txn-add'
+        elif type_ in ('balance', 'add', 'sync', 'recurring_balance'):
+            if type_ == 'sync':
+                mode_name = 'balance-sync'
+            else:
+                mode_name = 'balance-add'
+    if mode_name is not None:
+        doc['mode_name'] = str(mode_name)
     if extra_fields:
         doc.update(extra_fields)
     try:
@@ -5611,11 +5645,11 @@ def find_balance_entries_for_transaction(tx_id, username=None):
 
     q = (
         bal_collection(username)
-        .where('type', '==', 'txn')
         .where('txn_id', '==', tx_id)
-        .order_by('timestamp', direction=firestore.Query.ASCENDING)
     )
-    return list(stream_with_timeout(q))
+    docs = list(stream_with_timeout(q))
+    docs.sort(key=lambda d: d.to_dict().get('timestamp') or datetime.min.replace(tzinfo=UTC))
+    return docs
 
 
 def delete_balance_entry_document(doc, username=None):
@@ -5729,14 +5763,25 @@ def serialize_balance_history_entry(d, txn_lookup):
 
     # Determine balance mode
     d_type = d.get('type')
-    if split_id:
+    d_mode = d.get('mode_name')
+    if d_mode == 'split' or split_id:
         balance_mode = 'split'
-    elif d_type == 'recurring_balance':
+    elif d_type == 'balance' and d_mode == 'recurring':
         balance_mode = 'add-rec'
-    elif (txn and txn.get('recurring_id')) or notes.startswith('recurring:'):
+    elif d_type == 'txn' and d_mode == 'recurring':
         balance_mode = 'sub-rec'
+    elif d_mode == 'balance-sync' or d_mode == 'sync' or d_type == 'sync':
+        balance_mode = 'sync'
+    elif d_mode == 'balance-add' or d_mode == 'add' or d_type == 'add':
+        balance_mode = 'add'
     else:
-        balance_mode = d.get('balance_mode') or ('sync' if d_type == 'sync' else 'add')
+        # Fallbacks for safety/legacy
+        if d_type == 'recurring_balance':
+            balance_mode = 'add-rec'
+        elif (txn and txn.get('recurring_id')) or notes.startswith('recurring:'):
+            balance_mode = 'sub-rec'
+        else:
+            balance_mode = d.get('balance_mode') or ('sync' if d_type == 'sync' else 'add')
 
     return {
         'id': d.get('_id') or d.get('id'),
@@ -5772,7 +5817,7 @@ def api_balance_current():
         bal_count = 0
         for p in range(1, page + 1):
             def filter_query_fn(q):
-                return q.where('type', 'in', ('add', 'sync', 'recurring_balance', 'add_txn', 'txn_edit', 'txn_delete', 'recurring'))
+                return q.where('type', 'in', ('balance', 'add', 'sync', 'recurring_balance'))
 
             docs_p, total_items_p, _ = fetch_sorted_page(
                 bal_collection(username),
@@ -5951,7 +5996,7 @@ def _build_delta_series_values(bal_docs, labels, period):
     return [round(bucket_sums[label], 2) for label in labels]
 
 
-def _balance_type_label(type_key):
+def _balance_type_label(type_key, mode_name=None):
     labels = {
         'add': 'Manual add',
         'sync': 'Sync',
@@ -5961,7 +6006,20 @@ def _balance_type_label(type_key):
         'txn_delete': 'Deleted transaction',
         'recurring': 'Recurring expense',
         'recurring_balance': 'Recurring balance',
+        'balance-add': 'Manual add',
+        'balance-sync': 'Sync',
+        'txn-add': 'Transaction',
+        'split': 'Split transaction',
     }
+    if mode_name:
+        mode_str = str(mode_name).strip()
+        if mode_str == 'recurring':
+            if str(type_key).strip() == 'txn':
+                return 'Recurring expense'
+            else:
+                return 'Recurring balance'
+        if mode_str in labels:
+            return labels[mode_str]
     key = str(type_key or '').strip()
     return labels.get(key, key.replace('_', ' ').title() or 'Other')
 
@@ -5972,7 +6030,7 @@ def _serialize_balance_entry(entry):
         'timestamp': format_ist(entry.get('timestamp')) if entry.get('timestamp') else None,
         'balance': round(float(entry.get('balance', 0.0)), 2),
         'type': entry.get('type'),
-        'type_label': _balance_type_label(entry.get('type')),
+        'type_label': _balance_type_label(entry.get('type'), entry.get('mode_name')),
         'delta': round(float(entry.get('delta', 0.0)), 2),
         'note': entry.get('notes') if entry.get('notes') is not None else entry.get('note', ''),
     }
@@ -6025,10 +6083,13 @@ def api_balance_analytics():
         pct_change = round(((net_change - prev_net) / abs(prev_net)) * 100.0, 2)
 
     type_stats = {}
+    type_stats = {}
     for entry in bal_docs:
-        key = str(entry.get('type') or 'other')
+        t = entry.get('type')
+        m = entry.get('mode_name')
+        key = str(m or t or 'other')
         if key not in type_stats:
-            type_stats[key] = {'type': key, 'label': _balance_type_label(key), 'count': 0, 'total_delta': 0.0}
+            type_stats[key] = {'type': key, 'label': _balance_type_label(t, m), 'count': 0, 'total_delta': 0.0}
         type_stats[key]['count'] += 1
         type_stats[key]['total_delta'] += float(entry.get('delta', 0.0))
 
@@ -6051,7 +6112,7 @@ def api_balance_analytics():
         largest = max(bal_docs, key=lambda row: abs(float(row.get('delta', 0.0))))
         largest_entry = {
             'delta': round(float(largest.get('delta', 0.0)), 2),
-            'type_label': _balance_type_label(largest.get('type')),
+            'type_label': _balance_type_label(largest.get('type'), largest.get('mode_name')),
             'timestamp': format_ist(largest.get('timestamp')) if largest.get('timestamp') else None,
         }
 
@@ -6134,13 +6195,14 @@ def api_balance_add():
     new_bal = round(base + delta, 2)
     doc = {
         'balance': float(new_bal),
-        'type': 'add',
+        'type': 'balance',
         'delta': float(delta),
         'notes': note,
-        'timestamp': now
+        'timestamp': now,
+        'mode_name': 'balance-add'
     }
     bal_collection(username).add(doc)
-    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "add"}
+    result = {"balance": new_bal, "timestamp": format_ist(now), "type": "balance", "mode_name": "balance-add"}
     record_request_signature('api_balance_add', data)
     app.logger.info("Balance add created user=%s delta=%.2f new_balance=%.2f", username, delta, new_bal)
     return jsonify(result)
@@ -6173,17 +6235,18 @@ def api_balance_sync():
     delta = round(new_balance - base, 2)
     doc = {
         'balance': float(round(new_balance, 2)),
-        'type': 'sync',
-        'balance_mode': 'sync',
+        'type': 'balance',
         'delta': float(delta),
         'notes': note,
-        'timestamp': now
+        'timestamp': now,
+        'mode_name': 'balance-sync'
     }
     bal_collection(username).add(doc)
     result = {
         "balance": round(new_balance, 2),
         "timestamp": format_ist(now),
-        "type": "sync",
+        "type": "balance",
+        "mode_name": "balance-sync",
         "delta": delta,
     }
     record_request_signature('api_balance_sync', data)
@@ -6206,8 +6269,14 @@ def api_balance_update(entry_id):
 
     entry = doc_to_txn(doc)
     entry_type = (entry.get('type') or '').lower()
-    if entry_type not in {'add', 'sync', 'recurring_balance'}:
-        app.logger.warning("Balance update blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
+    entry_mode = (entry.get('mode_name') or '').lower()
+
+    is_manual = (
+        entry_type in {'add', 'sync', 'recurring_balance'} or 
+        (entry_type == 'balance' and entry_mode in {'balance-add', 'balance-sync', 'recurring'})
+    )
+    if not is_manual:
+        app.logger.warning("Balance update blocked for non-manual entry id=%s user=%s type=%s mode=%s", entry_id, username, entry_type, entry_mode)
         return jsonify({"error": "Only manual add/sync/recurring_balance balance entries can be edited."}), 400
 
     try:
@@ -6215,17 +6284,23 @@ def api_balance_update(entry_id):
         requested_mode = str(data.get('mode') or '').lower()
         previous = get_previous_balance_before(entry.get('timestamp'), username=username)
         previous_balance = float(previous.get('balance', 0.0)) if previous else 0.0
-        update_type = entry_type
-        balance_mode_value = entry.get('balance_mode')
 
-        if entry_type == 'recurring_balance':
+        is_recurring = (entry_type == 'recurring_balance' or entry_mode == 'recurring')
+        is_sync_mode = (
+            requested_mode == 'sync' or 
+            (not requested_mode and (entry_type == 'sync' or entry_mode == 'balance-sync'))
+        )
+
+        if is_recurring:
             if requested_mode == 'sync':
                 raise ValueError('Recurring balance entries must stay as change amounts.')
             new_delta = parse_money(data.get('delta'), field_name='Delta', allow_negative=True)
             new_balance = round(previous_balance + new_delta, 2)
-        elif requested_mode == 'sync' or (not requested_mode and entry_type == 'sync'):
-            update_type = 'sync'
-            balance_mode_value = 'sync'
+            update_type = 'balance' if entry_type == 'balance' else 'recurring_balance'
+            balance_mode_value = 'recurring'
+        elif is_sync_mode:
+            update_type = 'balance' if entry_type == 'balance' else 'sync'
+            balance_mode_value = 'balance-sync' if entry_type == 'balance' else 'sync'
             new_balance = parse_money(
                 data.get('balance'),
                 field_name='Balance value',
@@ -6234,8 +6309,8 @@ def api_balance_update(entry_id):
             )
             new_delta = round(new_balance - previous_balance, 2)
         else:
-            update_type = 'add'
-            balance_mode_value = None
+            update_type = 'balance' if entry_type == 'balance' else 'add'
+            balance_mode_value = 'balance-add' if entry_type == 'balance' else 'add'
             new_delta = parse_money(data.get('delta'), field_name='Delta', allow_negative=True)
             new_balance = round(previous_balance + new_delta, 2)
 
@@ -6246,10 +6321,10 @@ def api_balance_update(entry_id):
             'type': update_type,
             'updated_at': datetime.now(UTC),
         }
-        if balance_mode_value:
+        if entry_type == 'balance':
+            update_payload['mode_name'] = balance_mode_value
+        else:
             update_payload['balance_mode'] = balance_mode_value
-        elif entry_type == 'sync' or entry.get('balance_mode'):
-            update_payload['balance_mode'] = firestore.DELETE_FIELD
 
         doc_ref.update(update_payload)
         shifted = recompute_balance_entries_after(entry.get('timestamp'), new_balance, username=username)
@@ -6288,8 +6363,14 @@ def api_balance_delete(entry_id):
 
     entry = doc_to_txn(doc)
     entry_type = (entry.get('type') or '').lower()
-    if entry_type not in {'add', 'sync', 'recurring_balance'}:
-        app.logger.warning("Balance delete blocked for non-manual entry id=%s user=%s type=%s", entry_id, username, entry_type)
+    entry_mode = (entry.get('mode_name') or '').lower()
+
+    is_manual = (
+        entry_type in {'add', 'sync', 'recurring_balance'} or 
+        (entry_type == 'balance' and entry_mode in {'balance-add', 'balance-sync', 'recurring'})
+    )
+    if not is_manual:
+        app.logger.warning("Balance delete blocked for non-manual entry id=%s user=%s type=%s mode=%s", entry_id, username, entry_type, entry_mode)
         return jsonify({"error": "Only manual add/sync/recurring_balance balance entries can be deleted."}), 400
 
     try:

@@ -137,7 +137,7 @@
 {% call modal('newSplitModal', 'New Split') %}
     <form method="post" action="{{ url_for('splits') }}" novalidate data-form-validation="split-create">
         {{ form.hidden_tag() }}
-        {{ form_field(form.title, placeholder="Chennai trip", maxlength="80") }}
+        {{ form_field(form.title, placeholder="Chennai trip", maxlength="80", required=true) }}
         <div class="mb-3">
             <label class="form-label d-block text-muted">Members Included</label>
             {{ people_picker(all_people, 'newSplitPerson', checked_by_default=true) }}

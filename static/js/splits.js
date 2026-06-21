@@ -14,7 +14,7 @@
 
   function showNotice(message, type = 'warning') {
     if (window.FinTrak && typeof window.FinTrak.showToast === 'function') {
-      window.FinTrak.showToast(message, type === 'warning' ? 'warning' : 'info');
+      window.FinTrak.showToast(message, type);
     }
   }
 

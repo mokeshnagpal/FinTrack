@@ -5,7 +5,6 @@
     {% call page_header('Transaction History', kicker='Records', description='Review recent spending activity.') %}
         <div class="d-flex gap-2 flex-wrap">
             {{ button('Add Transaction', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addTransactionModal'}) }}
-            {{ button('Add Saved Transaction', kind='secondary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addSavedTransactionModal'}) }}
         </div>
     {% endcall %}
 {% else %}
@@ -36,13 +35,17 @@
         {% set can_manage_txn = not session.get('view_only') %}
         <tr>
             <td data-label="Date"><small data-format-date>{{ txn.timestamp|ist_datetime('%Y-%m-%d %H:%M') }}</small></td>
-            <td data-label="Mode">
-                {% if txn.split_id %}
-                    <span class="badge badge-compact badge-split">Split</span>
-                {% elif txn.recurring_id %}
+            <td data-label="Mode Name">
+                {% if txn.mode_name == 'recurring' %}
                     <span class="badge badge-compact badge-add-rec">Recurring</span>
+                {% elif txn.mode_name == 'txn-spent' %}
+                    {% if txn.split_id %}
+                        <span class="badge badge-compact badge-split">Split</span>
+                    {% else %}
+                        <span class="badge badge-compact badge-add">Manual</span>
+                    {% endif %}
                 {% else %}
-                    <span class="badge badge-compact badge-add">Txn</span>
+                    <span class="badge badge-compact" title="{{ txn.mode_name or 'unknown' }}">{{ txn.mode_name or 'N/A' }}</span>
                 {% endif %}
             </td>
             <td data-label="Description"><small>{{ txn.description }}</small></td>
@@ -113,12 +116,15 @@
 
 <!-- Transactions pagination (server + AJAX) - placed directly under the transactions table -->
 <div id="transactionsPaginationServer">{{ pagination(txns.page, txns.total_pages) }}</div>
-<!-- AJAX pagination container (used when JS intercepts search) -->
-<div id="transactionsPaginationAjax" class="d-none table-pagination-controls"></div>
 
 
 <div class="saved-transactions-section mt-5">
-    <h2 class="h5 mb-3">Saved Transaction Templates</h2>
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 class="h5 mb-0">Saved Transaction Templates</h2>
+        <div>
+            {{ button('Add Saved Transaction', kind='secondary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addSavedTransactionModal'}) }}
+        </div>
+    </div>
     {% call table_shell(extra_class='table-striped', attrs={'id': 'savedTransactionsTable', 'data-page-size': '12'}) %}
         <thead>
             <tr>
@@ -239,19 +245,42 @@ document.addEventListener('DOMContentLoaded', () => {
 {% call modal('addTransactionModal', 'Record Spending') %}
     <form method="post" action="{{ url_for('add') }}">
         {{ form.hidden_tag() }}
-        {{ form_field(form.amount, step="0.01", min="0.01") }}
-        {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
+        {{ form_field(form.amount, step="0.01", min="0.01", required=true) }}
+        {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120", required=true) }}
         {{ form_field(form.category) }}
         <div class="row g-2">
             <div class="col-sm-6">
-                {{ form_field(form.date, type="date") }}
+                {{ form_field(form.date, type="date", required=true) }}
             </div>
             <div class="col-sm-6">
-                {{ form_field(form.time, type="time") }}
+                {{ form_field(form.time, type="time", required=true) }}
             </div>
         </div>
         <div class="mt-4">
             {{ button('Save Transaction', kind='primary', extra_class='w-100', type='submit') }}
+        </div>
+    </form>
+{% endcall %}
+{% endif %}
+
+<!-- Add Saved Transaction Modal (missing modal markup previously) -->
+{% if not session.get('view_only') %}
+{% call modal('addSavedTransactionModal', 'Add Saved Transaction') %}
+    <form method="post" action="{{ url_for('add_saved_transaction') }}">
+        {{ form.hidden_tag() }}
+        {{ form_field(form.amount, step="0.01", min="0.01", required=true) }}
+        {{ form_field(form.description, placeholder="e.g. Grocery shopping", maxlength="120", required=true) }}
+        {{ form_field(form.category) }}
+        <div class="row g-2">
+            <div class="col-sm-6">
+                {{ form_field(form.date, type="date", required=true) }}
+            </div>
+            <div class="col-sm-6">
+                {{ form_field(form.time, type="time", required=true) }}
+            </div>
+        </div>
+        <div class="mt-4">
+            {{ button('Save Template', kind='primary', extra_class='w-100', type='submit') }}
         </div>
     </form>
 {% endcall %}

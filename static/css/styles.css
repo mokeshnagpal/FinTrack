@@ -486,6 +486,38 @@ a:hover{text-decoration:none}
 .split-live-toggle .form-check-input{
   margin:0;
 }
+
+/* Ensure split toggle (live) matches other toggles appearance */
+.split-live-toggle .form-check-input[type="checkbox"] {
+  width: 2.25em;
+  height: 1.25em;
+  background: var(--surface);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  position: relative;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.split-live-toggle .form-check-input[type="checkbox"]:after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s ease, background 0.15s ease;
+}
+.split-live-toggle .form-check-input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.split-live-toggle .form-check-input[type="checkbox"]:checked:after {
+  left: calc(100% - 18px);
+}
 .split-trip-cell{
   display:flex;
   align-items:center;
@@ -1975,6 +2007,22 @@ th.sortable-header.active .sort-icon{
   color: #071023;
 }
 #toastContainer { z-index: 2000; }
+#toastContainer .toast.text-bg-danger {
+  background-color: var(--danger) !important;
+  color: #ffffff !important;
+}
+#toastContainer .toast.text-bg-success {
+  background: var(--g-primary) !important;
+  color: #ffffff !important;
+}
+#toastContainer .toast.text-bg-warning {
+  background-color: var(--accent) !important;
+  color: #071023 !important;
+}
+#toastContainer .toast.text-bg-info {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
 .flash-message-hide{
   opacity:0!important;
   transform:translateY(-6px)!important;

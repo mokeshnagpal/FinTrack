@@ -1,30 +1,42 @@
 {% extends "base.html" %}
-{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button, link_button, badge, card, delete_button, friendly_date, pagination %}
+{% from "macros/ui.html" import page_header, table_shell, modal, form_field, form_input, form_select, button,
+link_button, badge, card, delete_button, friendly_date, pagination %}
 {% block content %}
 {% set split_id = split_doc.id or split_doc._id %}
 
-{% set header_desc = 'Live split bill. Track and manage shared expenses.' if split_doc.is_live else 'Saved split bill. View detailed breakdown.' %}
-{% call page_header(split_doc.title or 'Untitled split', kicker='Shared Bills', description=header_desc, extra_class='split-detail-header', attrs={'data-split-id': split_id, 'data-split-live': 'true' if split_doc.is_live else 'false'}) %}
-    {{ link_button(url_for('splits'), 'Back', kind='secondary', outline=true) }}
-    {% if not session.get('view_only') %}
-    {% if split_doc.transaction_id %}
-    {% call button(kind='info', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-txn-id': split_doc.transaction_id, 'data-recorded-amount': '%.2f' | format(split_doc.recorded_amount or 0.0), 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-        </svg>
-        Update in Transactions
-    {% endcall %}
-    {% else %}
-    {% call button(kind='success', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id': split_id, 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled split'}) %}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-        Add to Transactions
-    {% endcall %}
-    {% endif %}
-    {{ button('New Entry', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#addEntryModal'}) }}
-    {% endif %}
+{% set header_desc = 'Live split bill. Track and manage shared expenses.' if split_doc.is_live else 'Saved split bill.
+View detailed breakdown.' %}
+{% call page_header(split_doc.title or 'Untitled split', kicker='Shared Bills', description=header_desc,
+extra_class='split-detail-header', attrs={'data-split-id': split_id, 'data-split-live': 'true' if split_doc.is_live else
+'false'}) %}
+{{ link_button(url_for('splits'), 'Back', kind='secondary', outline=true) }}
+{% if not session.get('view_only') %}
+{% if split_doc.transaction_id %}
+{% call button(kind='info', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id':
+split_id, 'data-txn-id': split_doc.transaction_id, 'data-recorded-amount': '%.2f' | format(split_doc.recorded_amount or
+0.0), 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled
+split'}) %}
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+    stroke-linecap="round" stroke-linejoin="round" class="me-1">
+    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+</svg>
+Update in Transactions
+{% endcall %}
+{% else %}
+{% call button(kind='success', outline=true, extra_class='record-share-btn', type='button', attrs={'data-split-id':
+split_id, 'data-share-amount': '%.2f' | format(share_amount or 0.0), 'data-split-title': split_doc.title or 'Untitled
+split'}) %}
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+    stroke-linecap="round" stroke-linejoin="round" class="me-1">
+    <line x1="12" y1="5" x2="12" y2="19"></line>
+    <line x1="5" y1="12" x2="19" y2="12"></line>
+</svg>
+Add to Transactions
+{% endcall %}
+{% endif %}
+{{ button('New Entry', kind='primary', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target':
+'#addEntryModal'}) }}
+{% endif %}
 {% endcall %}
 
 <!-- Split Share Calculation Info Box -->
@@ -32,7 +44,8 @@
     <div class="split-info-formula-side">
         <div class="split-info-pill-item">
             <span class="label">Total Spent</span>
-            <strong class="value text-success">Rs. <span id="summaryTotalSpent">{{ '%.2f'|format(total_spent or 0.0) }}</span></strong>
+            <strong class="value text-success">Rs. <span id="summaryTotalSpent">{{ '%.2f'|format(total_spent or 0.0)
+                    }}</span></strong>
         </div>
         <div class="split-info-operator">/</div>
         <div class="split-info-pill-item">
@@ -55,98 +68,105 @@
         <strong>Rs. {{ '%.2f'|format(amount) }}</strong>
         {% if diff > 0 %}
         <div class="small text-success mt-2 fw-semibold">Receives: Rs. {{ '%.2f'|format(diff) }}</div>
-        {% elif diff < 0 %}
-        <div class="small text-danger mt-2 fw-semibold">Gives: Rs. {{ '%.2f'|format(-diff) }}</div>
-        {% else %}
-        <div class="small text-muted mt-2 fw-semibold">Settled</div>
-        {% endif %}
+        {% elif diff < 0 %} <div class="small text-danger mt-2 fw-semibold">Gives: Rs. {{ '%.2f'|format(-diff) }}
     </div>
     {% else %}
-    <div class="split-total-card split-total-empty">
-        <span>No entries yet</span>
-        <strong>Rs. 0.00</strong>
-    </div>
-    {% endfor %}
+    <div class="small text-muted mt-2 fw-semibold">Settled</div>
+    {% endif %}
+</div>
+{% else %}
+<div class="split-total-card split-total-empty">
+    <span>No entries yet</span>
+    <strong>Rs. 0.00</strong>
+</div>
+{% endfor %}
 </div>
 
 <div class="row g-3 mt-1">
     <div class="col-12">
         {% call card(extra_class='shadow-sm', no_body=true) %}
-            <div class="card-body">
-                <h4 class="page-title mb-3">Latest Entries</h4>
-                {% call table_shell(extra_class='server-sorted') %}
-                    <thead>
-                        <tr>
-                            <th class="sortable-header" data-sort-key="when">When</th>
-                            <th class="sortable-header" data-sort-key="person">Person</th>
-                            <th class="sortable-header" data-sort-key="for">For</th>
-                            <th class="sortable-header" data-sort-key="category">Category</th>
-                            <th class="sortable-header text-end" data-sort-key="amount">Amount</th>
-                            <th class="text-end">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="splitEntryBody">
-                        {% for entry in entries.items %}
-                        {% set eid = entry.id or entry._id %}
-                        <tr>
-                            <td data-label="When"><small>{{ friendly_date(entry.timestamp) }}</small></td>
-                            <td data-label="Person"><small>{{ entry.person }}</small></td>
-                            <td data-label="For"><small>{{ entry.description }}</small></td>
-                            <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
-                            <td data-label="Amount" class="text-end"><small>{{ '%.2f'|format(entry.amount) }}</small></td>
-                            <td data-label="Actions" class="text-end">
-                                {% if not session.get('view_only') %}
-                                <div class="table-actions">
-                                    {{ button('Edit', kind='primary', outline=true, size='sm', type='button', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editEntryModal' ~ eid}) }}
-                                    {{ delete_button(url_for('split_entry_delete', split_id=split_id, entry_id=eid), 'Delete this split entry?') }}
+        <div class="card-body">
+            <h4 class="page-title mb-3">Latest Entries</h4>
+            {% call table_shell(extra_class='server-sorted') %}
+            <thead>
+                <tr>
+                    <th class="sortable-header" data-sort-key="when">When</th>
+                    <th class="sortable-header" data-sort-key="person">Person</th>
+                    <th class="sortable-header" data-sort-key="for">For</th>
+                    <th class="sortable-header" data-sort-key="category">Category</th>
+                    <th class="sortable-header text-end" data-sort-key="amount">Amount</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="splitEntryBody">
+                {% for entry in entries.items %}
+                {% set eid = entry.id or entry._id %}
+                <tr>
+                    <td data-label="When"><small>{{ friendly_date(entry.timestamp) }}</small></td>
+                    <td data-label="Person"><small>{{ entry.person }}</small></td>
+                    <td data-label="For"><small>{{ entry.description }}</small></td>
+                    <td data-label="Category"><small>{{ entry.category or 'Uncategorized' }}</small></td>
+                    <td data-label="Amount" class="text-end"><small>{{ '%.2f'|format(entry.amount) }}</small></td>
+                    <td data-label="Actions" class="text-end">
+                        {% if not session.get('view_only') %}
+                        <div class="table-actions">
+                            {{ button('Edit', kind='primary', outline=true, size='sm', type='button',
+                            attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#editEntryModal' ~ eid}) }}
+                            {{ delete_button(url_for('split_entry_delete', split_id=split_id, entry_id=eid), 'Delete
+                            this split entry?') }}
+                        </div>
+
+                        <!-- Edit Entry Modal -->
+                        {% call modal('editEntryModal' ~ eid, 'Edit Entry') %}
+                        <form method="post" action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}"
+                            data-split-id="{{ split_id }}" data-split-entry-id="{{ eid }}"
+                            data-return-url="{{ url_for('split_detail', split_id=split_id) }}" novalidate>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                            {{ form_select('person' ~ eid, 'Person', 'person', entry_form.person.choices,
+                            selected_value=entry.person) }}
+                            {{ form_input('amount' ~ eid, 'Amount (Rs.)', 'amount', type='number',
+                            value='%.2f'|format(entry.amount), step='0.01', min='0.01', required=true) }}
+                            {{ form_input('description' ~ eid, 'What was it for?', 'description',
+                            value=entry.description, maxlength=120, required=true) }}
+                            {{ form_select('category' ~ eid, 'Category', 'category', entry_form.category.choices,
+                            selected_value=entry.category) }}
+
+                            <div class="row g-2">
+                                <div class="col-sm-6">
+                                    {{ form_input('date' ~ eid, 'Date (IST)', 'date', type='date',
+                                    value=entry.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
                                 </div>
+                                <div class="col-sm-6">
+                                    {{ form_input('time' ~ eid, 'Time (IST)', 'time', type='time',
+                                    value=entry.timestamp|ist_datetime('%H:%M'), required=true) }}
+                                </div>
+                            </div>
 
-                                <!-- Edit Entry Modal -->
-                                {% call modal('editEntryModal' ~ eid, 'Edit Entry') %}
-                                    <form method="post"
-                                        action="{{ url_for('split_entry_edit', split_id=split_id, entry_id=eid) }}"
-                                        data-split-id="{{ split_id }}"
-                                        data-split-entry-id="{{ eid }}"
-                                        data-return-url="{{ url_for('split_detail', split_id=split_id) }}"
-                                        novalidate>
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        
-                                        {{ form_select('person' ~ eid, 'Person', 'person', entry_form.person.choices, selected_value=entry.person) }}
-                                        {{ form_input('amount' ~ eid, 'Amount (Rs.)', 'amount', type='number', value='%.2f'|format(entry.amount), step='0.01', min='0.01', required=true) }}
-                                        {{ form_input('description' ~ eid, 'What was it for?', 'description', value=entry.description, maxlength=120, required=true) }}
-                                        {{ form_select('category' ~ eid, 'Category', 'category', entry_form.category.choices, selected_value=entry.category) }}
-
-                                        <div class="row g-2">
-                                            <div class="col-sm-6">
-                                                {{ form_input('date' ~ eid, 'Date (IST)', 'date', type='date', value=entry.timestamp|ist_datetime('%Y-%m-%d'), required=true) }}
-                                            </div>
-                                            <div class="col-sm-6">
-                                                {{ form_input('time' ~ eid, 'Time (IST)', 'time', type='time', value=entry.timestamp|ist_datetime('%H:%M'), required=true) }}
-                                            </div>
-                                        </div>
-
-                                        {{ button('Update Entry', kind='primary', extra_class='w-100', type='submit') }}
-                                    </form>
-                                {% endcall %}
-                                {% else %}
-                                {{ badge('Read only') }}
-                                {% endif %}
-                            </td>
-                        </tr>
+                            {{ button('Update Entry', kind='primary', extra_class='w-100', type='submit') }}
+                        </form>
+                        {% endcall %}
                         {% else %}
-                        <tr>
-                            <td colspan="6" class="text-center text-muted py-4">No split entries found.</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                {% endcall %}
+                        {{ badge('Read only') }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">No split entries found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            {% endcall %}
 
-                {{ pagination(entries.page, entries.total_pages) }}
-                <div class="text-center text-muted small mt-2">
-                    Showing <strong>{{ ((entries.page - 1) * entries.per_page) + 1 if entries.total_items > 0 else 0 }}</strong>-<strong>{{ [entries.page * entries.per_page, entries.total_items] | min }}</strong> of <strong>{{ entries.total_items }}</strong>
-                </div>
+            {{ pagination(entries.page, entries.total_pages) }}
+            <div class="text-center text-muted small mt-2">
+                Showing <strong>{{ ((entries.page - 1) * entries.per_page) + 1 if entries.total_items > 0 else 0
+                    }}</strong>-<strong>{{ [entries.page * entries.per_page, entries.total_items] | min }}</strong> of
+                <strong>{{ entries.total_items }}</strong>
+            </div>
 
-                <script>
+            <script>
                 document.addEventListener('DOMContentLoaded', () => {
                     document.querySelectorAll('.pagination button.page-link').forEach(btn => {
                         btn.addEventListener('click', (e) => {
@@ -160,8 +180,8 @@
                         });
                     });
                 });
-                </script>
-            </div>
+            </script>
+        </div>
         {% endcall %}
     </div>
 </div>
@@ -169,48 +189,52 @@
 <!-- Add Entry Modal -->
 {% if not session.get('view_only') %}
 {% call modal('addEntryModal', 'Add Entry') %}
-    <form method="post"
-        action="{{ url_for('split_entry_add', split_id=split_id) }}"
-        data-split-id="{{ split_id }}"
-        novalidate>
-        {{ entry_form.hidden_tag() }}
+<form method="post" action="{{ url_for('split_entry_add', split_id=split_id) }}" data-split-id="{{ split_id }}"
+    novalidate>
+    {{ entry_form.hidden_tag() }}
 
-        {{ form_field(entry_form.person) }}
-        {{ form_field(entry_form.amount, step="0.01", min="0.01") }}
-        {{ form_field(entry_form.description, placeholder="e.g. Grocery shopping", maxlength="120") }}
-        {{ form_field(entry_form.category) }}
+    {{ form_field(entry_form.person) }}
+    {{ form_field(entry_form.amount, step="0.01", min="0.01", required=true) }}
+    {{ form_field(entry_form.description, placeholder="e.g. Grocery shopping", maxlength="120", required=true) }}
+    {{ form_field(entry_form.category) }}
 
-        <div class="row g-2">
-            <div class="col-sm-6">
-                {{ form_field(entry_form.date, type="date") }}
-            </div>
-            <div class="col-sm-6">
-                {{ form_field(entry_form.time, type="time") }}
-            </div>
+    <div class="row g-2">
+        <div class="col-sm-6">
+            {{ form_field(entry_form.date, type="date", required=true) }}
         </div>
+        <div class="col-sm-6">
+            {{ form_field(entry_form.time, type="time", required=true) }}
+        </div>
+    </div>
 
-        {{ button('Save Entry', kind='primary', extra_class='w-100', type='submit') }}
-    </form>
+    {{ button('Save Entry', kind='primary', extra_class='w-100', type='submit') }}
+</form>
 {% endcall %}
 <!-- Record Share Overwrite Confirmation Modal -->
 {% if not session.get('view_only') %}
-<div class="modal fade" id="recordShareConfirmModal" tabindex="-1" aria-labelledby="recordShareConfirmModalLabel" aria-hidden="true">
+<div class="modal fade" id="recordShareConfirmModal" tabindex="-1" aria-labelledby="recordShareConfirmModalLabel"
+    aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content shadow-lg border-0">
             <div class="modal-header modal-header-warning">
                 <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="recordShareConfirmModalLabel">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
-                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
+                        <path
+                            d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z">
+                        </path>
                         <line x1="12" y1="9" x2="12" y2="13"></line>
                         <line x1="12" y1="17" x2="12.01" y2="17"></line>
                     </svg>
                     Overwrite Existing Transaction?
                 </h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+                    aria-label="Close"></button>
             </div>
             <div class="modal-body text-start py-4">
                 <p class="mb-3 text-muted">
-                    A transaction for the split <strong id="confirmSplitTitle" class="text-info"></strong> has already been saved.
+                    A transaction for the split <strong id="confirmSplitTitle" class="text-info"></strong> has already
+                    been saved.
                 </p>
                 <div class="p-3 rounded mb-3 border border-secondary border-opacity-25 bg-dark bg-opacity-50">
                     <div class="d-flex justify-content-between mb-2">
@@ -223,11 +247,13 @@
                     </div>
                 </div>
                 <p class="text-muted small mb-0">
-                    Would you like to overwrite the existing transaction with the new amount? The balance adjustments will be calculated and updated automatically.
+                    Would you like to overwrite the existing transaction with the new amount? The balance adjustments
+                    will be calculated and updated automatically.
                 </p>
             </div>
             <div class="modal-footer d-flex justify-content-end gap-2 border-top-0 pt-0">
-                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button',
+                attrs={'data-bs-dismiss': 'modal'}) }}
                 <form id="recordShareConfirmForm" method="post" action="">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="overwrite" value="true">
@@ -239,30 +265,35 @@
 </div>
 
 <!-- Record Share Create Confirmation Modal -->
-<div class="modal fade" id="recordShareCreateModal" tabindex="-1" aria-labelledby="recordShareCreateModalLabel" aria-hidden="true">
+<div class="modal fade" id="recordShareCreateModal" tabindex="-1" aria-labelledby="recordShareCreateModalLabel"
+    aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content shadow-lg border-0">
             <div class="modal-header modal-header-success">
                 <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="recordShareCreateModalLabel">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round" class="text-white me-1">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="8" x2="12" y2="16"></line>
                         <line x1="8" y1="12" x2="16" y2="12"></line>
                     </svg>
                     Add to Transactions?
                 </h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+                    aria-label="Close"></button>
             </div>
             <div class="modal-body text-start py-4">
                 <p class="mb-3 text-muted">
-                    Would you like to add split share per person = <strong class="text-success" id="createShareAmountDisplay"></strong> to your transactions?
+                    Would you like to add split share per person = <strong class="text-success"
+                        id="createShareAmountDisplay"></strong> to your transactions?
                 </p>
                 <p class="text-muted small mb-0">
                     This will create a new transaction entry in your ledger and adjust your balance accordingly.
                 </p>
             </div>
             <div class="modal-footer d-flex justify-content-end gap-2 border-top-0 pt-0">
-                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button', attrs={'data-bs-dismiss': 'modal'}) }}
+                {{ button('Cancel', kind='secondary', outline=true, extra_class='px-4', type='button',
+                attrs={'data-bs-dismiss': 'modal'}) }}
                 <form id="recordShareCreateForm" method="post" action="">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="overwrite" value="false">

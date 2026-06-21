@@ -250,7 +250,7 @@
     <form method="post" action="{{ url_for('management') }}" novalidate>
         {{ category_form.hidden_tag() }}
         <input type="hidden" name="action" value="add_category">
-        {{ form_field(category_form.name, placeholder="Category name", maxlength="40") }}
+        {{ form_field(category_form.name, placeholder="Category name", maxlength="40", required=true) }}
         {{ button('Save Category', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}
@@ -260,7 +260,7 @@
     <form method="post" action="{{ url_for('management') }}" novalidate>
         {{ split_person_form.hidden_tag() }}
         <input type="hidden" name="action" value="add_split_person">
-        {{ form_field(split_person_form.name, placeholder="Person name", maxlength="40") }}
+        {{ form_field(split_person_form.name, placeholder="Person name", maxlength="40", required=true) }}
         {{ button('Save Person', kind='primary', extra_class='w-100', type='submit') }}
     </form>
 {% endcall %}

@@ -41,12 +41,22 @@ function formatDisplayNote(note) {
 }
 
 function normalizeBalanceMode(entry) {
+  const mode_name = String(entry?.mode_name || '').toLowerCase();
+  if (mode_name === 'balance-sync' || mode_name === 'balance-add' || mode_name === 'recurring' || mode_name === 'txn-add') {
+    return mode_name;
+  }
+  // Fallback to old logic for backwards compatibility
   const mode = String(entry?.balance_mode || '').toLowerCase();
   if (mode === 'sync' || mode === 'add' || mode === 'sub' || mode === 'add-rec' || mode === 'sub-rec' || mode === 'split') return mode;
   return String(entry?.type || '').toLowerCase() === 'sync' ? 'sync' : 'add';
 }
 
 function modeLabel(mode) {
+  if (mode === 'balance-sync') return 'Sync';
+  if (mode === 'balance-add') return 'Add';
+  if (mode === 'txn-add') return 'Transaction';
+  if (mode === 'recurring') return 'Recurring';
+  // Legacy fallbacks
   if (mode === 'sync') return 'Sync';
   if (mode === 'split') return 'Split';
   if (mode === 'sub') return 'Subtract';
@@ -56,6 +66,11 @@ function modeLabel(mode) {
 }
 
 function modeBadgeClass(mode) {
+  if (mode === 'balance-sync') return 'badge-sync';
+  if (mode === 'balance-add') return 'badge-add';
+  if (mode === 'txn-add') return 'badge-txn';
+  if (mode === 'recurring') return 'badge-add-rec';
+  // Legacy fallbacks
   if (mode === 'sync') return 'badge-sync';
   if (mode === 'split') return 'badge-split';
   if (mode === 'sub') return 'badge-sub';
@@ -202,7 +217,7 @@ function setupTransactionModal(currentBalanceEl, balanceTimestampEl, historyBody
           closeModal('deleteTransactionConfirmModal');
           closeModal('viewTransactionModal');
           setViewModalBlurred(false);
-          showToast('Transaction deleted.', 'success');
+          showToast('Transaction deleted.', 'danger');
           if (historyBody && balanceTimestampEl && currentBalanceEl) {
             await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, Boolean(document.getElementById('showTxnsCheckbox')?.checked));
           }
@@ -361,7 +376,7 @@ async function refreshAll(currentBalanceEl, balanceTimestampEl, historyBody, sho
     const source = String(entry.source || entry.type || '').toLowerCase();
     const mode = normalizeBalanceMode(entry);
     const viewOnly = document.body.dataset.viewOnly === 'true';
-    const isManual = type === 'add' || type === 'sync';
+    const isManual = type === 'add' || type === 'sync' || type === 'balance';
     const hasActions = !viewOnly && (isManual || (mode === 'add-rec' && source === 'bnc'));
     const noteText = entry.note_display || entry.note || '';
     const transactionSearch = entry.transaction_search_text || entry.transaction_id || noteText;
@@ -521,7 +536,7 @@ function openEditModal(button) {
   const modal = ensureEditModal();
   const type = button.dataset.type;
   const rawMode = button.dataset.mode || (type === 'sync' ? 'sync' : 'add');
-  const mode = rawMode === 'sync' ? 'sync' : 'add';
+  const mode = (rawMode === 'sync' || rawMode === 'balance-sync') ? 'sync' : 'add';
   modal.querySelector('#editBalanceId').value = button.dataset.id || '';
   modal.querySelector('#editBalanceSourceType').value = type || '';
   modal.querySelector('#editBalanceMode').value = mode;
@@ -587,7 +602,7 @@ async function deleteBalanceEntry(button, currentBalanceEl, balanceTimestampEl, 
     await fetchJSON(`/api/balance/${encodeURIComponent(id)}/delete`, {}, {
       method: 'POST'
     });
-    showToast('Balance entry deleted', 'success');
+    showToast('Balance entry deleted', 'danger');
     const showTransactions = Boolean(document.getElementById('showTxnsCheckbox')?.checked);
     await refreshPage(currentBalanceEl, balanceTimestampEl, historyBody, showTransactions);
   } catch (error) {

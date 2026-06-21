@@ -712,6 +712,11 @@
             });
         });
 
+        if (table.classList.contains('server-sorted') || table.classList.contains('ajax-sorted')) {
+            table.refreshPagination = () => {};
+            return;
+        }
+
         const shell = table.closest('.table-shell') || table;
         let pagContainer = shell.querySelector('.table-pagination-controls');
         if (!pagContainer) {
@@ -837,19 +842,21 @@
 
     function initServerTableSorting() {
         document.querySelectorAll('table.server-sorted').forEach(table => {
-            const headers = table.querySelectorAll('th.sortable-header');
-            const sortParam = table.getAttribute('data-sort-param') || 'sort';
-            const dirParam = table.getAttribute('data-dir-param') || 'dir';
-            const pageParam = table.getAttribute('data-page-param') || 'page';
-            
-            const params = new URLSearchParams(window.location.search);
-            const currentSort = params.get(sortParam);
-            const currentDir = params.get(dirParam);
-            
-            // Ensure client-side unified table behavior exists so we can sort/paginate in-memory
-            initUnifiedTable(table);
+                const sortParam = table.getAttribute('data-sort-param') || 'sort';
+                const dirParam = table.getAttribute('data-dir-param') || 'dir';
+                const pageParam = table.getAttribute('data-page-param') || 'page';
 
-            headers.forEach((header, colIndex) => {
+                const params = new URLSearchParams(window.location.search);
+                const currentSort = params.get(sortParam);
+                const currentDir = params.get(dirParam);
+
+                // Ensure client-side unified table behavior exists so we can sort/paginate in-memory
+                initUnifiedTable(table);
+
+                // Query headers after initUnifiedTable to avoid operating on detached nodes
+                const headers = table.querySelectorAll('th.sortable-header');
+
+                headers.forEach((header, colIndex) => {
                 const colKey = header.getAttribute('data-sort-key');
                 if (!colKey) return;
 
@@ -1087,10 +1094,15 @@
     }
 
     async function postJson(url, payload = {}) {
+        const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['X-CSRFToken'] = token;
+        }
         const res = await fetch(url, {
             method: 'POST',
             credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
@@ -1203,7 +1215,7 @@
         if (!confirmed) return;
         try {
             await postJson(`/api/transactions/${encodeURIComponent(txId)}/delete`, {});
-            showToast('Transaction deleted', 'success');
+            showToast('Transaction deleted', 'danger');
             window.FinTrak.transactionsSearch?.fetchPage(1);
         } catch (error) {
             showToast('Delete failed', 'danger', error.message);
@@ -1466,7 +1478,7 @@
         if (!confirmed) return;
         try {
             await postJson(`/api/saved_transactions/${encodeURIComponent(templateId)}/delete`, {});
-            showToast('Saved template deleted', 'success');
+            showToast('Saved template deleted', 'danger');
             window.FinTrak.savedTransactions.fetchPage(window.FinTrak.savedTransactions.lastPage || 1);
         } catch (error) {
             showToast('Delete failed', 'danger', error.message);
@@ -1477,7 +1489,11 @@
         try {
             await postJson(`/api/saved_transactions/${encodeURIComponent(templateId)}/submit`, {});
             showToast('Saved template submitted', 'success');
-            window.FinTrak.transactionsSearch?.fetchPage(1);
+            if (window.FinTrak?.transactionsSearch?.lastQuery && typeof window.FinTrak.transactionsSearch.fetchPage === 'function') {
+                window.FinTrak.transactionsSearch.fetchPage(1);
+            } else {
+                window.location.reload();
+            }
         } catch (error) {
             showToast('Submit failed', 'danger', error.message);
         }
@@ -1496,6 +1512,88 @@
         initQueryParamModals();
         initParticipantChecklistValidation();
         autoDismissInlineAlerts();
+        // Intercept add-transaction modal form and submit via API for immediate visibility
+        try {
+            const addModal = document.getElementById('addTransactionModal');
+            if (addModal) {
+                const addForm = addModal.querySelector('form');
+                if (addForm) {
+                    const submitBtn = addForm.querySelector('button[type="submit"]');
+                    const requiredInputs = addForm.querySelectorAll('input[required]');
+
+                    function toggleSubmitState() {
+                        let allFilled = true;
+                        requiredInputs.forEach(input => {
+                            const val = input.value.trim();
+                            if (!val) {
+                                allFilled = false;
+                            } else if (input.type === 'number') {
+                                const num = parseFloat(val);
+                                if (isNaN(num) || num <= 0) {
+                                    allFilled = false;
+                                }
+                            }
+                        });
+                        if (submitBtn) {
+                            submitBtn.disabled = !allFilled;
+                        }
+                    }
+
+                    // Attach listeners
+                    toggleSubmitState();
+                    requiredInputs.forEach(input => {
+                        input.addEventListener('input', toggleSubmitState);
+                        input.addEventListener('change', toggleSubmitState);
+                    });
+
+                    addForm.addEventListener('reset', () => {
+                        setTimeout(toggleSubmitState, 0);
+                    });
+
+                    addModal.addEventListener('shown.bs.modal', toggleSubmitState);
+
+                    addForm.addEventListener('submit', async (ev) => {
+                        ev.preventDefault();
+                        const formData = new FormData(addForm);
+                        const rawDate = String(formData.get('date') || '').trim();
+                        const rawTime = String(formData.get('time') || '').trim();
+
+                        // Fallback to local now if date/time not provided
+                        const now = new Date();
+                        const pad = (n) => String(n).padStart(2, '0');
+                        const isoDate = rawDate || `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+                        const isoTime = rawTime || `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+                        const payload = {
+                            amount: Number(String(formData.get('amount') || '').trim()) || 0,
+                            description: String(formData.get('description') || '').trim(),
+                            category: String(formData.get('category') || 'Uncategorized').trim() || 'Uncategorized',
+                            date: isoDate,
+                            time: isoTime,
+                        };
+                        try {
+                            const res = await postJson('/api/transactions/create', payload);
+                            showToast('Transaction added', 'success');
+                            // Close modal
+                            if (typeof bootstrap !== 'undefined') {
+                                const bs = bootstrap.Modal.getOrCreateInstance(addModal);
+                                bs.hide();
+                            }
+                            // Refresh transactions via AJAX helper if present and in search mode, else reload
+                            if (window.FinTrak?.transactionsSearch?.lastQuery && typeof window.FinTrak.transactionsSearch.fetchPage === 'function') {
+                                window.FinTrak.transactionsSearch.fetchPage(1);
+                            } else {
+                                window.location.reload();
+                            }
+                        } catch (err) {
+                            showToast('Add failed', 'danger', err.message || String(err));
+                        }
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('Init add-transaction API handler failed', e);
+        }
         if (typeof bootstrap !== 'undefined') {
             const tooltipTriggers = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltipTriggers.forEach((el) => new bootstrap.Tooltip(el));

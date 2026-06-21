@@ -185,15 +185,15 @@
 {% call modal('newExpenseModal', 'Set Expense Rule') %}
     <form method="post" action="{{ url_for('recurring') }}">
         {{ form.hidden_tag() }}
-        {{ form_field(form.amount, step="0.01", min="0.01") }}
-        {{ form_field(form.description, maxlength="120") }}
+        {{ form_field(form.amount, step="0.01", min="0.01", required=true) }}
+        {{ form_field(form.description, maxlength="120", required=true) }}
         {{ form_field(form.category) }}
         <div class="row g-2">
             <div class="col-sm-6">
-                {{ form_field(form.start_date, type="date") }}
+                {{ form_field(form.start_date, type="date", required=true) }}
             </div>
             <div class="col-sm-6">
-                {{ form_field(form.start_time, type="time") }}
+                {{ form_field(form.start_time, type="time", required=true) }}
             </div>
         </div>
         {{ form_field(form.frequency) }}
@@ -205,14 +205,14 @@
 {% call modal('newBalanceModal', 'Set Balance Rule') %}
     <form method="post" action="{{ url_for('recurring_balance') }}">
         {{ balance_form.hidden_tag() }}
-        {{ form_field(balance_form.amount, step="0.01", min="0.01") }}
-        {{ form_field(balance_form.description, maxlength="120") }}
+        {{ form_field(balance_form.amount, step="0.01", min="0.01", required=true) }}
+        {{ form_field(balance_form.description, maxlength="120", required=true) }}
         <div class="row g-2">
             <div class="col-sm-6">
-                {{ form_field(balance_form.start_date, type="date") }}
+                {{ form_field(balance_form.start_date, type="date", required=true) }}
             </div>
             <div class="col-sm-6">
-                {{ form_field(balance_form.start_time, type="time") }}
+                {{ form_field(balance_form.start_time, type="time", required=true) }}
             </div>
         </div>
         {{ form_field(balance_form.frequency) }}

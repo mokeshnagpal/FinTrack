@@ -193,14 +193,14 @@ document.addEventListener('DOMContentLoaded', () => {
     <form method="post" action="{{ url_for('trips') }}" novalidate data-form-validation="trip-create">
         {{ form.hidden_tag() }}
         
-        {{ form_field(form.name, placeholder="Goa trip", maxlength="80") }}
+        {{ form_field(form.name, placeholder="Goa trip", maxlength="80", required=true) }}
 
         <div class="row g-2">
             <div class="col-6">
-                {{ form_field(form.start_date, type="date") }}
+                {{ form_field(form.start_date, type="date", required=true) }}
             </div>
             <div class="col-6">
-                {{ form_field(form.end_date, type="date") }}
+                {{ form_field(form.end_date, type="date", required=true) }}
             </div>
         </div>
 
@@ -212,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 {{ form_field(form.cost_type, id="newCostTypeSelect") }}
             </div>
             <div class="col-6" id="approxCostContainerNew">
-                {{ form_field(form.approx_cost, step="0.01") }}
+                {{ form_field(form.approx_cost, step="0.01", required=true) }}
             </div>
         </div>
 

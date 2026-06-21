@@ -98,6 +98,217 @@ These templates can be created, edited, deleted, and submitted to the main `tran
 - `trips/{trip_id}` store trip details, including travel-related costs and assignment to splits.
 - Trips can create split expenses using `cost_type=split`.
 
+## Visibility & Action Rules
+
+### Complete Final Visibility & Action Matrix
+
+| Record Type           | Transaction Table | Balance Table Entry       | Editable from Transaction Table | Editable from Balance Table | Delete Allowed | Notes                                                                      |
+| --------------------- | ----------------- | ------------------------- | ------------------------------- | --------------------------- | -------------- | -------------------------------------------------------------------------- |
+| Normal Transaction    | `txn-spent`       | `(txn, txn-add)`          | ✅ Yes                           | ✅ Yes                       | ✅ Yes          | Edit/Delete from either table updates both transaction and balance records |
+| Recurring Transaction | `recurring`       | `(txn, recurring)`        | ✅ Yes                           | ✅ Yes                       | ✅ Yes          | Behaves exactly like normal transaction after generation                   |
+| Split Transaction     | `split`           | `(txn, split)`            | ❌ No                            | ❌ No                        | ❌ No           | Only "View Split" action available                                         |
+| Manual Balance Add    | ❌ Not Present     | `(balance, balance-add)`  | ❌ N/A                           | ✅ Yes                       | ✅ Yes          | Exists only in Balance Table                                               |
+| Balance Sync          | ❌ Not Present     | `(balance, balance-sync)` | ❌ N/A                           | ✅ Yes                       | ✅ Yes          | Stores adjustment `(desired_balance - current_balance)`                    |
+| Recurring Balance     | ❌ Not Present     | `(balance, recurring)`    | ❌ N/A                           | ✅ Yes                       | ✅ Yes          | Generated from recurring balance rule                                      |
+
+---
+
+### Transaction Table
+
+| mode_name   | Source                                    | Editable | Delete Allowed |
+| ----------- | ----------------------------------------- | -------- | -------------- |
+| `txn-spent` | Normal transaction from Transaction Page  | ✅        | ✅              |
+| `recurring` | Generated from recurring transaction rule | ✅        | ✅              |
+| `split`     | Generated from Split Module               | ❌        | ❌              |
+
+Actions:
+
+| mode_name   | Actions              |
+| ----------- | -------------------- |
+| `txn-spent` | View / Edit / Delete |
+| `recurring` | View / Edit / Delete |
+| `split`     | View Split           |
+
+---
+
+### Balance Table
+
+| Balance (type, mode_name) | Source                  | Editable | Delete Allowed | Actions              |
+| ------------------------- | ----------------------- | -------- | -------------- | -------------------- |
+| `(txn, txn-add)`          | Normal Transaction      | ✅        | ✅              | View / Edit / Delete |
+| `(txn, recurring)`        | Recurring Transaction   | ✅        | ✅              | View / Edit / Delete |
+| `(txn, split)`            | Split Transaction       | ❌        | ❌              | View Split           |
+| `(balance, balance-add)`  | Manual Balance Addition | ✅        | ✅              | Edit / Delete        |
+| `(balance, balance-sync)` | Balance Sync Adjustment | ✅        | ✅              | Edit / Delete        |
+| `(balance, recurring)`    | Recurring Balance Rule  | ✅        | ✅              | Edit / Delete        |
+
+---
+
+### Transaction → Balance Mapping
+
+| Transaction mode_name | Balance Record Created |
+| --------------------- | ---------------------- |
+| `txn-spent`           | `(txn, txn-add)`       |
+| `recurring`           | `(txn, recurring)`     |
+| `split`               | `(txn, split)`         |
+
+---
+
+### Records Visible Only in Balance Table
+
+These records never appear in Transaction History:
+
+| Balance (type, mode_name) |
+| ------------------------- |
+| `(balance, balance-add)`  |
+| `(balance, balance-sync)` |
+| `(balance, recurring)`    |
+
+---
+
+### Records Visible in Both Tables
+
+| Transaction Table | Balance Table      |
+| ----------------- | ------------------ |
+| `txn-spent`       | `(txn, txn-add)`   |
+| `recurring`       | `(txn, recurring)` |
+| `split`           | `(txn, split)`     |
+
+---
+
+### Edit/Delete Synchronization Rules
+
+#### Normal Transaction
+
+Transaction:
+
+```text
+txn-spent
+```
+
+Balance:
+
+```text
+(txn, txn-add)
+```
+
+Rules:
+
+* Edit from Transaction Table → update linked Balance row.
+* Edit from Balance Table → update linked Transaction row.
+* Delete from Transaction Table → delete linked Balance row.
+* Delete from Balance Table → delete linked Transaction row.
+
+---
+
+#### Recurring Transaction
+
+Transaction:
+
+```text
+recurring
+```
+
+Balance:
+
+```text
+(txn, recurring)
+```
+
+Rules:
+
+* Behaves exactly like normal transaction.
+* Edit/Delete from either table updates both records.
+
+---
+
+#### Split Transaction
+
+Transaction:
+
+```text
+split
+```
+
+Balance:
+
+```text
+(txn, split)
+```
+
+Rules:
+
+* Cannot edit from Transaction Table.
+* Cannot edit from Balance Table.
+* Cannot delete from Transaction Table.
+* Cannot delete from Balance Table.
+* Only action available:
+
+```text
+View Split
+```
+
+* User must modify through Split Module.
+* Split changes automatically update linked transaction and balance rows.
+
+---
+
+### Balance Sync Rule
+
+Current Balance:
+
+```text
+x
+```
+
+Desired Balance:
+
+```text
+y
+```
+
+Stored Value:
+
+```text
+y - x
+```
+
+Example:
+
+```text
+Current Balance = 500
+Desired Balance = 650
+
+Stored Adjustment = 150
+```
+
+NOT:
+
+```text
+650
+```
+
+Stored as:
+
+```text
+(balance, balance-sync)
+```
+
+---
+
+### Final Allowed Combinations
+
+| type      | mode_name      |
+| --------- | -------------- |
+| `txn`     | `txn-add`      |
+| `txn`     | `recurring`    |
+| `txn`     | `split`        |
+| `balance` | `balance-add`  |
+| `balance` | `balance-sync` |
+| `balance` | `recurring`    |
+
+These are the only valid combinations that should exist after migration and throughout the application.
+
 ## Core feature flow
 
 ### Authentication
