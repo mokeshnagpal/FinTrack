@@ -788,8 +788,11 @@ def apply_category_choices(form, include=None):
     default_cat = get_default_category()
     if default_cat and category_exists(categories, default_cat):
         form.category.default = default_cat
-        if request.method == 'GET' and not form.category.data:
-            form.category.data = default_cat
+        if request.method == 'GET':
+            if include_name:
+                form.category.data = include_name
+            elif not form.category.data or form.category.data == 'Other':
+                form.category.data = default_cat
 
 def apply_split_entry_choices(form, person_include=None, category_include=None, split_people_override=None):
     apply_category_choices(form, include=category_include)
