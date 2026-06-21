@@ -3014,7 +3014,6 @@ def build_split_document_doc(form):
     now = datetime.now(UTC)
     return {
         'title': validate_short_text(form.title.data, 'Split name', max_length=80),
-        'is_live': True,
         'updated_at': now,
     }
 
@@ -3137,23 +3136,6 @@ def get_split_documents(username=None, page=None, limit=12, sort_field='updated_
     sliced, _, _ = fetch_sorted_page(splits_collection(username), sort_field, dir_arg, page=page, limit=limit)
     return sliced
 
-def get_live_split(username=None):
-    if username is None:
-        username = require_user()
-    docs = [doc_to_txn(doc) for doc in stream_with_timeout(
-        splits_collection(username).where('is_live', '==', True)
-    )]
-    docs.sort(key=lambda item: item.get('updated_at') or datetime.min.replace(tzinfo=UTC), reverse=True)
-    return docs[0] if docs else None
-
-def set_live_split(split_id, username=None):
-    if username is None:
-        username = require_user()
-    now = datetime.now(UTC)
-    for doc in stream_with_timeout(splits_collection(username).where('is_live', '==', True)):
-        if str(doc.id) != str(split_id):
-            splits_collection(username).document(doc.id).set({'is_live': False, 'updated_at': now}, merge=True)
-    splits_collection(username).document(str(split_id)).set({'is_live': True, 'updated_at': now}, merge=True)
 
 def get_split_entries_count(split_id, username=None):
     if username is None:
@@ -3200,7 +3182,6 @@ def build_split_summary(split_doc, username=None):
     return {
         'id': split_id,
         'title': split_doc.get('title') or 'Untitled split',
-        'is_live': bool(split_doc.get('is_live')),
         'updated_at': format_ist(split_doc.get('updated_at')) if split_doc.get('updated_at') else None,
         'totals': [{'person': person, 'amount': amount} for person, amount in sorted(totals.items())],
         'entries': [serialize_split_entry(entry) for entry in entries],
@@ -3235,21 +3216,16 @@ def splits():
         # JSON API payload check
         if request.is_json:
             payload = request.get_json(silent=True) or {}
-            title = validate_short_text(payload.get('title'), 'Title')
-            is_live = bool(payload.get('is_live'))
             people = payload.get('people', [])
             split_doc = {
                 'title': title,
-                'is_live': is_live,
                 'people': people,
                 'created_at': datetime.now(UTC),
                 'updated_at': datetime.now(UTC),
             }
             doc_ref = splits_collection(username).document()
             doc_ref.set(split_doc)
-            if is_live:
-                set_live_split(doc_ref.id, username=username)
-            app.logger.info("Split created via JSON id=%s user=%s live=%s", doc_ref.id, username, is_live)
+            app.logger.info("Split created via JSON id=%s user=%s", doc_ref.id, username)
             return jsonify({'ok': True, 'id': doc_ref.id})
 
         if form.validate_on_submit():
@@ -3258,9 +3234,7 @@ def splits():
             split_doc['created_at'] = datetime.now(UTC)
             doc_ref = splits_collection(username).document()
             doc_ref.set(split_doc)
-            if split_doc.get('is_live'):
-                set_live_split(doc_ref.id, username=username)
-            app.logger.info("Split created id=%s user=%s live=%s", doc_ref.id, username, split_doc.get('is_live'))
+            app.logger.info("Split created id=%s user=%s", doc_ref.id, username)
             flash('Split created.', 'success')
             return redirect(url_for('split_detail', split_id=doc_ref.id))
         else:
@@ -3315,7 +3289,6 @@ def splits():
         'splits.html',
         form=form,
         splits=paginate_obj,
-        live_split=get_live_split(username=username),
         trip_map=get_trip_split_map(username=username),
         all_people=get_split_people(),
         editing=False,
@@ -3427,12 +3400,9 @@ def split_edit(split_id):
     if form.validate_on_submit():
         update_doc = build_split_document_doc(form)
         update_doc['people'] = request.form.getlist('people')
-        update_doc['is_live'] = bool(split_doc.get('is_live'))
         update_doc['created_at'] = split_doc.get('created_at') or datetime.now(UTC)
         doc_ref.set(update_doc, merge=True)
-        if update_doc.get('is_live'):
-            set_live_split(split_id, username=username)
-        app.logger.info("Split updated id=%s user=%s live=%s", split_id, username, update_doc.get('is_live'))
+        app.logger.info("Split updated id=%s user=%s", split_id, username)
         flash('Split updated.', 'success')
         return redirect(url_for('splits'))
 
@@ -3474,50 +3444,7 @@ def split_delete(split_id):
     return redirect(url_for('splits'))
 
 
-@app.route('/splits/<string:split_id>/live', methods=['POST'])
-@login_required
-def split_make_live(split_id):
-    if session.get('view_only'):
-        abort(401, description="View-only sessions cannot change live splits")
-    username = require_user()
-    doc = splits_collection(username).document(split_id).get()
-    if not doc.exists:
-        app.logger.warning("Split live update requested for missing split id=%s user=%s", split_id, username)
-        flash('Split not found.', 'warning')
-        return redirect(url_for('splits'))
-    if request.is_json:
-        set_live_split(split_id, username=username)
-        app.logger.info("Split marked live via JSON id=%s user=%s", split_id, username)
-        return jsonify({'ok': True})
 
-    set_live_split(split_id, username=username)
-    app.logger.info("Split marked live id=%s user=%s", split_id, username)
-    flash('Live split updated.', 'success')
-    return redirect(url_for('splits'))
-
-
-@app.route('/splits/<string:split_id>/unlive', methods=['POST'])
-@login_required
-def split_remove_live(split_id):
-    if session.get('view_only'):
-        abort(401, description="View-only sessions cannot change live splits")
-    username = require_user()
-    doc_ref = splits_collection(username).document(split_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        app.logger.warning("Split unlive requested for missing split id=%s user=%s", split_id, username)
-        flash('Split not found.', 'warning')
-        return redirect(url_for('splits'))
-    now = datetime.now(UTC)
-    if request.is_json:
-        doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
-        app.logger.info("Split live removed via JSON id=%s user=%s", split_id, username)
-        return jsonify({'ok': True})
-
-    doc_ref.set({'is_live': False, 'updated_at': now}, merge=True)
-    app.logger.info("Split live removed id=%s user=%s", split_id, username)
-    flash('Live split status removed.', 'danger')
-    return redirect(url_for('splits'))
 
 
 @app.route('/splits/<string:split_id>/entries', methods=['POST'])
@@ -3765,24 +3692,13 @@ def api_splits_list():
             serialized_splits.append({
                 'id': sid,
                 'title': s.get('title') or 'Untitled split',
-                'is_live': bool(s.get('is_live')),
                 'updated_at': format_ist(s.get('updated_at')) if s.get('updated_at') else None
             })
-
-        serialized_live = None
-        if live_split:
-            serialized_live = {
-                'id': live_split.get('id') or live_split.get('_id'),
-                'title': live_split.get('title') or 'Untitled split',
-                'is_live': True,
-                'updated_at': format_ist(live_split.get('updated_at')) if live_split.get('updated_at') else None
-            }
 
         app.logger.info("API Splits requested user=%s count=%d", username, len(serialized_splits))
         return jsonify({
             'ok': True,
-            'splits': serialized_splits,
-            'live_split': serialized_live
+            'splits': serialized_splits
         })
     except Exception as e:
         app.logger.exception("Failed to fetch splits list API for user=%s", username)
@@ -3936,7 +3852,6 @@ def trips():
                 # Automatically create a new Split document
                 split_doc = {
                     'title': name,
-                    'is_live': False,
                     'people': payload.get('people', []),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
@@ -3976,7 +3891,6 @@ def trips():
             if cost_type == 'split':
                 split_doc = {
                     'title': name,
-                    'is_live': False,
                     'people': request.form.getlist('people'),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
@@ -4072,7 +3986,6 @@ def trip_edit(trip_id):
             if not split_id:
                 split_doc = {
                     'title': name,
-                    'is_live': False,
                     'people': payload.get('people', []),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
@@ -4120,7 +4033,6 @@ def trip_edit(trip_id):
             if not split_id:
                 split_doc = {
                     'title': name,
-                    'is_live': False,
                     'people': request.form.getlist('people'),
                     'created_at': datetime.now(UTC),
                     'updated_at': datetime.now(UTC),
@@ -5400,7 +5312,7 @@ def export_all_data_zip():
                     e_data['split_title'] = split_title
                     split_entries.append(e_data)
 
-            zip_file.writestr('splits.csv', dicts_to_csv_string(splits, ['id', 'title', 'is_live', 'people', 'created_at', 'updated_at', 'transaction_id', 'recorded_amount']))
+            zip_file.writestr('splits.csv', dicts_to_csv_string(splits, ['id', 'title', 'people', 'created_at', 'updated_at', 'transaction_id', 'recorded_amount']))
             zip_file.writestr('split_entries.csv', dicts_to_csv_string(split_entries, ['split_id', 'split_title', 'id', 'person', 'amount', 'description', 'category', 'timestamp', 'created_at', 'updated_at']))
         except Exception as e:
             app.logger.error("ZIP export splits/entries failed: %s", e)

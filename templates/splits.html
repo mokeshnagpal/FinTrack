@@ -29,9 +29,6 @@
                 <tr>
                     <td data-label="Name">
                         <a class="fw-semibold" href="{{ url_for('split_detail', split_id=sid) }}">{{ split.title or 'Untitled split' }}</a>
-                        {% if split.is_live %}
-                        {{ compact_badge('Live', 'live', 'ms-2') }}
-                        {% endif %}
                     </td>
                     <td data-label="Connected Trip">
                         {% set connected_trip = trip_map.get(sid) %}
@@ -66,18 +63,6 @@
                         <div class="table-actions split-row-actions">
                             {{ link_button(url_for('split_detail', split_id=sid), 'Open', kind='primary', outline=true, size='sm') }}
                             {% if not session.get('view_only') %}
-                            {% if not split.is_live %}
-                            <form method="post" action="{{ url_for('split_make_live', split_id=sid) }}" class="d-inline" data-split-id="{{ sid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                {{ button('Make Live', kind='success', outline=true, size='sm', type='submit') }}
-                            </form>
-                            {% else %}
-                            <form method="post" action="{{ url_for('split_remove_live', split_id=sid) }}" class="d-inline" data-split-id="{{ sid }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                {{ button('Remove Live', kind='warning', outline=true, size='sm', type='submit') }}
-                            </form>
-                            {% endif %}
-
                             {{ edit_button('editSplitModal' ~ sid, size='sm', outline=true) }}
                             {{ delete_button(url_for('split_delete', split_id=sid), 'Delete this split and its entries?', extra_attrs={'split-id': sid}) }}
                             {% endif %}
@@ -141,9 +126,6 @@
         <div class="mb-3">
             <label class="form-label d-block text-muted">Members Included</label>
             {{ people_picker(all_people, 'newSplitPerson', checked_by_default=true) }}
-        </div>
-        <div class="form-text small text-muted mb-3">
-            New split will be set as live by default.
         </div>
         {{ button('Save Split', kind='primary', extra_class='w-100', type='submit') }}
     </form>
