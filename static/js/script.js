@@ -1020,6 +1020,16 @@
                     modal.show();
                 }
             }
+        } else if (params.get('saved_edit') === 'true') {
+            const editId = params.get('saved_edit_id');
+            if (editId) {
+                const escapedId = editId.replace(/ /g, '_').replace(/&/g, '_').replace(/\(/g, '_').replace(/\)/g, '_').replace(/\./g, '_').replace(/\//g, '_');
+                const editModalEl = document.getElementById(`editSavedTransactionModal${escapedId}`);
+                if (editModalEl && typeof bootstrap !== 'undefined') {
+                    const modal = new bootstrap.Modal(editModalEl);
+                    modal.show();
+                }
+            }
         } else if (params.get('edit_balance') === 'true') {
             const editId = params.get('edit_id');
             if (editId) {
@@ -1305,7 +1315,7 @@
             const actions = `<div class="table-actions">
                     <button class="btn btn-sm btn-outline-primary ajax-saved-edit-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Edit</button>
                     <button class="btn btn-sm btn-danger ajax-saved-delete-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Delete</button>
-                    <button class="btn btn-sm btn-success ajax-saved-submit-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Submit</button>
+                    <button class="btn btn-sm btn-outline-success ajax-saved-submit-btn" type="button" data-template-id="${escapeHtml(r.id || '')}">Submit</button>
                   </div>`;
             tr.innerHTML = `
                 <td data-label="Date saved"><small data-format-date>${escapeHtml(r.timestamp || '')}</small></td>

@@ -868,6 +868,18 @@ textarea{min-height:100px;resize:vertical;padding-top:.6rem;padding-bottom:.6rem
   border-color:#dc2626!important;
   color:#ffffff!important;
 }
+.btn-success{
+  background:#168a46!important;
+  border-color:#168a46!important;
+  color:#ffffff!important;
+  box-shadow:0 8px 20px rgba(22,138,70,0.18);
+}
+.btn-success:hover,
+.btn-success:focus{
+  background:#116c37!important;
+  border-color:#116c37!important;
+  color:#ffffff!important;
+}
 
 /* Small / Icon button variants */
 .btn-sm{height:36px;padding:.28rem .6rem;font-size:.9rem;border-radius:8px;min-height:36px}
@@ -1448,6 +1460,18 @@ th.sortable-header.active .sort-icon{
 [data-theme="dark"] .delete-form .modal-footer .btn-danger{
   background:linear-gradient(90deg, rgba(248,113,113,1) 0%, rgba(239,68,68,1) 100%)!important;
   box-shadow:0 12px 36px rgba(239,68,68,0.3)!important;
+}
+[data-theme="dark"] .btn-success{
+  background:#7ef0a8!important;
+  border-color:#7ef0a8!important;
+  color:#071023!important;
+  box-shadow:0 10px 28px rgba(126,240,168,0.28)!important;
+}
+[data-theme="dark"] .btn-success:hover,
+[data-theme="dark"] .btn-success:focus{
+  background:#62d88f!important;
+  border-color:#62d88f!important;
+  color:#071023!important;
 }
 
 [data-theme="dark"] .btn-outline-secondary{

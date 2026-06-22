@@ -18,6 +18,7 @@ from forms import (
     SplitEntryForm,
     SplitPersonForm,
     TransactionForm,
+    SavedTransactionForm,
     TripForm,
     ViewPasswordForm,
     ViewPasswordRevealForm,
@@ -1524,9 +1525,11 @@ def index():
 
 
 def build_transaction_doc(form, mode_name='txn-spent'):
+    form_date = getattr(form, 'date', None)
+    form_time = getattr(form, 'time', None)
     txn_datetime = local_datetime_to_utc(
-        form.date.data or now_ist().date(),
-        form.time.data or now_ist().time(),
+        (form_date.data if form_date else None) or now_ist().date(),
+        (form_time.data if form_time else None) or now_ist().time(),
     )
     return {
         'amount': parse_money(form.amount.data),
@@ -2187,6 +2190,11 @@ def api_submit_saved_transaction(template_id):
         if not doc.exists:
             return jsonify({'ok': False, 'error': 'Saved transaction not found.'}), 404
         txn_doc = doc_to_txn(doc)
+        txn_doc.pop('id', None)
+        txn_doc.pop('_id', None)
+        txn_doc.pop('created_at', None)
+        txn_doc.pop('updated_at', None)
+        txn_doc['timestamp'] = datetime.now(UTC)
         create_transaction(username, txn_doc)
         app.logger.info('Saved transaction submitted id=%s user=%s', template_id, username)
         return jsonify({'ok': True, 'template_id': template_id})
@@ -2507,12 +2515,15 @@ def transactions():
 
     form = TransactionForm()
     apply_category_choices(form)
+    saved_form = SavedTransactionForm()
+    apply_category_choices(saved_form)
 
     return render_template(
         'transactions.html',
         txns=paginate_obj,
         saved_txns=saved_paginate_obj,
         form=form,
+        saved_form=saved_form,
     )
 
 @app.route('/delete/<string:tx_id>', methods=['POST'])
@@ -2544,7 +2555,7 @@ def delete(tx_id):
 @login_required
 def add_saved_transaction():
     username = require_user()
-    form = TransactionForm()
+    form = SavedTransactionForm()
     apply_category_choices(form)
     if form.validate_on_submit():
         txn_doc = build_transaction_doc(form)
@@ -2570,7 +2581,7 @@ def edit_saved_transaction(template_id):
         flash('Saved transaction not found.', 'warning')
         return redirect(url_for('transactions'))
 
-    form = TransactionForm()
+    form = SavedTransactionForm()
     apply_category_choices(form)
     if form.validate_on_submit():
         updated_doc = build_transaction_doc(form)
@@ -2613,6 +2624,11 @@ def submit_saved_transaction(template_id):
         return redirect(url_for('transactions'))
 
     txn_doc = doc_to_txn(doc)
+    txn_doc.pop('id', None)
+    txn_doc.pop('_id', None)
+    txn_doc.pop('created_at', None)
+    txn_doc.pop('updated_at', None)
+    txn_doc['timestamp'] = datetime.now(UTC)
     try:
         create_transaction(username, txn_doc)
         flash('Saved transaction submitted to transactions.', 'success')

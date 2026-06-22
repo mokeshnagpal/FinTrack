@@ -191,6 +191,26 @@ class TransactionForm(FlaskForm):
     submit = SubmitField('Save')
 
 
+class SavedTransactionForm(FlaskForm):
+    amount = DecimalField(
+        'Amount (Rs.)',
+        places=2,
+        validators=[
+            InputRequired(message='Amount is required'),
+            NumberRange(min=0.01, max=999999999, message='Amount must be between 0.01 and 999999999'),
+        ],
+    )
+    description = StringField(
+        'What was it for?',
+        validators=[
+            InputRequired(message='Description required'),
+            Length(max=120, message='Use 120 characters or fewer'),
+        ],
+    )
+    category = SelectField('Category', choices=CATEGORY_CHOICES, default='Other')
+    submit = SubmitField('Save')
+
+
 class SplitDocumentForm(FlaskForm):
     title = StringField(
         'Split name',
