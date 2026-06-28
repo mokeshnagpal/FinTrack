@@ -982,29 +982,34 @@
 
     function initQueryParamModals() {
         const params = new URLSearchParams(window.location.search);
+        let opened = false;
         if (params.get('add') === 'true') {
             const addModalEl = document.getElementById('newExpenseModal') || document.querySelector('[id*="addModal"], [id*="newSplitModal"], [id*="addCategoryModal"], [id*="addPersonModal"], [id*="addTransactionModal"]');
             if (addModalEl && typeof bootstrap !== 'undefined') {
                 const modal = new bootstrap.Modal(addModalEl);
                 modal.show();
+                opened = true;
             }
         } else if (params.get('add_balance') === 'true') {
             const addModalEl = document.getElementById('newBalanceModal');
             if (addModalEl && typeof bootstrap !== 'undefined') {
                 const modal = new bootstrap.Modal(addModalEl);
                 modal.show();
+                opened = true;
             }
         } else if (params.get('add_category') === 'true') {
             const addModalEl = document.getElementById('addCategoryModal');
             if (addModalEl && typeof bootstrap !== 'undefined') {
                 const modal = new bootstrap.Modal(addModalEl);
                 modal.show();
+                opened = true;
             }
         } else if (params.get('add_person') === 'true') {
             const addModalEl = document.getElementById('addPersonModal');
             if (addModalEl && typeof bootstrap !== 'undefined') {
                 const modal = new bootstrap.Modal(addModalEl);
                 modal.show();
+                opened = true;
             }
         } else if (params.get('edit') === 'true') {
             const editId = params.get('edit_id');
@@ -1018,6 +1023,7 @@
                 if (editModalEl && typeof bootstrap !== 'undefined') {
                     const modal = new bootstrap.Modal(editModalEl);
                     modal.show();
+                    opened = true;
                 }
             }
         } else if (params.get('saved_edit') === 'true') {
@@ -1028,6 +1034,7 @@
                 if (editModalEl && typeof bootstrap !== 'undefined') {
                     const modal = new bootstrap.Modal(editModalEl);
                     modal.show();
+                    opened = true;
                 }
             }
         } else if (params.get('edit_balance') === 'true') {
@@ -1037,6 +1044,7 @@
                 if (editModalEl && typeof bootstrap !== 'undefined') {
                     const modal = new bootstrap.Modal(editModalEl);
                     modal.show();
+                    opened = true;
                 }
             }
         } else if (params.get('edit_person') === 'true') {
@@ -1047,7 +1055,28 @@
                 if (editModalEl && typeof bootstrap !== 'undefined') {
                     const modal = new bootstrap.Modal(editModalEl);
                     modal.show();
+                    opened = true;
                 }
+            }
+        }
+
+        if (opened) {
+            const keysToRemove = [
+                'add', 'add_balance', 'add_category', 'add_person',
+                'edit', 'edit_id', 'saved_edit', 'saved_edit_id',
+                'edit_balance', 'edit_person'
+            ];
+            let changed = false;
+            keysToRemove.forEach(key => {
+                if (params.has(key)) {
+                    params.delete(key);
+                    changed = true;
+                }
+            });
+            if (changed) {
+                const newSearch = params.toString();
+                const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash;
+                window.history.replaceState({ path: newUrl }, '', newUrl);
             }
         }
     }
